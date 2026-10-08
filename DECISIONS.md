@@ -358,6 +358,32 @@ Expected to pass but failed (stop rule: tolerances unchanged, not marked; awaiti
   3.1e-8 (alpha -4, 4, 10). The two cores assemble differently arranged linear systems
   (NumPy: wrapped nodal strengths plus one circulation; JAX: N+1 nodal strengths).
 
+Decision (after M1 review): both tolerances stay unchanged; both tests are marked
+`xfail(strict=True, raises=AssertionError)`, fixed in M2, with the measured value in the reason.
+Only the failing parameter combinations are marked (Kármán-Trefftz at 4 deg; NumPy vs JAX for
+NACA 4412 at -4 deg); the other combinations remain ordinary tests.
+
+Kármán-Trefftz error of v1.3.1 (max |dCp| for x/c in 0.02-0.98; panels uniform in the circle
+angle):
+
+| Panels | alpha 0: max dCp | location | alpha 4: max dCp | location |
+|---|---|---|---|---|
+| 100 | 0.0210 | x/c 0.028, upper | 0.0379 | x/c 0.028, upper |
+| 200 | 0.0111 | x/c 0.021, upper | 0.0220 | x/c 0.021, upper |
+| 400 | 0.0060 | x/c 0.021, lower | 0.0112 | x/c 0.020, upper |
+
+Observed order of convergence: 0.92 and 0.90 at 0 deg, 0.78 and 0.98 at 4 deg (100 to 200 and
+200 to 400 panels), so first order. The maximum always sits just aft of the leading edge, at the
+start of the compared band; aft of x/c = 0.10 the error is about half as large (0.0083 at 4 deg,
+200 panels).
+
+### Accuracy targets: approved
+
+The proposed targets are approved as stated under "Proposed accuracy targets" (open trailing
+edge, Re 5e5 to 6e6, attached-flow filter, met at every Reynolds number separately). They are
+the acceptance criteria for M3. The SPEC.md 4.1 wording is under review by the owner; SPEC.md
+is not edited until it is approved.
+
 ### Removed tests
 
 Removed together with the two legacy reference files, `foil_lab/validation.py`,
@@ -393,7 +419,7 @@ Transpiration VII per Reynolds number (open sections): converged 80.0 / 83.3 / 7
 Re 5e5 / 1e6 / 3e6 / 6e6; mean dCl 0.055 / 0.045 / 0.042 / 0.039; mean rel dCd 6.9 / 6.3 / 7.0 /
 8.2 %; mean dCm 0.0114 / 0.0091 / 0.0088 / 0.0084.
 
-### Proposed accuracy targets (awaiting approval)
+### Proposed accuracy targets (approved, see "Accuracy targets: approved")
 
 For sections with an open trailing edge, Re 5e5 to 6e6, inside the attached-flow filter, met at
 every Reynolds number separately (not only pooled):
@@ -490,9 +516,11 @@ Replace the provisional-targets bullet with:
 - M3: the command-line VII settings (`max_iter=200`) stop before convergence at 10 deg for
   NACA 2412 at Re 1e6; 240-281 iterations are needed there.
 - M2: add the Williams two-element exact solution (ARC R&M 3717) once the report is supplied.
-- M2/M3: decide on the two expected-to-pass tests that failed in M1 (Kármán-Trefftz at 4 deg,
-  NumPy vs JAX for NACA 4412 at -4 deg); `tests/test_exact_solutions.py` is not committed until
-  then.
+- M2: find the cause of the NumPy/JAX difference (up to 1.49e-6 in Cl for NACA 4412 at -4 deg).
+  Two double-precision solves of the same system should agree far more closely; the two cores
+  currently assemble differently arranged systems.
+- M2: Kármán-Trefftz pressure error is first order and largest just aft of the leading edge
+  (0.0220 at 200 panels, 4 deg); the test is marked xfail for M2.
 - M3: E387 (sharp trailing edge): XFOIL converges at only part of the sweep and seven XFOIL
   processes over the matrix hang until the timeout. Consider whether E387 stays in the matrix.
 - M3: Newton VII takes 25-60 s per point and converged at 1 of 9 points at Re 5e4 and 5 of 10 at
