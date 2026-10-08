@@ -347,7 +347,7 @@ def plot_case(c: CaseResult, output_root: Path, bench: BenchmarkParams) -> Path:
     axs[2].set(xlabel="alpha (deg)", ylabel="Cm c/4")
     for ax in axs:
         ax.grid(alpha=0.3)
-    axs[1].set_xlim(0, None)
+    axs[1].set_xlim(0.0, 0.03)  # readable attached range; larger drag values fall outside
     axs[0].legend(fontsize=7)
     fig.suptitle(f"{c.section}, Re {c.reynolds:g}: v1.3.1 against XFOIL "
                  f"(shaded: attached-flow filter)")

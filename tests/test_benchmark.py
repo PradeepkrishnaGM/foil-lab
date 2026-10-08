@@ -85,6 +85,24 @@ def test_committed_reference_complete_with_provenance(section, re, n):
     assert ref.retried <= set(ref.converged_alphas)
 
 
+@pytest.mark.parametrize("section", BENCHMARK.sections)
+def test_canonical_file_matches_reference_checksum(section, tmp_path):
+    """The canonical file produced by the current code must be the one every committed
+    reference of that section was computed from (SPEC.md 4.1). If this fails, regenerate the
+    references for the section: python -m foil_lab.benchmark references."""
+    from foil_lab.benchmark.xfoil import write_coordinate_file
+    try:
+        sec = sections.canonical(section)
+    except sections.SectionUnavailable as exc:
+        pytest.skip(str(exc))
+    sha = write_coordinate_file(tmp_path / f"{section}.dat", sec.coords, section)
+    stale = [reference_name(section, re, n)
+             for re in BENCHMARK.reynolds_low + BENCHMARK.reynolds_validated
+             for n in BENCHMARK.pane_nodes
+             if load_reference(section, re, n).provenance["geometry_sha256"] != sha]
+    assert not stale, f"canonical file changed; regenerate: {stale}"
+
+
 def _polar(cls):
     rows = {a: (None if cl is None else PolarRow(a, cl, 0.01, 0.0, 0.0, 1.0, 1.0)) for a, cl in cls.items()}
     return XfoilPolar(rows=rows, provenance={})

@@ -66,21 +66,42 @@ Accuracy targets marked *provisional* are confirmed or revised after the first b
 
 - XFOIL is used only as an external program, run as a subprocess with a timeout. No XFOIL
   source is copied, translated, linked or vendored.
-- Both codes receive the same coordinate file.
-- Each reference polar is stored with its provenance: XFOIL version, panel count, N_crit,
-  Reynolds number, Mach number, geometry source and date.
+- Both codes read the same canonical coordinate file: 160 panels, Selig order. Each reference
+  stores the checksum of the canonical file it was computed from. A test fails if the file
+  produced by the current code no longer matches, and the references for that section are then
+  regenerated.
+- Reference recipe: XFOIL 6.99 runs under `xvfb-run` with graphics enabled. It loads the
+  canonical file and redistributes it with `PANE` at 160 nodes (the reference) and at 240 nodes
+  (paneling sensitivity), N_crit 9, free transition, Mach 0, `ITER 200`, 300 s timeout per
+  process. Each case is two fresh XFOIL processes, 0° to +20° and 0° to -4°.
+- Each reference polar is stored with its provenance: XFOIL version and package release, `PANE`
+  node count, N_crit, Reynolds number, Mach number, geometry source and checksum, trailing-edge
+  gap, date, and the status and run time of every XFOIL process.
 - Benchmark matrix:
-  - Sections: NACA 0012, 2412, 4412, 23012, plus at least two non-NACA sections imported by name.
+  - Sections: NACA 0012, 2412, 4412, 23012 (open trailing edge of NACA Report 460, thickness
+    coefficient -0.1015), plus Clark Y and Eppler E387, downloaded by name from the UIUC Airfoil
+    Coordinates Database.
   - Validated range: Re = 5e5, 1e6, 3e6, 6e6. N_crit = 9. Mach = 0.
   - Reported but outside the validated range: Re = 5e4, 1e5, 2e5.
-  - Angle of attack from -4° up to the last angle at which XFOIL converges, in 1° steps.
+  - Angle of attack from -4° to +20° in 1° steps. Every angle where XFOIL converges is kept. A
+    skipped angle is retried once from a fresh start directly at that angle and flagged as
+    retried; an angle that still fails is recorded as not converged and never interpolated.
   - Flap cases: NACA 0012 and 2412 with a 25 % chord flap at 0°, 5°, 10°, 15°, 20°.
 - Reported per case: `Cl`, `Cd`, `Cm`, transition location on each surface, hinge moment for
-  flap cases, convergence status of both codes, and run time.
+  flap cases, convergence status of both codes, and run time; the number of angles each code did
+  not converge on, and the paneling sensitivity (XFOIL at 240 versus 160 nodes).
 - Error metrics per case and per Reynolds number: mean and maximum absolute difference in `Cl`
-  and `Cm`, mean and maximum relative difference in `Cd`.
-- *Provisional* targets in the validated range, for attached flow (below 90 % of XFOIL's
-  maximum lift): mean |ΔCl| ≤ 0.03, mean relative `Cd` difference ≤ 10 %, mean |ΔCm| ≤ 0.01.
+  and `Cm`, mean and maximum relative difference in `Cd`. Points where either code did not
+  converge are excluded from the metrics and counted next to them.
+- Attached-flow filter: angles from -4° up to, but not including, the first positive angle at
+  which XFOIL's `Cl` reaches 0.9 times its maximum over the positive-angle sweep.
+- Targets, for sections with an open trailing edge, Re 5e5 to 6e6, inside the attached-flow
+  filter, met at every Reynolds number separately: at least 95 % of the points where XFOIL
+  converged are converged; mean |ΔCl| ≤ 0.03 and max ≤ 0.10; mean relative |ΔCd| ≤ 10 % and
+  max ≤ 30 %; mean |ΔCm| ≤ 0.01 and max ≤ 0.03.
+- Sections with a sharp trailing edge are reported separately without targets; for them the
+  paneling sensitivity is a lower bound, because XFOIL's result keeps changing with the number of
+  `PANE` nodes.
 - One command regenerates all reference data, runs the comparison, and writes the tables and
   plots used in the validation document.
 - Generated data stays out of git. Small curated reference files with provenance headers are

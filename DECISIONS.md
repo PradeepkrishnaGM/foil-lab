@@ -381,8 +381,21 @@ start of the compared band; aft of x/c = 0.10 the error is about half as large (
 
 The proposed targets are approved as stated under "Proposed accuracy targets" (open trailing
 edge, Re 5e5 to 6e6, attached-flow filter, met at every Reynolds number separately). They are
-the acceptance criteria for M3. The SPEC.md 4.1 wording is under review by the owner; SPEC.md
-is not edited until it is approved.
+the acceptance criteria for M3.
+
+### Decision 3: SPEC.md 4.1 wording approved and applied
+
+Approved with two changes and applied to SPEC.md 4.1: "Mach 0" added to the reference recipe
+after "free transition", and after the canonical-file sentence: "Each reference stores the
+checksum of the canonical file it was computed from. A test fails if the file produced by the
+current code no longer matches, and the references for that section are then regenerated."
+That test is `tests/test_benchmark.py::test_canonical_file_matches_reference_checksum` (fast;
+Clark Y and E387 skip when they are neither cached nor downloadable). The introductory sentence
+of SPEC.md section 4 about *provisional* targets was not part of the approved wording and is
+unchanged.
+
+Plots: the Cd axis of the Cl-Cd panel is limited to 0-0.03 so that the attached range is
+readable; the plots were redrawn from the stored results without rerunning the solvers.
 
 ### Removed tests
 
@@ -526,3 +539,8 @@ Replace the provisional-targets bullet with:
 - M3: Newton VII takes 25-60 s per point and converged at 1 of 9 points at Re 5e4 and 5 of 10 at
   Re 2e5 (subset).
 - M7: the benchmark adapter `baseline_v131.py` is removed when the v1.3.1 solvers are replaced.
+- M2: once the trailing-edge gap tool exists, add an E387 variant with a 0.25 % gap as a section
+  with targets, and regenerate the Clark Y and E387 references after the new repanelling.
+- M3: on NACA 2412 at Re 1e6 the transpiration VII lift is too low in the linear range (0.73 at
+  5 deg against XFOIL 0.81 and inviscid 0.86, so about twice the correct viscous loss), it shows
+  no stall above 9 deg, and Cm drifts the wrong way with angle.
