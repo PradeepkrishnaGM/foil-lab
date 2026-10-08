@@ -3,10 +3,6 @@ criterion, and the effect of the environment (N_crit) on drag via VII.
 
 Run from the repo root:  python examples/transition_demo.py
 """
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
 import numpy as np
 
 from foil_lab.generators import generate_naca4

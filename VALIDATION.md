@@ -3,7 +3,7 @@
 This document records how Foil Lab has been checked against references, what is
 validated, and — just as importantly — what is **not**. Everything here is
 reproducible from `examples/validation_report.py` and the sourced data under
-`tests/validation/data/`. No numbers are hand-entered into prose from memory.
+`src/foil_lab/data/legacy/`. No numbers are hand-entered into prose from memory.
 
 ## Reference data
 

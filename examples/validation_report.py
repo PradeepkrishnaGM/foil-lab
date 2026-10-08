@@ -3,13 +3,9 @@
 Run from the repo root:  python examples/validation_report.py
 
 Produces a plain-text accuracy report from the sourced reference data under
-tests/validation/data. Everything here is reproducible — no hand-entered
+foil_lab/data/legacy. Everything here is reproducible — no hand-entered
 numbers.
 """
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
 from foil_lab.generators import generate_naca4
 from foil_lab.validation import (load_reference, validate_inviscid,
                                  validate_vii, lift_curve_metrics)

@@ -3,10 +3,6 @@ Busemann sweep, constant wing loading, and the advanced generators.
 
 Run from the repo root:  python examples/advanced_features.py
 """
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
 from foil_lab.generators import (generate_naca4, generate_biconvex,
                                   generate_wedge, generate_parsec, generate_naca6)
 from foil_lab.solver import solve_flow

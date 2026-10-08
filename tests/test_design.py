@@ -36,6 +36,7 @@ def test_design_produces_valid_geometry():
     assert r.coords[:, 0].max() > 0.95      # extends to trailing edge
 
 
+@pytest.mark.slow
 def test_match_cp_recovers_similar_shape():
     target = generate_naca4("2412", 120)
     r = match_cp(target, alpha_deg=5.0, num_panels=120, max_iter=60)
@@ -48,6 +49,7 @@ def test_match_cp_recovers_similar_shape():
     assert abs(got_cl - tgt_cl) < 0.10
 
 
+@pytest.mark.slow
 def test_match_cp_reduces_error():
     """Optimization should reduce the Cp error from the starting shape."""
     target = generate_naca4("4412", 120)

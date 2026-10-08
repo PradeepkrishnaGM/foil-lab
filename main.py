@@ -1,11 +1,8 @@
 # main.py
 import sys
 from PySide6.QtWidgets import QApplication
-from pathlib import Path
 
-# Ensure the src directory is in the Python path
-sys.path.append(str(Path(__file__).parent / "src"))
-
+# Requires the package to be installed (``pip install -e ".[gui]"``).
 from foil_lab.gui.main_window import FoilLabMainWindow
 
 def main():

@@ -1,10 +1,3 @@
-import sys
-from pathlib import Path
-
-# Temporarily add the src directory to the Python path so we can import foil_lab
-# (In a real deployment, the user would `pip install -e .` the package)
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
 from foil_lab.utils.io import load_dat
 from foil_lab.geometry import normalize_airfoil, repanel_cosine
 from foil_lab.analysis import run_alpha_sweep, find_zero_lift_angle, calculate_aerodynamic_center

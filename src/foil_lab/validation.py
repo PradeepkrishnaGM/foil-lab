@@ -5,7 +5,7 @@ the same angles, and reports per-point and aggregate errors. This is how we keep
 the project honest: every claim about accuracy is reproducible from sourced data
 and a script, not from memory.
 
-The reference data shipped under ``tests/validation/data`` are XFOIL 6.96
+The reference data shipped as package data under ``foil_lab/data/legacy`` are XFOIL 6.96
 predictions from airfoiltools.com (cited in each file header). XFOIL is itself a
 viscous panel/BL code, so matching it is the most direct statement of "drop-in
 alternative"; it is not wind-tunnel truth, but it is the de-facto reference the
@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import os
 from dataclasses import dataclass, field
+from importlib import resources
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -31,8 +32,9 @@ import numpy as np
 from .solver import solve_flow
 
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..",
-                        "tests", "validation", "data")
+# Packaged reference data (loaded through importlib.resources, so it also works
+# for non-editable installs).
+DATA_DIR = resources.files("foil_lab") / "data" / "legacy"
 
 
 @dataclass
@@ -88,11 +90,11 @@ class ErrorReport:
 
 def load_reference(filename: str) -> ReferencePolar:
     """Load a reference polar CSV from the validation data directory."""
-    path = filename if os.path.isabs(filename) else os.path.join(DATA_DIR, filename)
+    path = filename if os.path.isabs(filename) else DATA_DIR.joinpath(filename)
     alpha, cl, cd, cm = [], [], [], []
     source = ""
     reynolds = 0.0
-    with open(path) as f:
+    with (open(path) if isinstance(path, str) else path.open()) as f:
         for line in f:
             line = line.strip()
             if line.startswith("#"):
@@ -115,7 +117,8 @@ def load_reference(filename: str) -> ReferencePolar:
             cd.append(float(parts[2]))
             cm.append(float(parts[3]) if len(parts) > 3 else np.nan)
     return ReferencePolar(
-        name=os.path.basename(path), reynolds=reynolds,
+        name=os.path.basename(path) if isinstance(path, str) else path.name,
+        reynolds=reynolds,
         alpha=np.array(alpha), cl=np.array(cl), cd=np.array(cd),
         cm=np.array(cm), source=source.strip())
 

@@ -4,10 +4,7 @@ Run from the repo root:  python examples/jax_demo.py
 
 Requires the optional JAX dependency:  pip install 'jax[cpu]'
 """
-import sys
 import time
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 import numpy as np
 

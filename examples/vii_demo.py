@@ -5,10 +5,6 @@ Shows how the transpiration coupling improves drag and pressure over the one-way
 
 Run from the repo root:  python examples/vii_demo.py
 """
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
 from foil_lab.generators import generate_naca4
 from foil_lab.solver import solve_flow
 from foil_lab.vii import solve_vii

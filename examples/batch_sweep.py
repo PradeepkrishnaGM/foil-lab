@@ -2,9 +2,7 @@
 
 Run from the repo root:  python examples/batch_sweep.py
 """
-import sys
 from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from foil_lab.generators import generate_naca4, generate_naca5
 from foil_lab.batch import build_matrix, run_batch, write_table

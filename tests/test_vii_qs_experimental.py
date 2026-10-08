@@ -60,6 +60,7 @@ def test_solve_vii_qs_emits_experimental_warning():
 # --- Documented limitation: does NOT converge at low Re yet ----------------- #
 @pytest.mark.xfail(reason="QS-VII does not yet converge at low Re (WIP); "
                           "see vii_qs status banner", strict=False)
+@pytest.mark.slow
 def test_qs_vii_converges_at_low_re_KNOWN_FAIL():
     af = generate_naca4("2412", 200)
     with warnings.catch_warnings():

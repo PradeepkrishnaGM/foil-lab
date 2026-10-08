@@ -31,6 +31,7 @@ def test_symmetric_zero_lift_jax():
     assert abs(cl) < 1e-6
 
 
+@pytest.mark.slow
 def test_autodiff_matches_finite_difference():
     import jax.numpy as jnp
     from foil_lab import jax_core
@@ -43,6 +44,7 @@ def test_autodiff_matches_finite_difference():
     assert abs(dcl - fd) < 1e-5
 
 
+@pytest.mark.slow
 def test_geometry_gradient_shape_and_fd():
     import jax.numpy as jnp
     from foil_lab import jax_core

@@ -40,6 +40,14 @@ foillab-gui = "foil_lab.gui.main_window:run"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+foil_lab = ["data/**/*.csv"]
+
+# Tests import the installed package: run `pip install -e ".[all]"` first.
 [tool.pytest.ini_options]
-pythonpath = ["src"]
 testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "slow: takes more than about 2 seconds; deselect with -m 'not slow'",
+    "xfoil: needs /usr/bin/xfoil and xvfb-run; skipped automatically when either is missing",
+]

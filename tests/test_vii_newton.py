@@ -32,6 +32,7 @@ def test_sensitivity_matrix_is_exact_affine():
     assert np.max(np.abs(vt0 + D @ vn - vt_actual)) < 1e-10
 
 
+@pytest.mark.slow
 def test_newton_matches_transpiration_at_moderate_re():
     """At Re=1e6 (where both work) Newton must match the transpiration VII."""
     af = generate_naca4("2412", 100)
@@ -43,6 +44,7 @@ def test_newton_matches_transpiration_at_moderate_re():
     assert abs(rn.solution.cl - ro.solution.cl) < 0.02
 
 
+@pytest.mark.slow
 def test_newton_converges_at_low_re_low_alpha():
     """NEW CAPABILITY: Newton + bubble closure converges at Re=50k for low
     alpha, where the transpiration VII gave 0/N. This is the headline result."""
@@ -53,6 +55,7 @@ def test_newton_converges_at_low_re_low_alpha():
     assert r.converged, f"Newton failed at Re=50k a=2 (res={r.residual})"
 
 
+@pytest.mark.slow
 def test_newton_low_re_drag_right_order_of_magnitude():
     """At a converged low-Re point, Cd must be the right order vs XFOIL (~0.02-
     0.03), not the ~0.001 the old one-way path gave."""
@@ -66,6 +69,7 @@ def test_newton_low_re_drag_right_order_of_magnitude():
 
 @pytest.mark.xfail(reason="High-alpha low-Re bubbles not yet fully converging; "
                           "WIP", strict=False)
+@pytest.mark.slow
 def test_newton_low_re_high_alpha_KNOWN_PARTIAL():
     af = generate_naca4("2412", 100)
     with warnings.catch_warnings():

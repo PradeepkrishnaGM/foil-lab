@@ -54,6 +54,7 @@ def test_vii_converges_attached():
     assert r.converged, f"VII failed to converge (res={r.residual})"
 
 
+@pytest.mark.slow
 def test_vii_drag_rises_with_alpha():
     """A hallmark of real VII: profile drag increases with incidence."""
     af = generate_naca4("2412", 200)

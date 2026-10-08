@@ -35,6 +35,7 @@ def test_inviscid_zero_lift_angle_physical():
     assert -3.0 < m["model_alpha_L0_deg"] < -1.2
 
 
+@pytest.mark.slow
 def test_documented_low_re_vii_limitation():
     """DOCUMENTED LIMITATION: VII does not converge at Re=50k (bubble regime).
 
