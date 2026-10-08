@@ -60,5 +60,51 @@ class SweepParams:
     alpha_step: float = 1.0
 
 
+@dataclass(frozen=True)
+class BenchmarkParams:
+    """Benchmark matrix (SPEC.md 4.1 without flap cases; DECISIONS.md M1).
+
+    Attributes
+    ----------
+    sections:
+        Section names, see ``foil_lab.benchmark.sections``.
+    reynolds_validated:
+        Reynolds numbers of the validated range.
+    reynolds_low:
+        Reynolds numbers reported but outside the validated range.
+    pane_nodes:
+        XFOIL ``PANE`` node counts. The first is the reference; the difference to the second
+        is reported as paneling sensitivity.
+    num_panels:
+        Panels in the canonical coordinate file read by both codes.
+    attached_fraction:
+        A point is in the attached-flow filter if its alpha is at least ``alpha_min`` and below
+        the first positive angle at which XFOIL's Cl reaches this fraction of its maximum.
+    newton_sections, newton_reynolds, newton_alphas:
+        Small subset on which the v1.3.1 Newton VII solver is run.
+    vii_max_iter, vii_tol, newton_max_iter, newton_tol:
+        Iteration settings of the v1.3.1 viscous solvers, as used by its command line.
+    workers:
+        Parallel worker processes for reference generation and baseline runs.
+    """
+
+    sections: tuple[str, ...] = ("NACA0012", "NACA2412", "NACA4412", "NACA23012",
+                                 "CLARKY", "E387")
+    reynolds_validated: tuple[float, ...] = (5e5, 1e6, 3e6, 6e6)
+    reynolds_low: tuple[float, ...] = (5e4, 1e5, 2e5)
+    pane_nodes: tuple[int, int] = (160, 240)
+    num_panels: int = 160
+    attached_fraction: float = 0.9
+    newton_sections: tuple[str, ...] = ("NACA0012", "NACA2412")
+    newton_reynolds: tuple[float, ...] = (5e4, 2e5)
+    newton_alphas: tuple[float, ...] = (0.0, 2.0, 4.0, 6.0, 8.0)
+    vii_max_iter: int = 200
+    vii_tol: float = 1e-3
+    newton_max_iter: int = 60
+    newton_tol: float = 1e-4
+    workers: int = 6
+
+
 XFOIL = XfoilParams()
 SWEEP = SweepParams()
+BENCHMARK = BenchmarkParams()

@@ -20,8 +20,10 @@ import datetime as _dt
 import hashlib
 import io
 import math
+import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -215,7 +217,9 @@ def run_xfoil(script: str, workdir: Path, polar_name: str,
     """Run one XFOIL process with ``script`` on stdin inside ``workdir``.
 
     A crash (non-zero return code) or a timeout is recorded in the returned :class:`XfoilRun`
-    rather than raised, so that whatever XFOIL already wrote to its polar file is kept.
+    rather than raised, so that whatever XFOIL already wrote to its polar file is kept. The
+    process runs in its own session; on timeout the whole process group is killed, so neither
+    ``xfoil`` nor the virtual X server started by ``xvfb-run`` is left running.
 
     Raises
     ------
@@ -227,13 +231,18 @@ def run_xfoil(script: str, workdir: Path, polar_name: str,
     polar_path = workdir / polar_name
     polar_path.unlink(missing_ok=True)
     start = time.perf_counter()
+    proc = subprocess.Popen(list(params.command), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, cwd=workdir,
+                            start_new_session=True)
     try:
-        proc = subprocess.run(list(params.command), input=script, text=True, capture_output=True,
-                              timeout=params.timeout_s, cwd=workdir)
-        stdout, returncode, timed_out = proc.stdout, proc.returncode, False
-    except subprocess.TimeoutExpired as exc:
-        out = exc.stdout or ""
-        stdout = out.decode(errors="replace") if isinstance(out, bytes) else out
+        stdout, _ = proc.communicate(script, timeout=params.timeout_s)
+        returncode, timed_out = proc.returncode, False
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, _ = proc.communicate()
         returncode, timed_out = None, True
     runtime = time.perf_counter() - start
     polar_text = polar_path.read_text() if polar_path.exists() else ""

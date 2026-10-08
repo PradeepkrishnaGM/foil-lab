@@ -1,0 +1,46 @@
+# reference: XFOIL polar
+# xfoil_version: 6.99
+# xfoil_package: xfoil-6.99-25.fc44.x86_64
+# xfoil_command: xvfb-run -a xfoil
+# section: E387
+# geometry_source: https://m-selig.ae.illinois.edu/ads/coord/e387.dat (sha256 98aa8a4076edbfd1...), Selig order, normalize_airfoil + repanel_cosine(160); max distance of repanelled points to the original polyline 8.11e-04
+# geometry_sha256: 5e2550ad3e116e01e01ee6ab7de4f6fa8eb558bde425cc6b0bb90b62c8e9ef13
+# geometry_points: 161
+# trailing_edge_gap: 0.000000
+# pane_nodes: 160
+# re: 6e+06
+# mach: 0
+# n_crit: 9
+# xtr_top: 1
+# xtr_bottom: 1
+# max_iter: 200
+# sweep: 0 to 20 and 0 to -4, step 1 deg, fresh XFOIL process per branch
+# runs: up: exit 136, 18.22 s; down: exit 0, 3.90 s; retry 8: exit 0, 6.00 s; retry 9: exit 0, 6.10 s; retry 10: exit 0, 3.33 s; retry 11: timeout, 300.10 s; retry 12: exit 0, 5.86 s; retry 13: exit 0, 6.08 s; retry 14: exit 0, 5.91 s; retry 15: exit 0, 6.07 s; retry 16: exit 0, 5.77 s; retry 17: exit 136, 4.05 s; retry 18: exit 0, 3.74 s; retry 19: exit 0, 3.50 s; retry 20: exit 0, 3.87 s
+# converged_points: 16 of 25 (4 after one retry)
+# date_utc: 2026-10-08T19:14:01Z
+alpha,converged,retried,cl,cd,cdp,cm,xtr_top,xtr_bot
+-4,1,0,-0.0624,0.01057,0.00390,-0.0804,0.5924,0.0065
+-3,1,0,0.0484,0.00812,0.00178,-0.0802,0.5746,0.0065
+-2,1,0,0.1597,0.00609,0.00044,-0.0800,0.5520,0.0059
+-1,1,0,0.2737,0.00555,0.00004,-0.0802,0.5355,0.0062
+0,1,0,0.3877,0.00538,-0.00011,-0.0805,0.5119,0.0086
+1,1,0,0.5014,0.00538,-0.00014,-0.0808,0.4817,0.0091
+2,1,0,0.6113,0.00571,0.00001,-0.0807,0.3754,0.1194
+3,1,0,0.7061,0.00706,0.00107,-0.0792,0.0021,0.7573
+4,1,0,0.8139,0.00706,0.00133,-0.0785,0.0021,1.0000
+5,1,0,0.9229,0.00767,0.00155,-0.0782,0.0022,1.0000
+6,1,0,1.0298,0.00844,0.00184,-0.0776,0.0025,1.0000
+7,1,0,1.1342,0.00941,0.00209,-0.0766,0.0033,1.0000
+8,0,0,,,,,,
+9,0,0,,,,,,
+10,1,1,1.4009,0.01543,0.00555,-0.0670,0.0017,1.0000
+11,0,0,,,,,,
+12,0,0,,,,,,
+13,0,0,,,,,,
+14,0,0,,,,,,
+15,0,0,,,,,,
+16,0,0,,,,,,
+17,0,0,,,,,,
+18,1,1,1.4041,0.10666,0.08184,-0.0541,0.0008,1.0000
+19,1,1,1.3289,0.14322,0.12317,-0.0757,0.0008,1.0000
+20,1,1,1.2483,0.18568,0.18495,-0.1027,0.0008,1.0000

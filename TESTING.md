@@ -96,12 +96,11 @@ have Cd around 0.015–0.025. This is the experimental low-Re path — partial
 convergence is the known, documented state, NOT a bug. **SEND the table**; which
 angles converge on your machine is genuinely useful data.
 
-### 4c. Validation report (compares to real XFOIL data)
+### 4c. Benchmark report (compares to committed XFOIL reference polars)
 ```bash
-python examples/validation_report.py 2>&1 | tee validation_output.txt
+python -m foil_lab.benchmark run && python -m foil_lab.benchmark report
 ```
-**SEND ME:** `validation_output.txt`. This compares against an embedded XFOIL
-6.96 polar and prints the honest envelope.
+Writes `benchmark_output/report.md` and plots. See `VALIDATION.md`.
 
 ### 4d. JAX core (only if 2b installed JAX successfully)
 ```bash
@@ -137,7 +136,7 @@ lines if it completes.
 2. Any pip install errors (especially JAX / PySide6).
 3. `test_output.txt` (step 3) — at minimum the final summary + any FAILED lines.
 4. The two polar tables (4a, 4b).
-5. `validation_output.txt` (4c).
+5. `benchmark_output/report.md` (4c).
 6. JAX demo output (4d) if available.
 7. GUI: launches? screenshot or error (4e).
 8. Your `python3 --version` and whether you're on X11 or Wayland (for the GUI).

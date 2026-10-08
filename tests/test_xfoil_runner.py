@@ -111,6 +111,24 @@ def test_timeout_is_recorded_not_raised(tmp_path):
     assert run.timed_out and run.returncode is None
 
 
+def test_timeout_kills_grandchildren(tmp_path):
+    """Like xvfb-run, the wrapper starts a child; a timeout must not leave it running."""
+    import subprocess
+    marker = "37.123"
+    params = dataclasses.replace(XFOIL, command=("sh", "-c", f"sleep {marker} & wait"),
+                                 timeout_s=0.5)
+    run = run_xfoil("", tmp_path, "x.pol", params)
+    assert run.timed_out
+    import time
+    deadline = time.monotonic() + 3.0      # SIGKILL is asynchronous; allow the kernel to finish
+    while True:
+        left = subprocess.run(["pgrep", "-f", f"^sleep {marker}$"], capture_output=True, text=True)
+        if left.stdout.strip() == "" or time.monotonic() > deadline:
+            break
+        time.sleep(0.05)
+    assert left.stdout.strip() == ""
+
+
 def test_failed_runs_give_all_angles_unconverged():
     params = dataclasses.replace(XFOIL, command=("false",))
     pol = run_polar(generate_naca4("0012", 60), "N0012", 1e6, "test",

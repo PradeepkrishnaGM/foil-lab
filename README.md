@@ -35,31 +35,14 @@ step-by-step protocol and what output to capture.
 > experimental (honest `converged` flag, runtime warning); the validated high-Re
 > path remains `vii.solve_vii`. See [CHANGELOG.md](CHANGELOG.md).
 
-## Validation & honest envelope (new in v1.1)
+## Validation
 
-This release adds a **reproducible validation harness** (`foil_lab.validation`)
-that compares the solver against sourced reference polars (XFOIL 6.96 via
-airfoiltools.com, and analytical thin-airfoil theory), plus a written
-[`VALIDATION.md`](VALIDATION.md) and `examples/validation_report.py`. The point
-is to state plainly what is trustworthy and what is not:
-
-**Validated:**
-* Inviscid lift matches analytical thin-airfoil theory (MAE ≈ 0.04 vs NACA 0012
-  theory; correct zero-lift angle, ~2π lift slope, quarter-chord AC).
-* VII viscous coupling validated at **high Re (~3×10⁶)** against analytical
-  trends (drag rises with α, viscous decambering, realistic Cd ≈ 0.006–0.008).
-
-**Known limits (documented, not hidden):**
-* **Low Reynolds number (≲ 200k): the VII coupling does not converge.** At
-  Re=50k it fails at every tested angle — this is the laminar-separation-bubble
-  regime that needs the inverse-VII formulation (future work). A test pins this
-  limit so a future fix is visible.
-* Point-by-point drag-polar match against wind-tunnel experiment is not yet
-  established across the envelope.
-
-**Bottom line:** trustworthy for attached, higher-Re 2D analysis and
-inviscid/differentiable workflows; **not yet a low-Re XFOIL replacement.** Run
-`python examples/validation_report.py` to reproduce these numbers.
+The earlier validation harness (`foil_lab.validation`, `examples/validation_report.py`) and its
+two reference files were removed in milestone M1. Accuracy is now measured by a benchmark against
+a locally installed XFOIL (`python -m foil_lab.benchmark all`, see `foil_lab/benchmark/`). The
+measured state of this version is in [`docs/baseline_v1.3.1.md`](docs/baseline_v1.3.1.md); it
+shows large errors in several result paths. This section will be rewritten from the benchmark
+output in a later milestone.
 
 ---
 
