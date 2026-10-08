@@ -1,0 +1,142 @@
+"""Command-line interface for Foil Lab.
+
+Examples
+--------
+    foillab analyze --naca 2412 --alpha 5 --re 1e6
+    foillab polar --naca 0012 --start -5 --end 12 --step 1 --re 3e6
+    foillab polar --naca 2412 --start 0 --end 6 --re 50000 --vii newton
+    foillab info
+
+Designed to work with just numpy+scipy installed (the core). The optional
+``--vii`` modes and plotting require nothing beyond the core; JAX/GUI are not
+needed for the CLI.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+
+def _load_airfoil(args):
+    """Build coordinates from --naca or --dat."""
+    if args.naca:
+        from .generators import generate_naca4, generate_naca5
+        code = args.naca
+        if len(code) == 5:
+            return generate_naca5(code, args.panels), f"NACA {code}"
+        return generate_naca4(code, args.panels), f"NACA {code}"
+    if args.dat:
+        from .utils.io import load_dat
+        coords = load_dat(args.dat)
+        return coords, args.dat
+    raise SystemExit("error: provide --naca CODE or --dat FILE")
+
+
+def _solve_one(coords, alpha, args):
+    """Solve a single alpha with the requested method; return (cl, cd, cm, tag)."""
+    re = args.re
+    if args.vii == "newton":
+        from .vii_newton import solve_vii_newton
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r = solve_vii_newton(coords, alpha, reynolds=re, max_iter=60, tol=1e-4)
+        tag = "conv" if r.converged else "NOCONV"
+        return r.solution.cl, r.cd_wake, r.solution.cm_qc, tag
+    if args.vii == "transpiration":
+        from .vii import solve_vii
+        r = solve_vii(coords, alpha, reynolds=re, max_iter=200, tol=1e-3)
+        tag = "conv" if r.converged else "NOCONV"
+        return r.solution.cl, r.cd_wake, r.solution.cm_qc, tag
+    # default: inviscid + one-way viscous drag
+    from .solver import solve_flow
+    s = solve_flow(coords, alpha, reynolds=re)
+    return s.cl, s.cd_total, s.cm_qc, "inviscid" if re == 0 else "1way"
+
+
+def cmd_analyze(args):
+    coords, name = _load_airfoil(args)
+    cl, cd, cm, tag = _solve_one(coords, args.alpha, args)
+    print(f"{name}  alpha={args.alpha:.2f} deg  Re={args.re:g}  [{tag}]")
+    print(f"  Cl  = {cl:+.4f}")
+    print(f"  Cd  = {cd:.5f}" + ("" if args.re else "  (inviscid: no drag)"))
+    print(f"  Cm  = {cm:+.4f}")
+    if cd > 1e-6:
+        print(f"  L/D = {cl/cd:.1f}")
+
+
+def cmd_polar(args):
+    import numpy as np
+    coords, name = _load_airfoil(args)
+    alphas = np.arange(args.start, args.end + 1e-9, args.step)
+    print(f"# {name}  Re={args.re:g}  method={args.vii or 'default'}")
+    print(f"# {'alpha':>7} {'Cl':>9} {'Cd':>9} {'Cm':>9}  status")
+    for a in alphas:
+        cl, cd, cm, tag = _solve_one(coords, float(a), args)
+        print(f"{a:>9.2f} {cl:>9.4f} {cd:>9.5f} {cm:>9.4f}  {tag}")
+
+
+def cmd_info(args):
+    from . import __version__
+    print(f"Foil Lab v{__version__}")
+    print("2D airfoil panel method with viscous-inviscid coupling.")
+    # Report which optional backends are available.
+    try:
+        from .jax_backend import HAS_JAX
+    except Exception:
+        HAS_JAX = False
+    def have(mod):
+        try:
+            __import__(mod); return "yes"
+        except Exception:
+            return "no"
+    print(f"  JAX backend:   {'yes' if HAS_JAX else 'no'}")
+    print(f"  matplotlib:    {have('matplotlib')}")
+    print(f"  PySide6 (GUI): {have('PySide6')}")
+    print(f"  pyarrow:       {have('pyarrow')}")
+    print("\nMethods: --vii newton (low-Re, experimental), "
+          "--vii transpiration (high-Re), default (inviscid+1way).")
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="foillab",
+        description="2D airfoil analysis (panel method + viscous coupling).")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def add_common(sp):
+        g = sp.add_argument_group("airfoil")
+        g.add_argument("--naca", help="NACA 4- or 5-digit code, e.g. 2412")
+        g.add_argument("--dat", help="path to a Selig .dat coordinate file")
+        g.add_argument("--panels", type=int, default=160, help="panel count")
+        g.add_argument("--re", type=float, default=0.0,
+                       help="Reynolds number (0 = inviscid)")
+        g.add_argument("--vii", choices=["newton", "transpiration"],
+                       default=None, help="viscous coupling method")
+
+    a = sub.add_parser("analyze", help="solve a single angle of attack")
+    add_common(a)
+    a.add_argument("--alpha", type=float, default=5.0, help="angle of attack (deg)")
+    a.set_defaults(func=cmd_analyze)
+
+    pl = sub.add_parser("polar", help="sweep a range of angles")
+    add_common(pl)
+    pl.add_argument("--start", type=float, default=-5.0)
+    pl.add_argument("--end", type=float, default=12.0)
+    pl.add_argument("--step", type=float, default=1.0)
+    pl.set_defaults(func=cmd_polar)
+
+    inf = sub.add_parser("info", help="show version and available backends")
+    inf.set_defaults(func=cmd_info)
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
