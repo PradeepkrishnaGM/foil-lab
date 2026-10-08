@@ -203,7 +203,68 @@ Further measurements:
 - XFOIL sometimes skips single attached angles at Re 1e6 (for example 2 and 3 deg for the
   closed TE at 160 nodes). Those are recorded as not converged (Q5).
 
-Decision on the canonical NACA geometry and on sharp-TE sections: pending (asked after step 2).
+### D1. Canonical NACA geometry: open trailing edge
+
+`generate_naca4` and `generate_naca5` take `trailing_edge="closed"` (default, -0.1036, as
+before) or `"open"` (-0.1015, NACA Report 460). The default is unchanged and the closed
+geometry is bit-identical to v1.3.1 (pinned by `tests/test_generators.py`). Measured after the
+change: full suite 102 passed, 2 xfailed (86 existing + 10 runner + 6 generator tests);
+`validation_output.txt` reproduced byte for byte. The benchmark uses the open trailing edge for
+both codes.
+
+Check of v1.3.1 with the open file before running the matrix (NACA 2412, both geometries
+written by the benchmark writer and read back with `load_dat`; VII with the command-line
+settings `max_iter=200`, `tol=1e-3`, Re 1e6):
+
+| Method | alpha | Cl closed | Cl open | dCl | dCm | converged (closed / open) |
+|---|---|---|---|---|---|---|
+| inviscid | 0 | 0.2579 | 0.2589 | +0.0010 | -0.0002 | - |
+| inviscid | 5 | 0.8563 | 0.8577 | +0.0015 | -0.0005 | - |
+| inviscid | 10 | 1.4476 | 1.4495 | +0.0019 | -0.0007 | - |
+| VII | 0 | 0.2183 | 0.2232 | +0.0048 | -0.0011 | yes / yes |
+| VII | 5 | 0.7171 | 0.7312 | +0.0141 | -0.0032 | yes / yes |
+| VII | 10 | 1.4549 | 1.4819 | **+0.0270** | -0.0057 | **no / no** (200 iterations) |
+
+- Inviscid: no trailing-edge spike. The open TE gives slightly lower, smoother Cp on the last
+  panels (for example 0.420 instead of 0.563 at 5 deg on the TE panels).
+- VII at 10 deg: the stop criterion (dCl > 0.02) is met, but both runs are unconverged iterates
+  at the 200-iteration limit. With `max_iter=400` both converge (closed at 281, open at 240
+  iterations) and dCl = -0.0058 (Cl 1.5008 closed, 1.4950 open). At 5 deg the +0.0141 is a
+  converged difference and does not change with more iterations.
+- VII at 10 deg, both geometries, converged or not: the upper-surface Cp oscillates panel to
+  panel over the last six panels (converged closed: 0.563, 0.160, -0.104, 0.053, 0.059, -0.122;
+  open: 0.480, 0.246, -0.091, 0.019, 0.110, -0.169). This is a v1.3.1 VII defect, present with
+  the closed trailing edge as well; it is not caused by the open file.
+- Status: stopped before the matrix, as required by the stop rule. Awaiting a decision.
+
+### D2. Paneling sensitivity
+
+XFOIL is run at 160 and at 240 `PANE` nodes for every section. The difference is reported as
+"paneling sensitivity (160 vs 240)", not as uncertainty; the report states that for sharp
+trailing edges it is a lower bound. Each section's trailing-edge gap is recorded in the
+provenance header (`trailing_edge_gap`). Accuracy targets are judged on sections with an open
+trailing edge; sharp-edged sections are reported separately with that caveat.
+
+### D3. XFOIL limits
+
+`ITER 200` and a 300 s timeout per XFOIL process: approved.
+
+### D4. Skipped angles
+
+One retry per skipped angle: a fresh XFOIL process that solves that angle directly (`ALFA`), so
+the boundary layer starts from XFOIL's own initialisation. Retried points are flagged in the
+`retried` column of the reference CSV. If the retry fails, the angle stays not converged. The
+console output of every XFOIL process (sweeps and retries) is kept in the gitignored
+`benchmark_output/` folder.
+
+Diagnosis of a skipped angle (NACA 2412 closed TE, Re 1e6, 160 nodes, 2 deg; logs in
+`benchmark_output/diag_d4/`): XFOIL itself fails to converge. The polar file it writes has no
+2 or 3 deg row, so the runner and parser are not involved. At 2 deg the initial boundary-layer
+march fails on the lower surface ("MRCHDU: Convergence failed at 76 side 2"), then the Newton
+iteration stalls at rms residual 5.6e-3 (largest change at upper-surface station 55) for all
+200 iterations with Cl fixed at 0.4380, and XFOIL prints "VISCAL: Convergence failed". 3 deg
+behaves the same (stall at rms 5.05e-3). The single retry from a fresh start stalls at exactly
+the same residual (5.593e-3) and also fails, so both angles stay not converged.
 
 ### Removed tests
 
@@ -218,3 +279,8 @@ Decision on the canonical NACA geometry and on sharp-TE sections: pending (asked
 - `examples/basic_alpha_sweep.py` opens `naca2412.dat` relative to the current directory, so it
   only works when run from `examples/`. Fix with the M7 example rework.
 - README and TESTING.md still describe `PYTHONPATH=src` and older test counts; rewrite in M9.
+- M2: decide which NACA trailing edge (open or closed) is the default in v2.0.
+- M3: transpiration VII shows a panel-to-panel Cp oscillation over the last panels of the
+  upper surface at 10 deg (NACA 2412, Re 1e6), with either trailing edge.
+- M3: the command-line VII settings (`max_iter=200`) stop before convergence at 10 deg for
+  NACA 2412 at Re 1e6; 240-281 iterations are needed there.

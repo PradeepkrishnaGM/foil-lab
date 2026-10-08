@@ -2,10 +2,33 @@
 
 import numpy as np
 
-def generate_naca4(naca_string: str, num_panels: int = 120) -> np.ndarray:
+# Last coefficient of the NACA 4-digit thickness polynomial. "open" is the original
+# definition (Jacobs, Ward and Pinkerton, NACA Report 460, 1933; Abbott and von Doenhoff,
+# "Theory of Wing Sections", 1959), which leaves a trailing-edge gap of about 1 % of the
+# thickness. "closed" is the common modification that closes the trailing edge to a point.
+_NACA_TE_COEFF = {"open": -0.1015, "closed": -0.1036}
+
+
+def _naca_thickness(x: np.ndarray, t: float, trailing_edge: str) -> np.ndarray:
+    """NACA 4/5-digit half-thickness distribution for thickness ratio ``t``.
+
+    ``trailing_edge`` is ``"closed"`` (sharp, coefficient -0.1036) or ``"open"``
+    (NACA Report 460, coefficient -0.1015).
+    """
+    if trailing_edge not in _NACA_TE_COEFF:
+        raise ValueError(f"trailing_edge must be 'open' or 'closed', got {trailing_edge!r}")
+    a4 = _NACA_TE_COEFF[trailing_edge]
+    return 5 * t * (0.2969 * np.sqrt(x) - 0.1260 * x - 0.3516 * x**2 + 0.2843 * x**3 + a4 * x**4)
+
+
+def generate_naca4(naca_string: str, num_panels: int = 120,
+                   trailing_edge: str = "closed") -> np.ndarray:
     """
     Generates a NACA 4-digit airfoil using cosine spacing.
     Expects a 4-character string (e.g., '2412', '0012').
+
+    ``trailing_edge`` selects the thickness definition: ``"closed"`` (default, sharp trailing
+    edge) or ``"open"`` (NACA Report 460, as used by XFOIL's ``NACA`` command).
     """
     if len(naca_string) != 4 or not naca_string.isdigit():
         raise ValueError("NACA 4-digit string must be exactly 4 numbers (e.g., '2412').")
@@ -20,9 +43,8 @@ def generate_naca4(naca_string: str, num_panels: int = 120) -> np.ndarray:
     beta = np.linspace(0, np.pi, num_points)
     x = 0.5 * (1 - np.cos(beta))
 
-    # Calculate Thickness Distribution (yt)
-    # The coefficients are the standard NACA constants for a closed trailing edge
-    yt = 5 * t * (0.2969 * np.sqrt(x) - 0.1260 * x - 0.3516 * x**2 + 0.2843 * x**3 - 0.1036 * x**4)
+    # Thickness distribution (closed or open trailing edge)
+    yt = _naca_thickness(x, t, trailing_edge)
 
     # Calculate Camber Line (yc) and its gradient (dyc/dx)
     yc = np.zeros_like(x)
@@ -56,9 +78,13 @@ def generate_naca4(naca_string: str, num_panels: int = 120) -> np.ndarray:
 
     return np.vstack((upper_surface, lower_surface))
     
-def generate_naca5(naca_string: str, num_panels: int = 120) -> np.ndarray:
+def generate_naca5(naca_string: str, num_panels: int = 120,
+                   trailing_edge: str = "closed") -> np.ndarray:
     """
     Generates a NACA 5-digit airfoil (e.g., '23012').
+
+    ``trailing_edge`` selects the thickness definition: ``"closed"`` (default, sharp trailing
+    edge) or ``"open"`` (NACA Report 460).
     """
     if len(naca_string) != 5 or not naca_string.isdigit():
         raise ValueError("NACA 5-digit string must be exactly 5 numbers (e.g., '23012').")
@@ -88,8 +114,8 @@ def generate_naca5(naca_string: str, num_panels: int = 120) -> np.ndarray:
     beta = np.linspace(0, np.pi, num_points)
     x = 0.5 * (1 - np.cos(beta))
 
-    # Standard 4-digit/5-digit Thickness Distribution
-    yt = 5 * t * (0.2969 * np.sqrt(x) - 0.1260 * x - 0.3516 * x**2 + 0.2843 * x**3 - 0.1036 * x**4)
+    # Standard 4-digit/5-digit thickness distribution (closed or open trailing edge)
+    yt = _naca_thickness(x, t, trailing_edge)
 
     # 5-Digit Camber Line
     yc = np.zeros_like(x)

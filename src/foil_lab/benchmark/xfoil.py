@@ -33,7 +33,7 @@ import numpy as np
 from ..params import SWEEP, XFOIL, SweepParams, XfoilParams
 
 #: Columns of a reference polar CSV, in order.
-CSV_COLUMNS = ("alpha", "converged", "cl", "cd", "cdp", "cm", "xtr_top", "xtr_bot")
+CSV_COLUMNS = ("alpha", "converged", "retried", "cl", "cd", "cdp", "cm", "xtr_top", "xtr_bot")
 
 
 class XfoilError(RuntimeError):
@@ -58,12 +58,14 @@ class XfoilPolar:
     """Result of one benchmark case: all requested angles, converged or not.
 
     ``rows`` maps every requested angle to its :class:`PolarRow`, or to ``None`` if XFOIL did
-    not converge there. ``provenance`` is written verbatim into the CSV header.
+    not converge there. ``retried`` holds the angles that converged only on the single retry
+    from a fresh start. ``provenance`` is written verbatim into the CSV header.
     """
 
     rows: dict[float, PolarRow | None]
     provenance: dict[str, str]
     runs: list["XfoilRun"] = field(default_factory=list)
+    retried: set[float] = field(default_factory=set)
 
     @property
     def alphas(self) -> list[float]:
@@ -132,12 +134,21 @@ def _fmt(value: float) -> str:
 
 
 def build_script(coord_name: str, polar_name: str, reynolds: float, alpha_start: float,
-                 alpha_end: float, alpha_step: float, params: XfoilParams = XFOIL) -> str:
-    """Return the XFOIL command script for one sweep (one fresh XFOIL process).
+                 alpha_end: float | None = None, alpha_step: float | None = None,
+                 params: XfoilParams = XFOIL) -> str:
+    """Return the XFOIL command script for one fresh XFOIL process.
 
-    ``reynolds`` of 0 gives an inviscid run. The sweep runs from ``alpha_start`` to
-    ``alpha_end`` in steps of ``alpha_step`` (negative for a downward sweep).
+    ``reynolds`` of 0 gives an inviscid run. With ``alpha_end`` and ``alpha_step`` the script
+    sweeps from ``alpha_start`` to ``alpha_end`` (``ASEQ``; negative step for a downward
+    sweep). Without them it solves the single angle ``alpha_start`` directly (``ALFA``), which
+    is how a skipped angle is retried from a fresh boundary layer.
     """
+    if (alpha_end is None) != (alpha_step is None):
+        raise ValueError("give both alpha_end and alpha_step, or neither")
+    if alpha_end is None:
+        solve = f"ALFA {_fmt(alpha_start)}"
+    else:
+        solve = f"ASEQ {_fmt(alpha_start)} {_fmt(alpha_end)} {_fmt(alpha_step)}"
     lines = [f"LOAD {coord_name}"]
     if params.pane_nodes is not None:
         lines += ["PPAR", f"N {params.pane_nodes}", "", "", "PANE"]
@@ -147,8 +158,7 @@ def build_script(coord_name: str, polar_name: str, reynolds: float, alpha_start:
     if reynolds > 0:
         lines += [f"VISC {_fmt(reynolds)}", "VPAR", f"N {_fmt(params.n_crit)}",
                   f"XTR {_fmt(params.xtr_top)} {_fmt(params.xtr_bottom)}", ""]
-    lines += [f"ITER {params.max_iter}", "PACC", polar_name, "",
-              f"ASEQ {_fmt(alpha_start)} {_fmt(alpha_end)} {_fmt(alpha_step)}",
+    lines += [f"ITER {params.max_iter}", "PACC", polar_name, "", solve,
               "PACC", "", "QUIT", ""]
     return "\n".join(lines)
 
@@ -236,9 +246,21 @@ def _requested_alphas(start: float, end: float, step: float) -> list[float]:
     return [round(start + i * step, 6) for i in range(n + 1)]
 
 
+def _write_log(log_dir: Path | None, stem: str, run: XfoilRun) -> None:
+    """Keep the full record of one XFOIL process: script, console output and polar file."""
+    if log_dir is None:
+        return
+    log_dir.mkdir(parents=True, exist_ok=True)
+    status = "timeout" if run.timed_out else f"exit {run.returncode}"
+    (log_dir / f"{stem}.log").write_text(
+        f"# {status}, {run.runtime_s:.2f} s\n# ---- script ----\n{run.script}\n"
+        f"# ---- console ----\n{run.stdout}\n# ---- polar file ----\n{run.polar_text}")
+
+
 def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: str,
               sweep: SweepParams = SWEEP, params: XfoilParams = XFOIL,
-              workdir: str | Path | None = None) -> XfoilPolar:
+              workdir: str | Path | None = None,
+              log_dir: str | Path | None = None) -> XfoilPolar:
     """Compute an XFOIL reference polar for one section at one Reynolds number.
 
     The coordinates are written once with :func:`write_coordinate_file`; the same file is what
@@ -247,8 +269,12 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
     used. Angles XFOIL did not write to its polar file are recorded as not converged.
 
     ``geometry_source`` is a free-text description recorded in the provenance header, e.g.
-    ``"foil_lab.generators.generate_naca4('2412', 160)"``.
+    ``"foil_lab.generators.generate_naca4('2412', 160)"``. If ``log_dir`` is given, the
+    script, console output and polar file of every XFOIL process are written there.
     """
+    log_path = Path(log_dir) if log_dir is not None else None
+    pane = "asis" if params.pane_nodes is None else f"pane{params.pane_nodes}"
+    stem = f"{name}_re{_fmt(reynolds)}_{pane}"
     own_tmp = None
     if workdir is None:
         own_tmp = tempfile.TemporaryDirectory(prefix="foil-lab-xfoil-")
@@ -269,6 +295,7 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
             script = build_script(coord_file, polar_name, reynolds, a0, a1, da, params)
             run = run_xfoil(script, wd, polar_name, params)
             runs.append(run)
+            _write_log(log_path, f"{stem}_{branch}", run)
             if not run.polar_text:
                 continue
             header, parsed = parse_polar_text(run.polar_text)
@@ -279,11 +306,29 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
                 # The upward branch owns alpha = 0; never overwrite a converged point.
                 if a in wanted and rows.get(a) is None:
                     rows[a] = r
+        # One retry per skipped angle: a fresh XFOIL process solving that angle directly, so the
+        # boundary layer starts from XFOIL's own initialisation (DECISIONS.md, M1 D4).
+        retried: set[float] = set()
+        labels = ["up", "down"]
+        for a in [a for a, r in rows.items() if r is None]:
+            polar_name = f"{name}_retry.pol"
+            script = build_script(coord_file, polar_name, reynolds, a, params=params)
+            run = run_xfoil(script, wd, polar_name, params)
+            runs.append(run)
+            labels.append(f"retry {_fmt(a)}")
+            _write_log(log_path, f"{stem}_retry_{_fmt(a)}", run)
+            if run.polar_text:
+                for r in parse_polar_text(run.polar_text)[1]:
+                    if round(r.alpha, 6) == a:
+                        rows[a] = r
+                        retried.add(a)
         m = re.search(r"XFOIL\s+Version\s+(\S+)", runs[0].stdout) if runs else None
         version = version or (m.group(1) if m else "unknown")
         status = "; ".join(
             f"{b}: " + ("timeout" if r.timed_out else f"exit {r.returncode}") + f", {r.runtime_s:.2f} s"
-            for b, r in zip(("up", "down"), runs))
+            for b, r in zip(labels, runs))
+        c = np.asarray(coords, dtype=float)
+        te_gap = float(np.hypot(*(c[0] - c[-1])))
         provenance = {
             "reference": "XFOIL polar",
             "xfoil_version": version,
@@ -293,6 +338,7 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
             "geometry_source": geometry_source,
             "geometry_sha256": sha,
             "geometry_points": str(len(coords)),
+            "trailing_edge_gap": f"{te_gap:.6f}",
             "pane_nodes": "as-is" if params.pane_nodes is None else str(params.pane_nodes),
             "re": _fmt(reynolds),
             "mach": _fmt(params.mach),
@@ -303,10 +349,11 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
             "sweep": (f"0 to {_fmt(sweep.alpha_max)} and 0 to {_fmt(sweep.alpha_min)}, "
                       f"step {_fmt(sweep.alpha_step)} deg, fresh XFOIL process per branch"),
             "runs": status,
-            "converged_points": f"{sum(r is not None for r in rows.values())} of {len(rows)}",
+            "converged_points": (f"{sum(r is not None for r in rows.values())} of {len(rows)} "
+                                 f"({len(retried)} after one retry)"),
             "date_utc": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        return XfoilPolar(rows=rows, provenance=provenance, runs=runs)
+        return XfoilPolar(rows=rows, provenance=provenance, runs=runs, retried=retried)
     finally:
         if own_tmp is not None:
             own_tmp.cleanup()
@@ -319,7 +366,7 @@ def polar_to_csv_text(polar: XfoilPolar) -> str:
     """Serialise a polar as CSV with a ``# key: value`` provenance header.
 
     Every requested angle has a row; non-converged angles have ``converged = 0`` and empty
-    value fields.
+    value fields. ``retried = 1`` marks angles that converged only on the single retry.
     """
     buf = io.StringIO()
     for key, value in polar.provenance.items():
@@ -329,10 +376,10 @@ def polar_to_csv_text(polar: XfoilPolar) -> str:
     for a in polar.alphas:
         r = polar.rows[a]
         if r is None:
-            w.writerow([_fmt(a), 0, "", "", "", "", "", ""])
+            w.writerow([_fmt(a), 0, 0, "", "", "", "", "", ""])
         else:
-            w.writerow([_fmt(a), 1, f"{r.cl:.4f}", f"{r.cd:.5f}", f"{r.cdp:.5f}", f"{r.cm:.4f}",
-                        f"{r.xtr_top:.4f}", f"{r.xtr_bot:.4f}"])
+            w.writerow([_fmt(a), 1, int(a in polar.retried), f"{r.cl:.4f}", f"{r.cd:.5f}",
+                        f"{r.cdp:.5f}", f"{r.cm:.4f}", f"{r.xtr_top:.4f}", f"{r.xtr_bot:.4f}"])
     return buf.getvalue()
 
 
@@ -350,14 +397,17 @@ def read_reference_csv(text: str) -> XfoilPolar:
     if tuple(reader.fieldnames or ()) != CSV_COLUMNS:
         raise ValueError(f"unexpected columns {reader.fieldnames}")
     rows: dict[float, PolarRow | None] = {}
+    retried: set[float] = set()
     for rec in reader:
         a = round(float(rec["alpha"]), 6)
         if rec["converged"] == "1":
             rows[a] = PolarRow(a, float(rec["cl"]), float(rec["cd"]), float(rec["cdp"]),
                                float(rec["cm"]), float(rec["xtr_top"]), float(rec["xtr_bot"]))
+            if rec["retried"] == "1":
+                retried.add(a)
         else:
             rows[a] = None
-    return XfoilPolar(rows=rows, provenance=provenance)
+    return XfoilPolar(rows=rows, provenance=provenance, retried=retried)
 
 
 def is_nan_free(polar: XfoilPolar) -> bool:

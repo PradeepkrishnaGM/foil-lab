@@ -20,6 +20,7 @@ env/
 htmlcov/
 
 # Generated results
+benchmark_output/
 *.parquet
 *.h5
 *.hdf5

@@ -59,6 +59,10 @@ def test_script_viscous_and_inviscid():
     inv = build_script("a.dat", "a.pol", 0.0, 0.0, -4.0, -1.0,
                        dataclasses.replace(XFOIL, pane_nodes=None))
     assert "VISC" not in inv and "PANE" not in inv and "ASEQ 0 -4 -1" in inv
+    single = build_script("a.dat", "a.pol", 1e6, 2.0).splitlines()
+    assert "ALFA 2" in single and not any(s.startswith("ASEQ") for s in single)
+    with pytest.raises(ValueError):
+        build_script("a.dat", "a.pol", 1e6, 0.0, alpha_end=5.0)
 
 
 def test_coordinate_file_roundtrip(tmp_path):
@@ -84,12 +88,14 @@ def test_coordinate_file_rejects_bad_input(tmp_path):
 def test_csv_roundtrip_keeps_missing_angles():
     rows = {-1.0: PolarRow(-1.0, -0.1, 0.006, 0.001, -0.05, 0.9, 0.2), 0.0: None,
             1.0: PolarRow(1.0, 0.3171, 0.00557, 0.0012, -0.0484, 0.591, 0.8434)}
-    pol = XfoilPolar(rows=rows, provenance={"reference": "XFOIL polar", "re": "1e+06"})
+    pol = XfoilPolar(rows=rows, provenance={"reference": "XFOIL polar", "re": "1e+06"},
+                     retried={1.0})
     back = read_reference_csv(polar_to_csv_text(pol))
     assert back.provenance == pol.provenance
     assert back.alphas == [-1.0, 0.0, 1.0]
     assert back.rows[0.0] is None
     assert back.rows[1.0] == rows[1.0]
+    assert back.retried == {1.0}
     assert is_nan_free(back)
 
 
@@ -110,8 +116,12 @@ def test_failed_runs_give_all_angles_unconverged():
     pol = run_polar(generate_naca4("0012", 60), "N0012", 1e6, "test",
                     sweep=SweepParams(-2.0, 2.0, 1.0), params=params)
     assert pol.alphas == [-2.0, -1.0, 0.0, 1.0, 2.0]
-    assert pol.converged_alphas == []
-    assert "exit 1" in pol.provenance["runs"]
+    assert pol.converged_alphas == [] and pol.retried == set()
+    # two sweeps plus one retry per missing angle, each recorded
+    assert len(pol.runs) == 2 + 5
+    assert pol.provenance["runs"].count("exit 1") == 7
+    assert "retry 2: exit 1" in pol.provenance["runs"]
+    assert pol.provenance["trailing_edge_gap"] == "0.000000"
 
 
 @pytest.mark.slow
