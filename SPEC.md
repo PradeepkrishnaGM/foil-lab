@@ -59,8 +59,7 @@ A claim may appear in the README only if a test or a benchmark figure backs it.
 
 ## 4. Requirements
 
-Accuracy targets marked *provisional* are confirmed or revised after the first baseline run
-(milestone M1). The benchmark always reports the measured numbers, whether or not a target is met.
+The benchmark always reports the measured numbers, whether or not a target is met.
 
 ### 4.1 Benchmark against XFOIL
 

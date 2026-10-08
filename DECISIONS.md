@@ -516,6 +516,155 @@ Replace the provisional-targets bullet with:
 
 ---
 
+## M2: Geometry model and one inviscid core
+
+Plan approved on 2026-10-09. Work on branch `m2-inviscid-core` from `main` (`e7432de`).
+SPEC.md section 4 introduction: the sentence about provisional targets is replaced by "The
+benchmark always reports the measured numbers, whether or not a target is met." (approved).
+
+### Approved plan, by point
+
+1. Vorticity model: linear-strength vortex panels, nodal strengths at the N+1 nodes of every
+   body, zero normal velocity at the N panel midpoints, one Kutta condition per body
+   (strength at the first node plus strength at the last node = 0), no unknown sources. Each
+   body closes on itself; bodies are coupled only through their mutual influence. Sources:
+   Kuethe and Chow, Foundations of Aerodynamics, 5th ed. (1998), section 5.10; Katz and
+   Plotkin, Low-Speed Aerodynamics, 2nd ed. (2001), section 11.4.2. The panel influence is
+   checked against numerical quadrature of the induced velocity.
+2. Open trailing edge: the two trailing-edge points are separate nodes with the usual Kutta
+   condition and the gap is not panelled.
+3. One assembly, written once against an array namespace and run with NumPy or JAX. The
+   private assemblies in `vii.py`, `ground_effect.py` and `flowfield.py` and the old
+   `influence.py`, `linear_system.py`, `forces.py` and `jax_core` assembly are replaced and
+   deleted. The VII solver itself is not changed; its results before and after routing are
+   reported from the benchmark.
+4. Williams R&M 3717: option (a), see Q4.
+5. Geometry model, arc-length repanelling, transforms, trailing-edge gap tool; Clark Y and E387
+   references regenerated; E387 with a 0.25 % gap added as a section with targets.
+6. Every test marked expected-failure for M2 ends as an ordinary passing test with its tolerance
+   unchanged.
+
+One stop in the middle: when the new core passes the Kármán-Trefftz and two-element tests,
+show the Kármán-Trefftz errors and orders, the two-body and mirrored-pair numbers, NumPy
+versus JAX, the core health checks, the Williams tolerances and the transcribed Williams tables
+with page numbers and check results.
+
+### Answers
+
+- Q1. New Kármán-Trefftz assertion: observed order of convergence at least 1.5 at 0 and 4 deg,
+  from 100, 200 and 400 panels, on the same error measure as the existing test (max |dCp| for
+  x/c in 0.02-0.98). The RMS error and its order are recorded without a tolerance.
+- Q2. Gap left unpanelled. The gap-to-zero test and the leak-through-the-gap test get fixed
+  tolerances, stated at the stop before they are run on the benchmark sections. The
+  trailing-edge gap tool warns above a gap of 1 % chord; the limit is documented. Default
+  trailing edge of `generate_naca4`/`generate_naca5` becomes "open" (behaviour change for the
+  changelog); the closed geometry stays pinned bit-identical under the explicit option.
+- Q3. Ground effect moves onto the new core now (section plus mirror image, stream parallel to
+  the ground, section rotated about c/4). If the two M6 ground-effect tests then pass, their
+  marks are removed; the pivot option and the remaining M6 items stay in M6. Once ground effect
+  uses the same core, the mirror comparison is only a consistency check; the no-penetration
+  test on the ground plane is the one that counts, and the test docstrings say so.
+- Q4. Option (a): implement Williams' exact method as a test helper from his equations and
+  Table 1; the transcribed tables check both the helper and the transcription. Transcription:
+  Table 1 in full, the force table on printed page 7, Table 3 "Exact" rows at flap 10 and 30
+  deg, alpha 0, and Table 2(a)/(b) in full. Checks: Cp = 1.0000 at the trailing-edge rows;
+  linear integration of the tabulated Cp reproduces Table 3 C_N and C_A within 1e-3; no
+  outliers in second differences along each surface; the helper reproduces Table 2 Cp within
+  1e-3. How the tables were read is stated and uncertain digits are marked. If a transcribed
+  value disagrees with the helper, neither is changed: page, row, both values and neighbouring
+  rows are shown. The transcribed tables are committed as test data with the full citation.
+- Q5. Williams test, configurations A and B at alpha 0, 200 panels per element: Cl within 1 %
+  per element and in total of Table 3; max |dCp| <= 0.05 for x/c 0.02-0.98 of each element;
+  error decreasing from 200 to 400 panels. Restated in full at the stop before the first run.
+- Q6. The approximate 6-series generator is removed. NACA 4/5 are checked by analytic
+  properties; no transcribed ordinate tables. One cross-check in the slow xfoil group: our open
+  NACA 2412 against coordinates saved from XFOIL's own `NACA` command, as a distance between the
+  curves, with the tolerance stated before running. The other generators stay and return an
+  `Airfoil`.
+- Q7 to Q11: pending (asked again on 2026-10-09).
+
+### Additions to the plan
+
+- Core health checks at the stop (NACA 2412 open and closed at 160 and 320 panels, and the
+  Kármán-Trefftz section): the vortex strength along the surface must be free of panel-to-panel
+  sawtooth, especially near the trailing edge; the matrix condition number is reported. If there
+  is a sawtooth, stop and propose alternatives from published sources.
+- After routing, the GUI must still start (offscreen smoke test) and the CLI, batch and design
+  paths must run. The benchmark adapter must still work (M3 needs it).
+- The JAX path must not change global JAX settings on import without documenting it.
+
+### Step 1: the new core (`foil_lab/inviscid.py`)
+
+- Linear-strength vortex panels as planned. The panel velocity is evaluated in closed form
+  (derivation in the docstring) and matches numerical quadrature of the Biot-Savart integral to
+  about 1e-16 (`tests/test_inviscid_core.py`). Assembly through fixed start-node and end-node
+  incidence matrices; the same code runs with NumPy and with `jax.numpy`.
+- Surface-velocity read-out: on the Kármán-Trefftz section the induced-velocity sum at the
+  panel midpoints converges only at first order (max |dCp| 0.0214 at 200 panels, 4 deg), while
+  the nodal vortex strengths converge at second order (circulation lift errors 7.6e-4, 1.8e-4,
+  4.5e-5 at 100/200/400 panels). Because the flow inside a closed body is at rest, the surface
+  speed equals the local sheet strength (Katz and Plotkin 2001, section 11.4.2); taking the mean
+  of the two nodal strengths at each midpoint gives second order. That read-out is used; the
+  induced-velocity value is kept as a diagnostic.
+- Transpiration: a pure vortex sheet cannot carry a net outflow from a closed body, so a
+  prescribed wall-normal velocity enters as a known constant-strength source per panel equal to
+  that velocity (equivalent source of Lighthill 1958). The flow inside the body then stays at
+  rest and the read-out above remains valid. Source kernel checked against quadrature.
+- JAX: the solve runs inside `jax.enable_x64(True)`, a scoped setting; the global setting is not
+  changed (tested).
+
+Results on the new core (closed trailing edges; the open edge is the subject of the next item):
+
+| Check | Result | Tolerance |
+|---|---|---|
+| Kármán-Trefftz 0 deg, max dCp at 100/160/200/320/400 panels | 0.00618 / 0.00266 / 0.00190 / 0.00077 / 0.00052 | 0.02 at 200 |
+| Kármán-Trefftz 4 deg, same | 0.00605 / 0.00257 / 0.00187 / 0.00076 / 0.00051 | 0.02 at 200 |
+| Observed order of max dCp (100-200 / 200-400), 0 deg and 4 deg | 1.70 / 1.87 and 1.69 / 1.87 | >= 1.5 |
+| Observed order of RMS dCp, 0 deg and 4 deg (no tolerance) | 1.85 / 1.94 and 1.85 / 1.94 | - |
+| Location of max dCp | x/c 0.976-0.979, upper surface | - |
+| NACA 0012 + 4412, 50 c stacked | -0.178 % / +0.111 % | 0.5 % |
+| Mirrored pair Cl1 + Cl2 | 5.1e-14 | 1e-9 |
+| NumPy vs JAX, 4 sections x 3 angles | max 6.7e-16 | 1e-6 |
+
+Health checks (alpha 5 deg; Kármán-Trefftz at 4 deg):
+
+| Case | Condition number | Trailing-edge node strengths | Sawtooth (alternating second difference) |
+|---|---|---|---|
+| NACA 2412 closed, 160 | 4.4e4 | -0.544 / +0.544 | none |
+| NACA 2412 closed, 320 | 1.2e5 | -0.641 / +0.641 | none |
+| Kármán-Trefftz, 200 | 9.3e4 | -0.427 / +0.427 | none |
+| NACA 2412 open, 160 | 7.6e2 | +3.44 / -3.44 | none, but singular |
+| NACA 2412 open, 320 | 1.0e3 | +6.80 / -6.80 | none, but singular |
+
+- Closed trailing edge: smooth strength everywhere. The two coincident trailing-edge nodes carry
+  a single-node value of opposite sign to their neighbours; the last panel on each side reads
+  Cp = +0.99 to +1.00, i.e. the stagnation point of a finite-angle trailing edge. Loads converge:
+  NACA 2412, 5 deg, Cl 0.86143 / 0.86163 / 0.86168 / 0.86169 and Cm c/4 -0.06272 / -0.06268 /
+  -0.06267 / -0.06267 at 160 / 320 / 640 / 1280 panels; pressure and circulation lift agree to
+  1e-4 or better.
+- Open trailing edge (gap left unpanelled, as approved in Q2): the trailing-edge node strengths
+  double with every refinement (3.44, 6.80, 13.56, 27.09 at 160 to 1280 panels), the last-panel
+  Cp diverges (-4.2, -17.7, -72.0, -289.0), and the flow crosses the gap at about 0.17 of the
+  freestream speed. The integrated Cl still converges (0.86358, 0.86378, 0.86381, 0.86380) only
+  because the singular panel shrinks. The approved treatment is therefore not acceptable; work
+  stopped here for a decision (rule: stop and propose published alternatives).
+
+Proposed alternatives for the open trailing edge (awaiting decision):
+
+- (A) A straight panel across the gap carrying a constant source and a constant vortex whose
+  strengths are tied to the two trailing-edge nodal strengths, so no new unknowns; the Kutta
+  condition is unchanged. Published in M. Drela, "XFOIL: An Analysis and Design System for Low
+  Reynolds Number Airfoils", in T. J. Mueller (ed.), Low Reynolds Number Aerodynamics, Lecture
+  Notes in Engineering 54, Springer (1989), pp. 1-12. Implemented from the paper only, in the
+  present velocity formulation.
+- (B) A Dirichlet (zero internal potential) formulation, Katz and Plotkin (2001) chapter 11,
+  with the base region closed and the Kutta condition through the wake strength; a larger change
+  that would need the Kármán-Trefftz order re-checked.
+- (C) Close the gap geometrically for the solver only. Not recommended: the benchmark would no
+  longer compare the same geometry with XFOIL.
+
+---
+
 ## Later
 
 - `requires-python = ">=3.10"` is declared but only Python 3.14 is available and tested here.
@@ -544,3 +693,9 @@ Replace the provisional-targets bullet with:
 - M3: on NACA 2412 at Re 1e6 the transpiration VII lift is too low in the linear range (0.73 at
   5 deg against XFOIL 0.81 and inviscid 0.86, so about twice the correct viscous loss), it shows
   no stall above 9 deg, and Cm drifts the wrong way with angle.
+- Option if the trailing-edge gap tests show sensitivity: a trailing-edge panel treatment from
+  a published source (decided in M2, Q2).
+- v2.1 or later: a correct NACA 6-series generator (Ladson's method); not in v2.0.
+- M9 (THIRD_PARTY.md): Williams, B. R., "An Exact Test Case for the Plane Potential Flow About
+  Two Adjacent Lifting Aerofoils", ARC R&M 3717, HMSO, 1973; transcribed values used as test
+  data.
