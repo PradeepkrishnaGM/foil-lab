@@ -266,9 +266,214 @@ iteration stalls at rms residual 5.6e-3 (largest change at upper-surface station
 behaves the same (stall at rms 5.05e-3). The single retry from a fresh start stalls at exactly
 the same residual (5.593e-3) and also fails, so both angles stay not converged.
 
+### E1, E2 and report additions
+
+- E1: the open trailing edge is used for the whole matrix.
+- E2: v1.3.1 VII runs with its command-line settings (200 iterations, tol 1e-3). Unconverged
+  points are reported as not converged and excluded from the error metrics, with the count
+  shown per case.
+- The baseline report shows, per case, the number of attached-filter angles where XFOIL did
+  not converge at 160 and at 240 nodes, and how many of those the 240-node run recovers.
+- Per case and method, the number of v1.3.1 points that did not converge is shown next to the
+  error metrics, so a method cannot look better because its bad points dropped out.
+
+### Step 3: reference set
+
+- Sections: NACA 0012, 2412, 4412 (`generate_naca4`, open TE), NACA 23012 (`generate_naca5`,
+  open TE), Clark Y and E387 from the UIUC database. Clark Y is in Lednicer format and E387 in
+  Selig format; both are converted to Selig order (no duplicate points found). They are
+  normalised and repanelled to 160 panels with the v1.3.1 `normalize_airfoil` and
+  `repanel_cosine`. Largest distance of the repanelled points to the original point polyline:
+  Clark Y 1.6e-4, E387 8.1e-4 chord (E387 has only 61 original points, so part of this is the
+  polyline itself). Trailing-edge gaps: NACA 0.00252, Clark Y 0.00120, E387 0 (sharp).
+- Classification for the targets (D2): a section is "sharp" if its trailing-edge gap is zero.
+  Clark Y (gap 0.0012) counts as open.
+- Reference files: `src/foil_lab/data/reference/xfoil/<SECTION>_Re<re>_N<nodes>.csv`,
+  84 files (6 sections x 7 Reynolds numbers x 160/240 nodes), package data. XFOIL console logs
+  and the canonical coordinate files are written to `benchmark_output/`.
+- Download cache: `$FOIL_LAB_CACHE` or `~/.cache/foil-lab/airfoils`; the SHA-256 of each
+  downloaded file is checked against the value committed in `benchmark/sections.py`.
+- Runner bug found and fixed during the first generation: on a timeout, `subprocess.run` killed
+  only `xvfb-run`, so the stuck `xfoil` and its Xvfb server kept running (8 orphans, up to 36
+  minutes at about 85 % CPU each). XFOIL now runs in its own session and the whole process group
+  is killed on timeout (test: `test_timeout_kills_grandchildren`). The converged XFOIL data was
+  not affected, but run times were inflated and some of the 7 timeouts may have been caused by
+  the CPU contention, so the whole reference set and the baseline were regenerated with the
+  fixed runner.
+
+### Step 4: baseline adapter
+
+- `foil_lab/benchmark/baseline_v131.py` runs v1.3.1 unchanged on the canonical files.
+  Transition locations are captured by wrapping `solver.calculate_viscous_drag`,
+  `boundary_layer.analyze_boundary_layer`, `vii._split_surfaces`, `vii.march_boundary_layer`
+  and their `vii_newton` counterparts inside the worker process (Q15). For the one-way path the
+  stagnation-point search of `calculate_viscous_drag` is repeated in the adapter to map
+  boundary-layer stations to x/c.
+- One-way and inviscid results have no convergence criterion in v1.3.1; they are reported as
+  "n/a" and counted as converged unless a value is not finite.
+- Runs use one BLAS thread per worker process (6 workers). This changes run time, not the
+  method.
+
+### Step 5: comparison rules
+
+- The attached-flow filter excludes the cut-off angle itself (SPEC 4.1: "below 90 % of
+  XFOIL's maximum lift").
+- Metrics are pooled over points (each used point has equal weight) when aggregating over
+  sections.
+
+### Step 6: exact-solution tests, first run (xfail marks ignored)
+
+Expected failures, all confirmed and marked `xfail(strict=True, raises=AssertionError)`:
+
+| Test | Measured | Tolerance | Fixed in |
+|---|---|---|---|
+| NACA 0012 + NACA 4412, 50 chords apart, stacked | -4.6 % / -5.9 % | 0.5 % | M2 |
+| Mirrored pair, Cl1 + Cl2 | 0.116 | 1e-9 | M2 |
+| Ground effect vs mirror problem | 4.54 | 1e-6 | M6 |
+| Normal velocity on the ground plane | 0.111 | 1e-8 | M6 |
+| Far-field lift / pressure lift - 1 | 1.000 | 0.005 | M2 |
+| Repanelling scaled / translated / rotated input | 136 / 3.4e8 / 41 chord | 1e-4 | M2 |
+| Aspect ratio 1e6 + Mach 0.5 vs 2D | 0.139 | 1e-3 | M6 |
+
+Layout of the two-body test: the bodies are stacked (offset 50 chords across the stream), not
+in tandem. Measured with a per-body-closed assembly (scratch, not library code), the physical
+2D interference at 50 chords in tandem is +2.30 % on the NACA 0012 (point-vortex estimate
++2.07 %), so a tandem test could never pass at 0.5 % even with a correct solver; stacked it is
+-0.18 % (0012) and +0.11 % (4412). The first run used tandem (2.03 %); it was changed before the
+test was committed. The tolerance is unchanged. v1.3.1 stacked: -4.6 % / -5.9 %.
+
+Passed as expected: Kármán-Trefftz at 0 deg (0.0111 at 200 panels), pressure lift equals
+circulation lift, exact transforms, Kármán-Tsien applied once, NumPy and JAX at 11 of 12
+points, determinism.
+
+Expected to pass but failed (stop rule: tolerances unchanged, not marked; awaiting a decision):
+
+- Kármán-Trefftz at 4 deg: max |dCp| 0.0220 > 0.02 at 200 panels. The analytic solution was
+  checked: its integrated Cp reproduces the Kutta-Joukowski lift exactly (0.996245). The v1.3.1
+  error is first order and sits at x/c = 0.02 on the upper surface: 0.0273 / 0.0220 / 0.0139 /
+  0.0068 / 0.0035 at 160 / 200 / 320 / 640 / 1280 panels. At 0 deg: 0.0139 / 0.0111 / 0.0072 /
+  0.0037 / 0.0019.
+- NumPy vs JAX, NACA 4412 at -4 deg: 1.49e-6 > 1e-6. All 12 points: 0012 8.9e-8, 8.9e-8,
+  2.2e-7; 2412 6.5e-7, 2.2e-7, 4.4e-8; 4412 1.49e-6, 3.3e-7, 3.8e-7; 23012 4.2e-7, 2.3e-9,
+  3.1e-8 (alpha -4, 4, 10). The two cores assemble differently arranged linear systems
+  (NumPy: wrapped nodal strengths plus one circulation; JAX: N+1 nodal strengths).
+
 ### Removed tests
 
-(None yet.)
+Removed together with the two legacy reference files, `foil_lab/validation.py`,
+`examples/validation_report.py` and `validation_output.txt` (Q9), after the benchmark and the
+exact-solution tests were in place:
+
+| Test (`tests/validation/test_reference_polars.py`) | Reason |
+|---|---|
+| `test_inviscid_matches_thin_airfoil_theory` | Compared a 12 % thick section with the flat-plate formula, which is not a valid reference. Replaced by the Kármán-Trefftz exact-solution test. |
+| `test_reference_data_loads` | Loaded downloaded third-party data (airfoiltools.com). Replaced by `test_committed_reference_complete_with_provenance` on our own XFOIL references. |
+| `test_inviscid_zero_lift_angle_physical` | Used the third-party file only for its angle list. The same check remains in `test_naca_polars.py::test_zero_lift_angles` and `test_solver.py::test_cambered_zero_lift_angle`. |
+| `test_documented_low_re_vii_limitation` | Pinned a failure on third-party data at Re 5e4. Low-Re convergence of every v1.3.1 method is now reported by the benchmark. |
+
+The validation sections of README.md, VALIDATION.md and TESTING.md were reduced to pointers to
+the benchmark; they are rewritten from benchmark output in M9.
+
+### Baseline result (summary; full tables in `docs/baseline_v1.3.1.md`)
+
+Reference set: 2100 requested points, 1968 converged (37 only on the retry), 132 not converged.
+Seven XFOIL processes reached the 300 s timeout in both generations (with and without CPU
+contention), so these are genuine hangs.
+
+Validated range (Re 5e5 to 6e6), open-trailing-edge sections, attached-flow filter, pooled:
+
+| | points compared | not converged | mean dCl | max dCl | mean rel dCd | max rel dCd | mean dCm | max dCm |
+|---|---|---|---|---|---|---|---|---|
+| XFOIL 240 vs 160 | 325 | 0 | 0.0004 | 0.0029 | 0.4 % | 2.6 % | 0.0001 | 0.0005 |
+| inviscid | 330 | 0 | 0.0678 | 0.3088 | - | - | 0.0117 | 0.0482 |
+| one-way (default) | 330 | 0 | 0.0678 | 0.3088 | 70.3 % | 91.7 % | 0.0117 | 0.0482 |
+| transpiration VII | 330 | 64 | 0.0446 | 0.2557 | 7.1 % | 22.3 % | 0.0093 | 0.0483 |
+
+Transpiration VII per Reynolds number (open sections): converged 80.0 / 83.3 / 78.4 / 80.9 % at
+Re 5e5 / 1e6 / 3e6 / 6e6; mean dCl 0.055 / 0.045 / 0.042 / 0.039; mean rel dCd 6.9 / 6.3 / 7.0 /
+8.2 %; mean dCm 0.0114 / 0.0091 / 0.0088 / 0.0084.
+
+### Proposed accuracy targets (awaiting approval)
+
+For sections with an open trailing edge, Re 5e5 to 6e6, inside the attached-flow filter, met at
+every Reynolds number separately (not only pooled):
+
+| Quantity | Target | v1.3.1 transpiration VII, worst Reynolds number |
+|---|---|---|
+| Converged points (of those where XFOIL converged) | >= 95 % | 78.4 % |
+| mean abs dCl | <= 0.03 (unchanged) | 0.055 |
+| max abs dCl | <= 0.10 (new) | 0.256 |
+| mean rel abs dCd | <= 10 % (unchanged) | 8.2 % |
+| max rel abs dCd | <= 30 % (new) | 22.3 % |
+| mean abs dCm | <= 0.01 (unchanged) | 0.0114 |
+| max abs dCm | <= 0.03 (new) | 0.048 |
+
+Reasons:
+
+- XFOIL's own paneling sensitivity (0.0004 in Cl, 0.4 % in Cd, 0.0001 in Cm) is far below the
+  targets, so the targets are not limited by the reference.
+- The provisional means are kept: v1.3.1 VII already meets the Cd and nearly the Cm mean, so they
+  are reachable; Cl needs a real improvement.
+- Maximum limits catch errors near the filter edge that means hide (v1.3.1 max dCl 0.26).
+- The convergence requirement stops a method from looking better because bad points dropped out.
+- Per Reynolds number, so that a good Reynolds number cannot hide a bad one.
+- Transition location is reported without a target in v2.0. Sharp-trailing-edge sections and
+  Re below 5e5 are reported without targets.
+
+### Proposed SPEC.md 4.1 wording (awaiting approval; SPEC.md not edited)
+
+Replace "Sections: NACA 0012, 2412, 4412, 23012, plus at least two non-NACA sections imported by
+name." with:
+
+> Sections: NACA 0012, 2412, 4412, 23012 (open trailing edge of NACA Report 460, thickness
+> coefficient -0.1015), plus Clark Y and Eppler E387, downloaded by name from the UIUC Airfoil
+> Coordinates Database.
+
+Replace "Both codes receive the same coordinate file." with:
+
+> Both codes read the same canonical coordinate file: 160 panels, Selig order.
+>
+> Reference recipe: XFOIL 6.99 runs under `xvfb-run` with graphics enabled. It loads the
+> canonical file and redistributes it with `PANE` at 160 nodes (the reference) and at 240 nodes
+> (paneling sensitivity), N_crit 9, free transition, `ITER 200`, 300 s timeout per process. Each
+> case is two fresh XFOIL processes, 0 to +20 deg and 0 to -4 deg.
+
+Replace the provenance bullet with:
+
+> Each reference polar is stored with its provenance: XFOIL version and package release, `PANE`
+> node count, N_crit, Reynolds number, Mach number, geometry source and checksum, trailing-edge
+> gap, date, and the status and run time of every XFOIL process.
+
+Replace "Angle of attack from -4° up to the last angle at which XFOIL converges, in 1° steps."
+with:
+
+> Angle of attack from -4 deg to +20 deg in 1 deg steps. Every angle where XFOIL converges is
+> kept. A skipped angle is retried once from a fresh start directly at that angle and flagged as
+> retried; an angle that still fails is recorded as not converged and never interpolated.
+
+Add to "Reported per case":
+
+> the number of angles each code did not converge on, and the paneling sensitivity (XFOIL at 240
+> versus 160 nodes).
+
+Add to the error-metrics bullet:
+
+> Points where either code did not converge are excluded from the metrics and counted next to
+> them.
+
+Replace the provisional-targets bullet with:
+
+> Attached-flow filter: angles from -4 deg up to, but not including, the first positive angle at
+> which XFOIL's Cl reaches 0.9 times its maximum over the positive-angle sweep.
+>
+> Targets, for sections with an open trailing edge, Re 5e5 to 6e6, inside the attached-flow
+> filter, met at every Reynolds number separately: at least 95 % of the points where XFOIL
+> converged are converged; mean |dCl| <= 0.03 and max <= 0.10; mean relative |dCd| <= 10 % and
+> max <= 30 %; mean |dCm| <= 0.01 and max <= 0.03.
+>
+> Sections with a sharp trailing edge are reported separately without targets; for them the
+> paneling sensitivity is a lower bound, because XFOIL's result keeps changing with the number of
+> `PANE` nodes.
 
 ---
 
@@ -284,3 +489,12 @@ the same residual (5.593e-3) and also fails, so both angles stay not converged.
   upper surface at 10 deg (NACA 2412, Re 1e6), with either trailing edge.
 - M3: the command-line VII settings (`max_iter=200`) stop before convergence at 10 deg for
   NACA 2412 at Re 1e6; 240-281 iterations are needed there.
+- M2: add the Williams two-element exact solution (ARC R&M 3717) once the report is supplied.
+- M2/M3: decide on the two expected-to-pass tests that failed in M1 (Kármán-Trefftz at 4 deg,
+  NumPy vs JAX for NACA 4412 at -4 deg); `tests/test_exact_solutions.py` is not committed until
+  then.
+- M3: E387 (sharp trailing edge): XFOIL converges at only part of the sweep and seven XFOIL
+  processes over the matrix hang until the timeout. Consider whether E387 stays in the matrix.
+- M3: Newton VII takes 25-60 s per point and converged at 1 of 9 points at Re 5e4 and 5 of 10 at
+  Re 2e5 (subset).
+- M7: the benchmark adapter `baseline_v131.py` is removed when the v1.3.1 solvers are replaced.
