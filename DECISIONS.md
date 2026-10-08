@@ -151,9 +151,59 @@ change.
 - Measured after step 1: full suite 86 passed, 2 xfailed (73.6 s); fast suite 77 passed,
   11 deselected (15.6 s); `validation_output.txt` reproduced byte for byte.
 
-### Q2 diagnosis
+### Step 2: XFOIL runner
 
-(To be filled in after step 2.)
+- `foil_lab/benchmark/xfoil.py`: coordinate-file writer (Selig order and duplicate-point checks,
+  10 decimals, SHA-256), command script, subprocess under `xvfb-run -a` with a timeout, polar
+  parser, provenance header, reference CSV read/write.
+- Each case is two fresh XFOIL processes (0 up to alpha_max, 0 down to alpha_min). Alpha 0 comes
+  from the upward run. Crashes and timeouts are recorded in the provenance, not raised.
+- New defaults in `foil_lab/params.py` (start of the single parameters module; solver
+  parameters move there in M2): 160 `PANE` nodes, N_crit 9, free transition (`XTR 1 1`),
+  Mach 0, `ITER 200`, 300 s timeout per process, sweep -4 to 20 deg in 1 deg steps.
+  `ITER 200` and the timeout are proposals awaiting approval.
+
+### Q2 diagnosis (NACA 2412, Re 1e6, alpha 5 deg)
+
+Checked and ruled out:
+
+- Duplicate points: none (161 points, smallest consecutive spacing 3.9e-4).
+- Point ordering: Selig order (positive signed area).
+- Unconverged or inviscid result: the 0.856 run was viscous and converged; the inviscid value
+  of that geometry is 0.867. The same value is reached by a direct `ALFA 5` and by a 0-to-5 deg
+  sequence, so it is not hysteresis.
+- File resolution and number format: 160 or 320 panels, 6 or 10 decimals give the same result
+  after `PANE`.
+
+Cause: the trailing-edge definition. Foil-Lab's `generate_naca4` uses the closed-trailing-edge
+thickness coefficient (-0.1036, sharp TE). XFOIL's own `NACA` command and NACA Report 460 use
+-0.1015 (blunt TE, gap 0.25 % chord). For a sharp trailing edge, XFOIL's result keeps changing
+with the number of `PANE` nodes; for the blunt one it does not.
+
+Measured through the runner (viscous, alpha 5 deg):
+
+| PANE nodes | closed TE (ours): Cl | Cd | Cm | open TE (-0.1015): Cl | Cd | Cm |
+|---|---|---|---|---|---|---|
+| 120 | 0.8620 | 0.00829 | -0.0640 | 0.8105 | 0.00791 | -0.0531 |
+| 160 | 0.8564 | 0.00824 | -0.0629 | 0.8101 | 0.00793 | -0.0531 |
+| 200 | 0.8522 | 0.00822 | -0.0620 | 0.8100 | 0.00794 | -0.0530 |
+| 240 | 0.8493 | 0.00820 | -0.0614 | 0.8099 | 0.00795 | -0.0530 |
+| as-is | 0.8152 | 0.00881 | -0.0548 | 0.8101 | 0.00797 | -0.0531 |
+
+XFOIL's own `NACA 2412` (160 nodes): Cl 0.8094, Cd 0.00775, Cm -0.0540.
+
+Further measurements:
+
+- The drift is a property of sharp trailing edges in XFOIL, not of our file: XFOIL's own
+  NACA 2412 closed with `TGAP 0` gives Cl 0.8582 / 0.8524 / 0.8486 / 0.8456 / 0.8424 at
+  120 / 160 / 200 / 240 / 300 nodes. Our closed-TE file is still moving at 360 nodes (0.8433).
+- XFOIL's "max camber" printout for a loaded file (0.01906) differs from the 0.020 it prints
+  for its `NACA` command for both TE variants; this is how XFOIL estimates camber from points,
+  not a geometry difference.
+- XFOIL sometimes skips single attached angles at Re 1e6 (for example 2 and 3 deg for the
+  closed TE at 160 nodes). Those are recorded as not converged (Q5).
+
+Decision on the canonical NACA geometry and on sharp-TE sections: pending (asked after step 2).
 
 ### Removed tests
 
