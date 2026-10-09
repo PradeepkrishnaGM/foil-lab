@@ -25,16 +25,18 @@ def _old_closed_naca4(code: str, n: int) -> np.ndarray:
 
 
 @pytest.mark.parametrize("code", ["0012", "2412", "4412"])
-def test_default_is_bit_identical_to_v131(code):
-    assert np.array_equal(generate_naca4(code, 160), _old_closed_naca4(code, 160))
+def test_closed_option_is_bit_identical_to_v131(code):
+    """Default is "open" since M2 (Q2); the closed geometry stays pinned under the option."""
     assert np.array_equal(generate_naca4(code, 160, trailing_edge="closed"),
+                          _old_closed_naca4(code, 160))
+    assert np.array_equal(generate_naca4(code, 160, trailing_edge="open"),
                           generate_naca4(code, 160))
 
 
 @pytest.mark.parametrize("gen,code", [(generate_naca4, "2412"), (generate_naca5, "23012")])
 def test_trailing_edge_gap(gen, code):
-    closed = gen(code, 160)
-    opened = gen(code, 160, trailing_edge="open")
+    closed = gen(code, 160, trailing_edge="closed")
+    opened = gen(code, 160)
     assert np.hypot(*(closed[0] - closed[-1])) < 1e-15
     # gap = 2 * y_t(1) = 10 t (0.2969 - 0.1260 - 0.3516 + 0.2843 - 0.1015) = 0.00252 for t = 0.12
     assert np.hypot(*(opened[0] - opened[-1])) == pytest.approx(0.00252, abs=1e-9)

@@ -198,7 +198,6 @@ def _distance_to_curve(points, curve):
     return np.min(np.linalg.norm(points[:, None] - (a[None] + t[..., None] * ab[None]), axis=2), axis=1)
 
 
-@_xfail("M2", "arc-length repanelling independent of chord length and position")
 @pytest.mark.parametrize("op", ["scaled", "translated", "rotated"])
 def test_repanelling_preserves_transformed_shape(op):
     """Repanelling a transformed section keeps every point within 1e-4 chord of the original

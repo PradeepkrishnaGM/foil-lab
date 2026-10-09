@@ -7,7 +7,7 @@ from foil_lab.geometry import normalize_airfoil, repanel_cosine, deflect_flap
 
 
 def test_normalize_unit_chord():
-    af = generate_naca4("2412", 120) * 3.0  # scale up
+    af = generate_naca4("2412", 120, trailing_edge="closed") * 3.0  # scale up
     norm = normalize_airfoil(af)
     chord = norm[:, 0].max() - norm[:, 0].min()
     assert abs(chord - 1.0) < 1e-6

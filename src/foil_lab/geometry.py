@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.interpolate import PchipInterpolator
+from scipy.interpolate import CubicSpline
 
 def normalize_airfoil(coords: np.ndarray) -> np.ndarray:
     """
@@ -45,46 +45,187 @@ def split_surfaces(coords: np.ndarray):
     lower = coords[le_idx:]
     return upper, lower
 
-def repanel_cosine(coords: np.ndarray, num_panels: int = 100) -> np.ndarray:
+class _ArcSpline:
+    """Cubic spline of a Selig-ordered section in arc length, with its leading edge.
+
+    The leading edge is the point of the spline farthest from the trailing-edge midpoint (the
+    mean of the first and last points), found by root finding on the derivative of the squared
+    distance. Arc length and that distance do not depend on position, rotation or scale, so
+    everything built on this is independent of chord length and position.
     """
-    Repanels the airfoil using cosine spacing to cluster points at the LE and TE.
-    Uses a monotonic cubic interpolator to prevent spline wiggles.
+
+    def __init__(self, coords: np.ndarray):
+        c = np.asarray(coords, dtype=float)
+        seg = np.hypot(*np.diff(c, axis=0).T)
+        keep = np.concatenate(([True], seg > 0.0))       # drop repeated points
+        c = c[keep]
+        s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(c, axis=0).T))))
+        self.nodes, self.s = c, s
+        self.x, self.y = CubicSpline(s, c[:, 0]), CubicSpline(s, c[:, 1])
+        self.length = float(s[-1])
+        self.te_mid = 0.5 * (c[0] + c[-1])
+        self.s_le = self._leading_edge()
+
+    def point(self, s):
+        return np.column_stack([self.x(s), self.y(s)])
+
+    def _leading_edge(self) -> float:
+        from scipy.optimize import brentq
+        from .params import GEOMETRY
+        m = GEOMETRY.le_search_samples * len(self.nodes)
+        ss = np.linspace(0.0, self.length, m)
+        d2 = (self.x(ss) - self.te_mid[0]) ** 2 + (self.y(ss) - self.te_mid[1]) ** 2
+        k = int(np.argmax(d2))
+        lo, hi = ss[max(k - 1, 0)], ss[min(k + 1, m - 1)]
+
+        def f(t):
+            return ((self.x(t) - self.te_mid[0]) * self.x(t, 1)
+                    + (self.y(t) - self.te_mid[1]) * self.y(t, 1))
+        if f(lo) * f(hi) < 0.0:
+            return float(brentq(f, lo, hi, xtol=1e-15 * self.length, rtol=8.9e-16))
+        return float(ss[k])
+
+    def chord_frame(self):
+        """(leading edge, unit chord direction, chord length)."""
+        le = self.point(self.s_le)[0]
+        d = self.te_mid - le
+        chord = float(np.hypot(*d))
+        return le, d / chord, chord
+
+
+def repanel_cosine(coords: np.ndarray, num_panels: int | None = None) -> np.ndarray:
+    """Repanel a section by arc length with cosine clustering at both edges.
+
+    A cubic spline in arc length is fitted through the Selig-ordered points; the leading edge
+    is the spline point farthest from the trailing-edge midpoint. Each surface (trailing edge
+    to leading edge, leading edge to trailing edge) gets ``num_panels // 2`` panels (the lower
+    surface the rest) with cosine spacing in arc length, which clusters nodes at the leading and
+    trailing edges. The end points are kept exactly, so the trailing-edge gap is unchanged. The
+    result does not depend on chord length, position or rotation of the input.
+    ``num_panels`` defaults to ``params.GEOMETRY.num_panels``.
     """
-    # Number of points is num_panels + 1. Split roughly in half for upper/lower
-    num_points_per_surface = (num_panels // 2) + 1
-    
-    upper, lower = split_surfaces(coords)
-    
-    # Generate cosine-spaced X coordinates: 0.0 (LE) to 1.0 (TE)
-    beta = np.linspace(0, np.pi, num_points_per_surface)
-    x_new = 0.5 * (1 - np.cos(beta))
-    
-    # Helper function to safely interpolate surfaces
-    def interpolate_surface(surface_coords):
-        # Sort by X to ensure strictly increasing arrays for interpolation
-        sort_idx = np.argsort(surface_coords[:, 0])
-        x_sorted = surface_coords[sort_idx, 0]
-        y_sorted = surface_coords[sort_idx, 1]
-        
-        # Remove duplicate X values (sometimes occurs exactly at the LE)
-        unique_idx = np.unique(x_sorted, return_index=True)[1]
-        x_unique = x_sorted[unique_idx]
-        y_unique = y_sorted[unique_idx]
-        
-        # PchipInterpolator is used instead of CubicSpline to prevent overshoot/wiggles
-        interpolator = PchipInterpolator(x_unique, y_unique)
-        return interpolator(x_new)
-        
-    y_upper_new = interpolate_surface(upper)
-    y_lower_new = interpolate_surface(lower)
-    
-    # Reassemble in Selig format: TE Upper (x=1) -> LE (x=0) -> TE Lower (x=1)
-    upper_repanelled = np.column_stack((x_new[::-1], y_upper_new[::-1]))
-    
-    # Skip the first point of the lower surface (x=0) to avoid duplicating the LE point
-    lower_repanelled = np.column_stack((x_new[1:], y_lower_new[1:]))
-    
-    return np.vstack((upper_repanelled, lower_repanelled))
+    from .params import GEOMETRY
+    n = GEOMETRY.num_panels if num_panels is None else int(num_panels)
+    sp = _ArcSpline(coords)
+    h = n // 2
+    t1 = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, h + 1)))
+    t2 = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, n - h + 1)))
+    s = np.concatenate([sp.s_le * t1, sp.s_le + (sp.length - sp.s_le) * t2[1:]])
+    out = sp.point(s)
+    out[0], out[-1] = sp.nodes[0], sp.nodes[-1]
+    return out
+
+
+def _to_chord_frame(coords: np.ndarray, sp: "_ArcSpline"):
+    le, e, chord = sp.chord_frame()
+    nrm = np.array([-e[1], e[0]])
+    d = np.asarray(coords, dtype=float) - le
+    return np.column_stack([d @ e, d @ nrm]) / chord, (le, e, nrm, chord)
+
+
+def _from_chord_frame(local: np.ndarray, frame) -> np.ndarray:
+    le, e, nrm, chord = frame
+    return le + chord * (local[:, :1] * e + local[:, 1:] * nrm)
+
+
+def _other_surface_y(sp: "_ArcSpline", frame, x_local: float, upper: bool) -> float:
+    """y (chord frame) of the opposite surface at chordwise position ``x_local``."""
+    from scipy.optimize import brentq
+    le, e, nrm, chord = frame
+    a, b = (sp.s_le, sp.length) if upper else (0.0, sp.s_le)
+
+    def xl(t):
+        return float(((sp.point(t)[0] - le) @ e) / chord)
+    xa, xb = xl(a), xl(b)
+    lo_x, hi_x = min(xa, xb), max(xa, xb)
+    if x_local <= lo_x:
+        t = a if xa <= xb else b
+    elif x_local >= hi_x:
+        t = b if xb >= xa else a
+    else:
+        t = brentq(lambda q: xl(q) - x_local, a, b, xtol=1e-15 * sp.length, rtol=8.9e-16)
+    return float(((sp.point(t)[0] - le) @ nrm) / chord)
+
+
+def scale_thickness_camber(coords: np.ndarray, thickness: float = 1.0,
+                           camber: float = 1.0) -> np.ndarray:
+    """Scale the thickness and the camber of a section in its own chord frame.
+
+    The chord runs from the leading edge (see :func:`repanel_cosine`) to the trailing-edge
+    midpoint. At every node the opposite surface is evaluated at the same chordwise position on
+    the arc-length spline; camber c = (y_u + y_l)/2 and thickness t = y_u - y_l, and the node
+    moves to c' + t'/2 (upper) or c' - t'/2 (lower) with c' = camber * c and t' = thickness * t.
+    Chordwise positions are kept, so factors of 1 return the input (to round-off).
+    """
+    c = np.asarray(coords, dtype=float)
+    sp = _ArcSpline(c)
+    local, frame = _to_chord_frame(c, sp)
+    s_nodes = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(c, axis=0).T))))
+    out = local.copy()
+    for i, (xl, yl) in enumerate(local):
+        upper = s_nodes[i] <= sp.s_le
+        yo = _other_surface_y(sp, frame, xl, upper)
+        yu, ylo = (yl, yo) if upper else (yo, yl)
+        cam, thk = 0.5 * (yu + ylo), yu - ylo
+        out[i, 1] = camber * cam + (0.5 if upper else -0.5) * thickness * thk
+    return _from_chord_frame(out, frame)
+
+
+def trailing_edge_gap(coords: np.ndarray) -> float:
+    """Distance between the first and last points (zero for a closed trailing edge)."""
+    c = np.asarray(coords, dtype=float)
+    return float(np.hypot(*(c[0] - c[-1])))
+
+
+def set_trailing_edge_gap(coords: np.ndarray, gap: float,
+                          blend_start: float | None = None) -> np.ndarray:
+    """Return the section with trailing-edge gap ``gap`` (same length units as the input).
+
+    The thickness is changed only aft of ``blend_start`` (fraction of chord, default
+    ``params.GEOMETRY.te_gap_blend_start``) by d(x) = D ((x - x_b) / (1 - x_b))^2, split equally
+    between the surfaces normal to the chord, so the shape ahead of x_b is unchanged and the
+    change starts with zero slope. D is chosen so that the new gap equals ``gap``. A gap above
+    ``params.GEOMETRY.te_gap_warn`` of the chord gives a warning.
+    """
+    import warnings
+    from scipy.optimize import brentq
+    from .params import GEOMETRY
+    xb = GEOMETRY.te_gap_blend_start if blend_start is None else float(blend_start)
+    c = np.asarray(coords, dtype=float)
+    sp = _ArcSpline(c)
+    local, frame = _to_chord_frame(c, sp)
+    chord = frame[3]
+    if gap < 0.0:
+        raise ValueError("gap must be non-negative")
+    if gap > GEOMETRY.te_gap_warn * chord:
+        warnings.warn(f"trailing-edge gap {gap / chord:.4f} c is above "
+                      f"{GEOMETRY.te_gap_warn:.3g} c (params.GEOMETRY.te_gap_warn)", stacklevel=2)
+    s_nodes = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(c, axis=0).T))))
+    side = np.where(s_nodes <= sp.s_le, 0.5, -0.5)
+    w = np.where(local[:, 0] > xb, ((local[:, 0] - xb) / (1.0 - xb)) ** 2, 0.0)
+
+    def shaped(delta):
+        out = local.copy()
+        out[:, 1] = local[:, 1] + side * w * delta
+        return out
+
+    def gap_of(delta):
+        o = shaped(delta)
+        return float(np.hypot(*(o[0] - o[-1]))) - gap / chord
+    g0 = gap_of(0.0)
+    if abs(g0) <= 1e-15:
+        return c.copy()
+    # the gap is |opening| and so not monotonic in delta: search each side of zero separately
+    big = 4.0 * (abs(g0) + gap / chord) + 1.0
+    delta = None
+    for lo, hi in ((0.0, big), (-big, 0.0)):
+        if gap_of(lo) * gap_of(hi) <= 0.0:
+            delta = brentq(gap_of, lo, hi, xtol=1e-16, rtol=8.9e-16)
+            break
+    if delta is None:
+        raise ValueError("could not reach the requested trailing-edge gap")
+    return _from_chord_frame(shaped(delta), frame)
+
 
 # Add to the bottom of src/foil_lab/geometry.py
 def deflect_flap(coords: np.ndarray, hinge_x: float, deflection_deg: float) -> np.ndarray:

@@ -4,7 +4,7 @@ Busemann sweep, constant wing loading, and the advanced generators.
 Run from the repo root:  python examples/advanced_features.py
 """
 from foil_lab.generators import (generate_naca4, generate_biconvex,
-                                  generate_wedge, generate_parsec, generate_naca6)
+                                  generate_wedge, generate_parsec)
 from foil_lab.solver import solve_flow
 from foil_lab.advanced import solve_swept_wing, solve_constant_wing_loading
 from foil_lab.ground_effect import solve_ground_effect
@@ -49,7 +49,6 @@ def main():
     print("\n=== Advanced generators (Cl at a=0) ===")
     print(f"  biconvex   Cl={solve_flow(generate_biconvex(0.06), 0.0).cl:+.4f}")
     print(f"  wedge      Cl={solve_flow(generate_wedge(0.05), 0.0).cl:+.4f}")
-    print(f"  naca6      Cl={solve_flow(generate_naca6('63',0.12,0.4,160), 0.0).cl:+.3f}")
     parsec = generate_parsec(dict(rle=0.01, x_up=0.4, y_up=0.06, yxx_up=-0.5,
                                   x_lo=0.4, y_lo=-0.04, yxx_lo=0.5, y_te=0.0,
                                   dy_te=0.0, ang_te=-8.0, ang_wedge=8.0), 160)

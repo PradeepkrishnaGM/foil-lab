@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from foil_lab.generators import (generate_naca4, generate_biconvex, generate_wedge,
-                                  generate_parsec, generate_naca6)
+                                  generate_parsec)
 from foil_lab.geometry import smooth_coordinates
 from foil_lab.solver import solve_flow
 from foil_lab.advanced import solve_swept_wing, solve_constant_wing_loading
@@ -87,11 +87,6 @@ def test_parsec_produces_valid_geometry():
     assert af[:, 1].max() > 0 and af[:, 1].min() < 0  # has thickness
     sol = solve_flow(af, 0.0)
     assert np.isfinite(sol.cl)
-
-
-def test_naca6_runs():
-    af = generate_naca6("63", 0.12, 0.4, num_panels=160)
-    assert np.isfinite(solve_flow(af, 0.0).cl)
 
 
 # --- Geometry smoothing ----------------------------------------------------- #

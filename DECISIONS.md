@@ -1300,6 +1300,63 @@ Batch example on the idle machine: runs, 504 points. Its "best L/D" (950-1440 at
 known v1.3.1 one-way drag defect (NACA 2412 open, 12 deg: one-way Cd 0.00179, v1.3.1 0.00183,
 XFOIL 0.0151), not new; the one-way path is removed in M3.
 
+### Step 4: implemented, stopped on failing tests (2026-10-09)
+
+Implemented on branch `m2-step4-wip` (not merged):
+
+- `foil_lab.airfoil`: `Airfoil` (read-only Selig coordinates, name, source; `naca`, `from_file`,
+  `from_coords`, `parsec`, `biconvex`, `wedge`; `te_gap`, `chord`, `leading_edge`,
+  `quarter_chord`; `scaled`, `translated`, `rotated`, `repanelled`, `with_te_gap`,
+  `with_thickness_scaled`, `with_camber_scaled`), `Element` (scale about the origin, pitch
+  about a pivot, offset), `Configuration` (reference chord and point per Q10, overridable).
+- `foil_lab.api`: `Result` (totals, per-element loads and Cp with upper/lower labels, alpha,
+  panel count, repanelled flag, reference chord and point, converged, method, corrections,
+  code version; drag `None` when inviscid), `Polar`, `analyze`, `polar` (Airfoil, Element or
+  Configuration; repanel to 160 by default; `NotImplementedError` for a Reynolds number).
+  `fl.Airfoil`, `fl.Element`, `fl.Configuration`, `fl.analyze`, `fl.polar` at the package
+  root. `solve_flow` unchanged. No pandas conversion (pandas is not a dependency; M7).
+- `geometry`: `repanel_cosine` is now arc-length repanelling (cubic spline in arc length,
+  leading edge farthest from the trailing-edge midpoint by root finding, cosine clustering at
+  both edges, end points kept); the x-based PCHIP version is deleted. New
+  `scale_thickness_camber`, `set_trailing_edge_gap` (blend aft of 0.8 c, warning above 1 % c),
+  `trailing_edge_gap`. Parameters in `params.GEOMETRY` (num_panels 160, te_gap_warn 0.01,
+  te_gap_blend_start 0.8, le_search_samples 20; new defaults, proposed).
+- Generators: default trailing edge "open" for NACA 4/5 (closed pinned by SHA-256 under the
+  explicit option); `generate_naca6` removed (GUI, one test, one example and three README lines
+  updated).
+- Version `2.0.0.dev0` (package and `__version__`), so that `Result.version` is not "1.3.1".
+- Reference chord of a single NACA section by the farthest-point leading edge: open NACA 2412
+  chord 1.00008, quarter-chord point (0.24994, 0.00119).
+- Existing tests changed because of the approved default change (Q2), to pin "closed"
+  explicitly with unchanged comparisons: `test_generators.py::test_default_is_bit_identical_to_v131`
+  (renamed `test_closed_option_is_bit_identical_to_v131`), `test_generators.py::test_trailing_edge_gap`,
+  `test_geometry.py::test_normalize_unit_chord`, `test_xfoil_runner.py::test_failed_runs_give_all_angles_unconverged`.
+  The three M1 repanelling tests pass with their tolerance; their M2 mark is removed.
+
+Failing (full suite: 311 passed, 6 failed, 3 expected failures):
+
+1. `test_open_naca2412_matches_xfoil_naca_command` (tolerance 1e-4 c): max distance 1.13e-3 c,
+   on the upper surface at x/c 0.014-0.025. XFOIL's `NACA 2412` output matches a construction
+   with the thickness added vertically to the camber line to 3.1e-7 c; our generator adds it
+   perpendicular to the camber line. The trailing-edge gap agrees (0.00252). Inferred from the
+   coordinates only; XFOIL source was not read. Decision needed: which definition the NACA
+   4-digit generator uses (the "perpendicular" reading of NACA Report 460 / Abbott and von
+   Doenhoff is from memory, section unverified).
+2. `test_naca_maximum_thickness[4415-0.15]`: vertical thickness 0.15023 against 0.15 (2.3e-4 >
+   2e-4); the property depends on the same thickness definition.
+3. `test_zero_camber_gives_symmetric_section`: 6.4e-3 measured about the x-axis (the test used
+   the wrong frame); 6.1e-4 in the section's own chord frame, still far above the 1e-12 fixed
+   beforehand, because the check interpolates between unpaired nodes. The 1e-12 was not
+   attainable with this measurement.
+4. `test_canonical_file_matches_reference_checksum[CLARKY]` and `[E387]`: the canonical files
+   changed with the new repanelling; regenerating these references is step 5.
+5. `test_vii_newton.py::test_newton_low_re_drag_right_order_of_magnitude`: XPASS(strict). The
+   test is unedited and uses the generator default, now open; the open 120-panel case converges
+   (table under "Decisions after the P3 report"). The panel-count sensitivity remains.
+
+Fixed during step 4 without changing a tolerance: `set_trailing_edge_gap` searched a bracket
+symmetric in the gap and so could not open a closed trailing edge.
+
 ---
 
 ## Later

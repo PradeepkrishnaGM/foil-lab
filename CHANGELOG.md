@@ -24,7 +24,15 @@
 * `python -m foil_lab.benchmark report` no longer rewrites `docs/baseline_v1.3.1.md`; use the
   new `baseline-doc` command.
 
+* NACA 4/5-digit generators default to the open trailing edge (NACA Report 460); the closed
+  geometry is unchanged under `trailing_edge="closed"`.
+* `geometry.repanel_cosine` repanels by arc length (independent of chord, position and
+  rotation) instead of interpolating y(x) per surface.
+* New public interface: `fl.Airfoil`, `fl.Element`, `fl.Configuration`, `fl.analyze`,
+  `fl.polar` (inviscid). Version 2.0.0.dev0.
+
 ### Removed
+* `generate_naca6` (approximate 6-series; a correct generator is planned after v2.0).
 * `foil_lab.panels` (`build_panels`, `PanelGeometry`, `ensure_cw`): replaced by
   `foil_lab.inviscid.PanelSet`.
 * `foil_lab.influence`, `foil_lab.linear_system`, `foil_lab.forces` (the Hess-Smith kernels,

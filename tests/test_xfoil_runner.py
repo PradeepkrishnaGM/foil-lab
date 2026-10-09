@@ -131,7 +131,7 @@ def test_timeout_kills_grandchildren(tmp_path):
 
 def test_failed_runs_give_all_angles_unconverged():
     params = dataclasses.replace(XFOIL, command=("false",))
-    pol = run_polar(generate_naca4("0012", 60), "N0012", 1e6, "test",
+    pol = run_polar(generate_naca4("0012", 60, trailing_edge="closed"), "N0012", 1e6, "test",
                     sweep=SweepParams(-2.0, 2.0, 1.0), params=params)
     assert pol.alphas == [-2.0, -1.0, 0.0, 1.0, 2.0]
     assert pol.converged_alphas == [] and pol.retried == set()

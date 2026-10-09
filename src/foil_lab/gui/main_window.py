@@ -14,7 +14,7 @@ from foil_lab.geometry import (normalize_airfoil, repanel_cosine, deflect_flap,
 from foil_lab.solver import solve_flow, compute_panel_geometry
 from foil_lab.analysis import run_alpha_sweep
 from foil_lab.generators import (generate_naca4, generate_naca5, generate_parsec,
-                                 generate_naca6, generate_biconvex, generate_wedge)
+                                 generate_biconvex, generate_wedge)
 from foil_lab.flowfield import compute_velocity_field
 from foil_lab.ground_effect import solve_ground_effect
 from foil_lab.advanced import solve_swept_wing
@@ -109,7 +109,7 @@ class FoilLabMainWindow(QMainWindow):
         self.btn_load.clicked.connect(self.load_airfoil)
         naca_layout = QHBoxLayout()
         self.txt_naca = QLineEdit()
-        self.txt_naca.setPlaceholderText("2412 | 23012 | 6:63,0.12,0.4 | bc:0.06 | wedge:0.05")
+        self.txt_naca.setPlaceholderText("2412 | 23012 | bc:0.06 | wedge:0.05")
         self.btn_gen_naca = QPushButton("Generate NACA")
         self.btn_gen_naca.clicked.connect(self.generate_naca)
         naca_layout.addWidget(self.txt_naca)
@@ -279,15 +279,7 @@ class FoilLabMainWindow(QMainWindow):
         naca_str = self.txt_naca.text().strip().lower()
         try:
             # Advanced shapes via simple prefixes; plain digits stay NACA 4/5.
-            if naca_str.startswith("6:"):
-                # 6-series, e.g. "6:63,0.12,0.4"  (series, t/c, Cl_design)
-                parts = naca_str[2:].split(",")
-                series = parts[0].strip()
-                tc = float(parts[1]) if len(parts) > 1 else 0.12
-                cld = float(parts[2]) if len(parts) > 2 else 0.0
-                self.current_coords = generate_naca6(series, tc, cld, num_panels=160)
-                label = f"NACA 6-series {series} (t/c={tc}, Cl={cld})"
-            elif naca_str.startswith("bc:"):
+            if naca_str.startswith("bc:"):
                 tc = float(naca_str[3:]) if naca_str[3:] else 0.06
                 self.current_coords = generate_biconvex(tc, num_panels=120)
                 label = f"Biconvex (t/c={tc})"
@@ -303,8 +295,7 @@ class FoilLabMainWindow(QMainWindow):
                 label = f"NACA {naca_str}"
             else:
                 raise ValueError(
-                    "Enter 4/5 NACA digits, or '6:series,tc,cl', "
-                    "'bc:tc', or 'wedge:tc'."
+                    "Enter 4/5 NACA digits, 'bc:tc', or 'wedge:tc'."
                 )
 
             # Reset the bodies list to just the newly generated wing

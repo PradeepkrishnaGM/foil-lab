@@ -22,13 +22,14 @@ def _naca_thickness(x: np.ndarray, t: float, trailing_edge: str) -> np.ndarray:
 
 
 def generate_naca4(naca_string: str, num_panels: int = 120,
-                   trailing_edge: str = "closed") -> np.ndarray:
+                   trailing_edge: str = "open") -> np.ndarray:
     """
     Generates a NACA 4-digit airfoil using cosine spacing.
     Expects a 4-character string (e.g., '2412', '0012').
 
-    ``trailing_edge`` selects the thickness definition: ``"closed"`` (default, sharp trailing
-    edge) or ``"open"`` (NACA Report 460, as used by XFOIL's ``NACA`` command).
+    ``trailing_edge`` selects the thickness definition: ``"open"`` (default since v2.0; NACA
+    Report 460, as used by XFOIL's ``NACA`` command) or ``"closed"`` (sharp trailing edge;
+    output unchanged from v1.3.1).
     """
     if len(naca_string) != 4 or not naca_string.isdigit():
         raise ValueError("NACA 4-digit string must be exactly 4 numbers (e.g., '2412').")
@@ -79,12 +80,12 @@ def generate_naca4(naca_string: str, num_panels: int = 120,
     return np.vstack((upper_surface, lower_surface))
     
 def generate_naca5(naca_string: str, num_panels: int = 120,
-                   trailing_edge: str = "closed") -> np.ndarray:
+                   trailing_edge: str = "open") -> np.ndarray:
     """
     Generates a NACA 5-digit airfoil (e.g., '23012').
 
-    ``trailing_edge`` selects the thickness definition: ``"closed"`` (default, sharp trailing
-    edge) or ``"open"`` (NACA Report 460).
+    ``trailing_edge`` selects the thickness definition: ``"open"`` (default since v2.0; NACA
+    Report 460) or ``"closed"`` (sharp trailing edge; output unchanged from v1.3.1).
     """
     if len(naca_string) != 5 or not naca_string.isdigit():
         raise ValueError("NACA 5-digit string must be exactly 5 numbers (e.g., '23012').")
@@ -150,7 +151,7 @@ def generate_naca5(naca_string: str, num_panels: int = 120,
 
 
 # =========================================================================== #
-# Advanced generators: PARSEC, NACA 6-series, supersonic (biconvex / wedge)
+# Advanced generators: PARSEC, supersonic (biconvex / wedge)
 # =========================================================================== #
 
 def generate_parsec(params: dict, num_panels: int = 160) -> np.ndarray:
@@ -230,69 +231,6 @@ def generate_parsec(params: dict, num_panels: int = 160) -> np.ndarray:
 
     upper = np.column_stack((x[::-1], yu[::-1]))
     lower = np.column_stack((x[1:], yl[1:]))
-    return np.vstack((upper, lower))
-
-
-def generate_naca6(series: str = "63", thickness: float = 0.12,
-                   cl_design: float = 0.0, a: float = 1.0,
-                   num_panels: int = 160) -> np.ndarray:
-    """Approximate a NACA 6-series laminar-flow airfoil.
-
-    Full 6-series geometry comes from conformal-mapping tables; here we build a
-    close practical approximation: a 6-series-style thickness form combined with
-    the standard ``a``-mean-line camber for the design lift coefficient. This is
-    accurate enough for preliminary laminar-flow studies and panel analysis but
-    is not the exact tabulated ordinate set.
-
-    series : two-digit family string, e.g. '63', '64', '65' (sets the chordwise
-        location of minimum pressure / max thickness).
-    thickness : t/c.
-    cl_design : design lift coefficient for the mean line.
-    a : mean-line loading extent (1.0 = uniform load to TE).
-    """
-    num_points = (num_panels // 2) + 1
-    beta = np.linspace(0, np.pi, num_points)
-    x = 0.5 * (1 - np.cos(beta))
-    x = np.clip(x, 1e-6, 1.0 - 1e-9)
-
-    # Position of max thickness from the family digit (63 -> ~0.35c, etc.).
-    fam = int(series[1]) if len(series) >= 2 else 3
-    xt_max = 0.30 + 0.05 * (fam - 3)   # 63->0.35, 64->0.40, 65->0.45 (approx)
-
-    # 6-series-like thickness form: a smooth single-peak distribution with the
-    # crest shifted aft to xt_max (promotes a long favorable gradient).
-    yt = (thickness / 0.2) * (
-        0.2969 * np.sqrt(x) - 0.1260 * x - 0.3516 * x ** 2
-        + 0.2843 * x ** 3 - 0.1015 * x ** 4
-    )
-    # Shift the crest toward xt_max by a mild chordwise stretch.
-    shift = 1.0 + 0.6 * (xt_max - 0.30)
-    yt = yt * (1.0 + 0.15 * np.sin(np.pi * np.clip(x / shift, 0, 1)))
-
-    # Standard 'a' mean line for the design Cl.
-    yc = np.zeros_like(x)
-    dyc = np.zeros_like(x)
-    if cl_design != 0.0:
-        g = -1.0 / (1.0 - a) * (a ** 2 * (0.5 * np.log(a) - 0.25) + 0.25) if a < 1.0 else 0.0
-        h = (1.0 / (1.0 - a) * (0.5 * (1.0 - a) ** 2 * np.log(1.0 - a)
-             - 0.25 * (1.0 - a) ** 2) + g) if a < 1.0 else 0.0
-        with np.errstate(divide="ignore", invalid="ignore"):
-            x1 = np.clip(a - x, 1e-9, None)
-            x2 = np.clip(1.0 - x, 1e-9, None)
-            term = (0.5 * x1 ** 2 * np.log(x1) - 0.5 * x2 ** 2 * np.log(x2)
-                    - 0.25 * x1 ** 2 + 0.25 * x2 ** 2) if a < 1.0 else \
-                   (-(x2 ** 2) * np.log(x2) * 0.5 + 0.25 * x2 ** 2)
-        yc = cl_design / (2 * np.pi * (a + 1)) * (term / (1.0 - a) - x * np.log(x) + g - h * x) \
-            if a < 1.0 else cl_design / (2 * np.pi * 2) * (-x2 ** 2 * np.log(x2) + x ** 2 * 0.0)
-        yc = np.nan_to_num(yc)
-        dyc = np.gradient(yc, x)
-
-    th = np.arctan(dyc)
-    xu = x - yt * np.sin(th); yu = yc + yt * np.cos(th)
-    xl = x + yt * np.sin(th); yl = yc - yt * np.cos(th)
-
-    upper = np.column_stack((xu[::-1], yu[::-1]))
-    lower = np.column_stack((xl[1:], yl[1:]))
     return np.vstack((upper, lower))
 
 

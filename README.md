@@ -375,7 +375,6 @@ intentionally out of scope and raises `NotImplementedError`.
 
 ### Geometry generators (`generators.py`)
 * **PARSEC** 11-parameter parameterization (for optimization studies).
-* **NACA 6-series** laminar-flow approximation (thickness form + `a`-mean line).
 * **Biconvex** (double-circular-arc) and **double-wedge** supersonic sections.
 
 ### Geometry processing (`geometry.py`)
@@ -409,7 +408,6 @@ Generator input box syntax:
 |-------|----------|
 | `2412` | NACA 4-digit |
 | `23012` | NACA 5-digit |
-| `6:63,0.12,0.4` | NACA 6-series (series, t/c, Cl_design) |
 | `bc:0.06` | Biconvex, t/c = 0.06 |
 | `wedge:0.05` | Double-wedge, t/c = 0.05 |
 
@@ -481,8 +479,6 @@ aerodynamic-center location.
   (v0.6). Bodies must not overlap (`bodies_overlap` flags this). There is still
   no wake/confluent-boundary-layer model, so close-coupled slotted systems are
   inviscid-accurate only.
-* **NACA 6-series** is a practical approximation, not the exact tabulated
-  ordinates.
 * **Compressibility** is a Kármán–Tsien Cp correction only (subsonic).
 
 ## Not yet implemented (scoped, deliberately deferred)

@@ -3,8 +3,8 @@
 Every number a user or developer might want to change lives here as a documented default.
 Changing a default changes results, so it needs an entry in ``DECISIONS.md``.
 
-At present this module holds only the benchmark settings (milestone M1); the solver
-parameters move here in milestone M2.
+Contents: benchmark settings (M1); geometry, repanelling and shape-optimisation settings (M2).
+The inviscid core has no tunable numbers apart from ``inviscid.CLOSED_GAP_FRACTION``.
 """
 
 from __future__ import annotations
@@ -106,6 +106,30 @@ class BenchmarkParams:
 
 
 @dataclass(frozen=True)
+class GeometryParams:
+    """Geometry model and operations (``foil_lab.geometry``, ``foil_lab.airfoil``).
+
+    Attributes
+    ----------
+    num_panels:
+        Panels per element after repanelling; ``fl.analyze`` repanels to this by default (Q9).
+    te_gap_warn:
+        The trailing-edge gap tool warns above this gap, as a fraction of chord (Q2).
+    te_gap_blend_start:
+        The gap tool changes the thickness only aft of this chordwise position, blended with
+        ((x - x_b) / (1 - x_b))^2 so the shape ahead of x_b is unchanged.
+    le_search_samples:
+        Samples per input point used to bracket the leading edge (the point of the arc-length
+        spline farthest from the trailing-edge midpoint) before it is refined by root finding.
+    """
+
+    num_panels: int = 160
+    te_gap_warn: float = 0.01
+    te_gap_blend_start: float = 0.8
+    le_search_samples: int = 20
+
+
+@dataclass(frozen=True)
 class DesignParams:
     """Shape optimisation (``foil_lab.design``).
 
@@ -126,4 +150,5 @@ class DesignParams:
 XFOIL = XfoilParams()
 SWEEP = SweepParams()
 BENCHMARK = BenchmarkParams()
+GEOMETRY = GeometryParams()
 DESIGN = DesignParams()
