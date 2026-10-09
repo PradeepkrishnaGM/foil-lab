@@ -1677,6 +1677,99 @@ crosses zero at H 3.83, DG87's at 4.14, Falkner-Skan at 4.03); XFOIL's dumped va
 FID laminar closure is adopted; DG87 eqs. (10)-(12) stay. Stopped for the user before items 4-6
 (item 6, the M9 README note, is added under Later).
 
+### Two closure sets (user's decision, 2026-10-09)
+
+**The rule of the previous section (adopt a FID closure only where it is at least as close to
+Falkner-Skan as DG87) is replaced by the user.** Why: the comparison showed that XFOIL 6.99's
+laminar fits (= FID eqs. 47, 56) are further from the Falkner-Skan similarity solutions than DG87
+in adverse pressure gradient (Cf error 11-36 % against 2-12 % for H 2.6-3.5; zero Cf at H 3.83
+against 4.14 for DG87 and 4.03 exact), yet XFOIL is the reference of SPEC 4.1 and can be compared
+station by station only with the closures it uses. Neither physics nor agreement with XFOIL alone
+decides, so both sets are kept, named and documented:
+
+- `"fidkowski2022"`: everything as published in FID (laminar, turbulent, lag constants,
+  amplification, state at transition, guards; wake at C4). Where FID says a term is the author's
+  own (eqs. 58, 74, 76), it is implemented as published and marked. C1 and C2 targets and the
+  SPEC 4.1 targets are judged with this set. Implemented and verified first.
+- `"drela1987"`: DG87 with LNE89, as published. Run through the same C1, C2 and benchmark; no
+  targets against XFOIL; numbers reported side by side.
+- The equations, discretisation and Newton solver exist once; a set is a module with a fixed
+  interface (`foil_lab.bl.closure_sets.INTERFACE`), selected by name. No formulas are mixed.
+- The default set is the user's decision after C3, with both benchmark results. Until then the
+  code's default is `"fidkowski2022"` (provisional, the set the targets are judged with).
+- The Falkner-Skan table and the laminar closure comparison stay as committed diagnostics and as a
+  test (`test_laminar_closures_against_falkner_skan_as_recorded`, errors recorded as measured, not
+  targets); they go into the M9 validation document.
+
+**Where the sets need a different form of an equation, and how one solver is kept:**
+
+1. Lag equation. Written once in FID's form (FID eq. 8),
+   (delta/C_tau) dC_tau/dxi = K (C_tau,EQ^1/2 - eta_D C_tau^1/2) + 2 delta (u_q - (1/ue) due/dxi).
+   LNE89 eq. (23) is exactly the case K = 5.6, eta_D = 1, u_q = (1/(0.75 delta*)) [Cf/2 -
+   ((H_k - 1)/(6.7 H_k))^2] (4/3 = 1/G_beta, 6.7 = G_A). Each set supplies K(U_s), eta_D, u_q.
+2. Turbulent dissipation: FID's max(wall + outer + stress, laminar) (eqs. 62-65) and DG87 eq. (20)
+   behind one function signature `cd_turb(hk, ret, cf, us, ctau, hstar)`.
+3. Amplification: FID's rate depends on n (eq. 76). The onset is therefore defined for both sets
+   as the root of the amplification residual on the laminar subinterval with the state
+   interpolated to xi_t and n = N_crit there (FID eq. 18; DG87 p. 1351 states the same
+   definition). This replaces my earlier closed form with the rate interpolated linearly in xi.
+   Solved by 40 bisections (state-independent) plus one Newton correction, so derivatives follow
+   the implicit function theorem (FID eq. 19) in NumPy, complex step and JAX alike.
+4. State at transition: one function `ctau_transition(hk, ctau_eq)` (DG87: C_tau^1/2 = 0.7
+   C_tau,EQ^1/2; FID eq. 17: 1.8 exp(-3.3/(H_k - 1)) C_tau,EQ^1/2).
+5. Start of a branch: the local similarity form of the momentum and shape equations written with
+   the set's own laminar closures, G [(1 - m)/2 + (2 + H) m] = Re_theta Cf/2 and G (1 - H) m =
+   Re_theta (2C_D/H* - Cf/2), G = Re ue theta^2/xi, m from the first two stations clipped to
+   [-0.05, 1]. At m = 1 these are FID's stagnation equations (p. 7); this replaces the DG87 eqs.
+   (33)-(34) start for both sets (each set then starts consistently with its own closures).
+
+Discretisation differences of FID not adopted (the discretisation exists once and stays the
+central log form of DG87 p. 1351): the xi-weighted source terms (FID eqs. 9-10), the H_k-dependent
+upwinding (eq. 13), the midpoint evaluation of cf xi/theta, the stagnation state extrapolated to
+xi = 0 with a quadratic ue fit (p. 7). With the FID set, C1 agrees with XFOIL to about 1 % at the
+trailing edge, so these are not needed for agreement; revisit only if C2 shows otherwise.
+
+**Every difference between the sources (item 4), equation numbers, and evaluation on the dumps**
+(`tests/diagnostics/closure_set_compare.py`; ratio closure/XFOIL on the dumped (H, Re_theta),
+mean (max deviation)):
+
+| quantity | drela1987 | fidkowski2022 | on XFOIL's dumped states |
+|---|---|---|---|
+| laminar H* | DG87 eq. 10 | FID eqs. 47-48 | DG87 0.999-0.995 (0.7 %); FID 1.0000 |
+| laminar Cf | DG87 eq. 11 | FID eq. 56 | DG87 1.016 / 1.082 / 1.305 (H 2.2-2.6 / 2.6-3.0 / 3.0-3.5); FID 1.000 (0.6 %) |
+| laminar C_D | DG87 eq. 12 | FID eq. 61 (same below H_k 4; -0.0016 vs -0.003 above) | not dumped |
+| turbulent Cf | DG87 eq. 14 | FID eqs. 57-60 (eq. 14 with guards A_cf (58, author's own), B_cf >= 1.303) | both 1.000 |
+| turbulent H* | DG87 eqs. 18-19 | FID eqs. 49-54 (other fit; Re_theta >= 200 inside) | DG87 0.990-0.998 (1.1 %); FID 1.0000 |
+| U_s | DG87 eq. 21 | FID eq. 68 (same, max 0.98) | not dumped |
+| delta | DG87 eq. 23 | FID eq. 55 (same, max 12 theta) | not dumped |
+| C_tau,EQ | DG87 eq. 24 ((H_k-1)^3, 0.015) | FID eqs. 78-79 ((H_k-1) H_kc^2, 1/(2 G_A^2 G_beta) = 0.01485, H_kc = H_k - 1 - 18/Re_theta) | via the march, below |
+| turbulent C_D | DG87 eq. 20 | FID eqs. 62-65 (low-Re wall factor, 0.995 - U_s, stress term, max with laminar) | via the march |
+| lag | LNE89 eq. 23 (K = 5.6) | FID eqs. 8, 77 (K = 5.6/(0.75 (1 + U_s)): 5.74 / 4.98 / 4.39 at U_s 0.3 / 0.5 / 0.7; H_kc in u_q) | via the march |
+| amplification rate | DG87 eqs. 29, 33-35 | FID eqs. 69-71, 75 | theta dn/dxi equal within 4 % for H_k 2.6-4 |
+| critical Re_theta | DG87 eq. 30 (step) | FID eqs. 72-74 (smooth ramp over +-0.1 decades; eq. 74 author's own), eq. 76 (author's own) | transition on XFOIL's states: DG87 0.657 / none / 0.312, FID 0.658 / 0.684 / 0.296 (XFOIL 0.657 / 0.681 / 0.293) |
+| C_tau at transition | DG87 p. 1351 (0.7 C_tau,EQ^1/2) | FID eq. 17 (0.23 C_tau,EQ^1/2 at H_k 2.6) | via the march |
+| H_k limit | none in DG87 | FID p. 18: 1.05 on the airfoil | - |
+| wake | BTE89 eqs. 13-18, 20-32 | FID eqs. 14-15, 66-67, eta_D 0.9 | C4 only |
+
+March on XFOIL's ue with transition forced at XFOIL's location (the turbulent part, where the
+lag, C_D, C_tau,EQ and transition-state differences act): TE delta*/XFOIL = 1.006, 1.004, 1.009
+with fidkowski2022 against 1.056, 1.048, 1.131 with drela1987 (0 deg upper, lower, 5 deg upper):
+the 5-13 % excess of report 3 came from the turbulent and transition closures of the DG87 set,
+not from the solver.
+
+**C1 with "fidkowski2022"** (targets unchanged): transition 0.657 / 0.682 / 0.294 / laminar (XFOIL
+0.657 / 0.681 / 0.293 / laminar); TE delta* ratio 1.006, 1.001, 1.009; theta 1.007, 1.002, 1.007;
+H diff -0.002, -0.002, +0.004; inverse max |ue diff| 0.0046, 0.0082, 0.0048, 0.0001. 5 deg lower:
+laminar separation reproduced (H 3.98 against 3.96 at x/c 0.99); the direct problem has no root at
+the last station (x/c 0.9999; residual floor 3.8e-5 at H 4.12; roots exist for ue 0.05 % higher),
+so the direct TE values there (delta* 1.053, H +0.21) are those of a non-converged station; the
+inverse check (plan change 3) gives theta 1.000, H -0.001, ue within 0.0001 there. Counted as
+passed under the planned inverse check; flagged to the user.
+
+March fix found by C1: a laminar step without a solution now also triggers the transition interval
+(accepted only if the onset lies inside the interval). Before, transition at 0 deg lower was
+missed when XFOIL's ue was already transitional (0.714 instead of 0.682).
+
 ---
 
 ## Later
@@ -1736,5 +1829,8 @@ FID laminar closure is adopted; DG87 eqs. (10)-(12) stay. Stopped for the user b
   and Drela & Giles (1987).
 - M9: verify the reading of DG87 eq. (18) (left side H*, natural logarithm) against the source.
 - M9: the README names both viscous sources, Drela (1989) / Drela & Giles (1987) and Fidkowski
-  ("A Coupled Inviscid-Viscous Airfoil Analysis Solver, Revisited"), and says which closures, if
-  any, follow the later published forms of the Fidkowski paper.
+  ("A Coupled Inviscid-Viscous Airfoil Analysis Solver, Revisited"), and says that the closure set
+  "fidkowski2022" follows the later published forms (close to later XFOIL versions).
+- After v2.0: compare both closure sets ("fidkowski2022", "drela1987") with wind-tunnel data,
+  downloaded on demand (not committed).
+- After C3: the user chooses the default closure set, with both benchmark results in front of them.

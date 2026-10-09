@@ -39,22 +39,22 @@ def branches(alpha: float):
     return out
 
 
-def run(alpha: float) -> dict:
+def run(alpha: float, cs: str = "fidkowski2022") -> dict:
     res = {}
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         for lab, (xi, x, ue, ds, th, cf, h) in branches(alpha).items():
-            d = march(xi, RE, ue=ue, n_crit=9.0)
+            d = march(xi, RE, ue=ue, n_crit=9.0, cs=cs)
             # inverse from x/c 0.2 (XFOIL's state there; n from the direct march), where the direct
             # march approaches laminar separation, transition and the trailing edge
             k0 = int(np.argmin(np.abs(x - 0.2)))
             st = (th[k0], ds[k0], d.third[k0], ue[k0], bool(d.turbulent[k0]))
-            inv_part = march(xi[k0:], RE, dstar=ds[k0:], n_crit=9.0, start_state=st)
+            inv_part = march(xi[k0:], RE, dstar=ds[k0:], n_crit=9.0, start_state=st, cs=cs)
             inv = _prepend(inv_part, k0, ue)
             # transition forced at XFOIL's location (isolates the turbulent part)
             xt = XFOIL_XTR[alpha][lab]
             xi_t = float(np.interp(xt, x, xi)) if xt < 0.999 else None
-            tr = march(xi, RE, ue=ue, n_crit=1e9 if xi_t is not None else 9.0, xi_trip=xi_t)
+            tr = march(xi, RE, ue=ue, n_crit=1e9 if xi_t is not None else 9.0, xi_trip=xi_t, cs=cs)
             res[lab] = dict(xi=xi, x=x, ue=ue, dstar=ds, theta=th, cf=cf, h=h, direct=d, inverse=inv,
                             tripped=tr, xtr_xfoil=XFOIL_XTR[alpha][lab])
     return res
@@ -80,8 +80,8 @@ def _xtr(m, x, xi):
     return float(np.interp(m.xi_transition, xi, x))
 
 
-def summary(alpha: float, res: dict | None = None) -> dict:
-    res = res or run(alpha)
+def summary(alpha: float, res: dict | None = None, cs: str = "fidkowski2022") -> dict:
+    res = res or run(alpha, cs)
     out = {}
     for lab, r in res.items():
         d, inv = r["direct"], r["inverse"]
@@ -91,6 +91,8 @@ def summary(alpha: float, res: dict | None = None) -> dict:
             xtr=_xtr(d, r["x"], r["xi"]), xtr_xfoil=r["xtr_xfoil"],
             inverse_max_ue_diff=float(np.max(np.abs(inv.ue - r["ue"])[1:])),
             inverse_xtr=_xtr_inv(inv, r),
+            inverse_te_theta_ratio=inv.theta[-1] / r["theta"][-1],
+            inverse_te_h_diff=inv.h[-1] - r["h"][-1],
             tripped_te_dstar_ratio=r["tripped"].dstar[-1] / r["dstar"][-1],
             tripped_te_theta_ratio=r["tripped"].theta[-1] / r["theta"][-1],
             tripped_te_h_diff=r["tripped"].h[-1] - r["h"][-1],
@@ -99,9 +101,10 @@ def summary(alpha: float, res: dict | None = None) -> dict:
     return out
 
 
-def main() -> None:
+def main(cs: str = "fidkowski2022") -> None:
+    print(f"closure set: {cs}")
     for alpha in (0.0, 5.0):
-        res = run(alpha)
+        res = run(alpha, cs)
         sm = summary(alpha, res)
         print(f"\n===== alpha {alpha:g} =====")
         for lab, r in res.items():
@@ -110,6 +113,7 @@ def main() -> None:
                   f"{s['te_dstar_ratio']:.3f}, theta ratio {s['te_theta_ratio']:.3f}, H diff {s['te_h_diff']:+.3f}; "
                   f"inverse (from x/c 0.2): max |ue diff| {s['inverse_max_ue_diff']:.4f}, TE ue diff {s['inverse_te_ue_diff']:+.4f}, transition {s['inverse_xtr']:.3f}; "
                   f"failed direct {s['failed_direct'][:5]} inverse {s['failed_inverse'][:5]}")
+            print(f"   inverse at the TE: theta ratio {s['inverse_te_theta_ratio']:.3f}, H diff {s['inverse_te_h_diff']:+.3f}")
             print(f"   transition forced at XFOIL's x/c: TE delta* ratio {s['tripped_te_dstar_ratio']:.3f}, "
                   f"theta ratio {s['tripped_te_theta_ratio']:.3f}, H diff {s['tripped_te_h_diff']:+.3f}")
             d, inv = r["direct"], r["inverse"]
@@ -122,4 +126,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(*sys.argv[1:2])
