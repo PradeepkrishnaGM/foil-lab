@@ -1620,6 +1620,37 @@ All residuals are dimensionless and O(1) per interval. Converged: max |R| <= 1e-
 residuals and the last Newton update <= 1e-6 relative on theta and m, within 50 iterations
 (`ViscousParams`).
 
+### C0 and C1 (2026-10-09): small decisions, results, stop
+
+Small numerical definitions (decided under the M2 rule, no tolerance involved):
+
+- **March start.** The first station of a branch takes the local Falkner-Skan similarity state
+  (DG87 eqs. 33-34) with m = (xi/ue) due/dxi from the first two stations, clipped to [-0.05, 1]
+  (m = 1 at a stagnation point, m = 0 on a flat plate). A fixed Hiemenz start put the flat plate
+  6 % above Blasius; with the local m it is 1.1 % above.
+- **Transition onset fraction w.** For a provisional Newton state with no root of the onset
+  quadratic in [0, 1], w is taken at the nearer end of the interval (1 if N_crit is not reached,
+  0 if already exceeded). Without this the first Newton step at onset produced NaN.
+- **Inverse march (C1 only).** Started from a given state part-way along a branch
+  (`start_state`), because ue = l xi/(Re theta^2) with delta* prescribed is ill-conditioned near
+  the stagnation point (ue came out 1e5 at 5 deg).
+- **Closure derivative test.** The test points avoid H_0 = 3 + 400/Re_theta, where the turbulent
+  H* (DG87 eq. 18) has a continuous slope but an unbounded second derivative, so a central
+  difference is inaccurate there. My test was mis-measuring, not the closure.
+
+C0: all closure, Jacobian (JAX = complex step = finite differences) and flat-plate tests pass at
+the SPEC 4.2 tolerances (laminar theta, delta* within 1.1 % of Blasius at x = 0.1; turbulent Cf
+within 1.4 % of 0.0592 Re_x^-0.2).
+
+C1 misses the targets of the plan (TE delta*, theta within 5 %, transition within 0.02 c, the 5 deg
+lower-surface laminar separation). Cause located: on XFOIL's own dumped states, DG87 eq. (11)
+(laminar Cf, transcription checked against the page image) gives Cf 1 % above XFOIL's at H 2.2-2.5,
+3-4 % at 2.5-2.8, 12-15 % at 2.8-3.1 and 43 % at 3.1-3.5. Laminar H* (eq. 10) agrees within 0.6 %,
+turbulent Cf (eq. 14) exactly, turbulent H* within 1 %. Our amplification closure integrated on
+XFOIL's states gives XFOIL's transition (0.657 vs 0.657; 0.312 vs 0.293). LNE89 section 3.1 says
+XFOIL's formulation is that of ISES [DG87] and gives no other laminar closure. So the installed
+XFOIL 6.99 uses a laminar Cf that is not in the supplied sources. Stopped for the user's decision.
+
 ---
 
 ## Later
