@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (M2, in progress)
+
+### Behaviour changes
+* The pitching moment about the quarter chord (`cm_qc`) is now the exact moment of the surface
+  pressure about (0.25, 0). v1.3.1 used `cm_le + 0.25 * cl`, which mixes lift and normal force
+  (about 4e-3 different at Cl 1.5 and 10 deg).
+
+### Removed
+* `foil_lab.panels` (`build_panels`, `PanelGeometry`, `ensure_cw`): replaced by
+  `foil_lab.inviscid.PanelSet`.
+
 ## v1.3 — Low-Re VII: simultaneous Newton coupling (partial success)
 
 **Goal:** make VII converge at low Reynolds number, where every prior method gave

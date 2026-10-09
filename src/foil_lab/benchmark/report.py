@@ -374,10 +374,17 @@ def _tables_csv(cases: list[CaseResult], path: Path) -> None:
                             _mean(st.dcd_rel), _max(st.dcd_rel), _mean(st.dcm), _max(st.dcm)])
 
 
+#: The committed tables-only baseline document; written only by ``baseline-doc``.
+BASELINE_DOC = Path("docs/baseline_v1.3.1.md")
+
+
 def write_report(output_root: Path = Path("benchmark_output"), bench: BenchmarkParams = BENCHMARK,
-                 docs_path: Path = Path("docs/baseline_v1.3.1.md")) -> list[CaseResult]:
-    """Compare all cases, write plots, CSV tables, ``report.md`` and the committed tables-only
-    baseline document. Returns the case results."""
+                 docs_path: Path | None = None) -> list[CaseResult]:
+    """Compare all cases and write plots, CSV tables and ``report.md`` under ``output_root``.
+
+    The committed tables-only document is written only when ``docs_path`` is given (the
+    ``baseline-doc`` command); ``report`` and ``all`` never touch it. Returns the case results.
+    """
     cases = []
     for sec in bench.sections:
         for re in bench.reynolds_low + bench.reynolds_validated:
@@ -390,6 +397,7 @@ def write_report(output_root: Path = Path("benchmark_output"), bench: BenchmarkP
         plot_case(c, output_root, bench)
     _tables_csv(cases, output_root / "tables" / "case_metrics.csv")
     (output_root / "report.md").write_text(build_markdown(cases, bench, plots=True))
-    docs_path.parent.mkdir(parents=True, exist_ok=True)
-    docs_path.write_text(build_markdown(cases, bench, plots=False))
+    if docs_path is not None:
+        docs_path.parent.mkdir(parents=True, exist_ok=True)
+        docs_path.write_text(build_markdown(cases, bench, plots=False))
     return cases

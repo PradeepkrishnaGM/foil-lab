@@ -1029,6 +1029,38 @@ Reading:
   Both are overridable on the `Configuration` and both are reported in the `Result`.
 - Q11. `docs/benchmark_m2.md`, tables only; `docs/baseline_v1.3.1.md` stays unchanged.
 
+### Decisions after the step 3 report (2026-10-09)
+
+Sawtooth reading confirmed by the user: a sawtooth is two sign flips in a row (+-+ or -+-) of
+the nodal-strength second difference.
+
+Williams refinement criterion replaced by the user. Original (Q5): "the error against the table
+falls from 200 to 400 panels". It failed for both main elements (A 0.0222 -> 0.0247, B 0.0094 ->
+0.0121; evidence under "Option (b) results": a likely misprint at Table 2(a) main row 17 and a
+geometry-reconstruction floor near the leading edge). The user replaced it because it measured
+the resolution of the 61-point table, not the solver. New criterion: the difference to our own
+1600-panel solution on the same geometry falls from 200 to 400 to 800 panels with observed order
+of at least 1.5 on each main element and flap. Read as: e_N = max |Cp_N - Cp_1600| over the
+tabulated points with x/c 0.02-0.98; e_200 > e_400 > e_800 and log2(e_200/e_400),
+log2(e_400/e_800) >= 1.5 (stated before running). Max |dCp| against the table <= 0.05 and Cl
+within 1 % are unchanged. Result:
+
+| Element | e_200 / e_400 / e_800 | orders |
+|---|---|---|
+| A main | 2.02e-2 / 5.27e-3 / 9.74e-4 | 1.94, 2.44 |
+| A flap | 8.99e-3 / 2.40e-3 / 5.56e-4 | 1.90, 2.11 |
+| B main | 7.36e-3 / 2.56e-3 / 6.65e-4 | 1.52, 1.95 |
+| B flap | 2.04e-3 / 6.39e-4 / 1.08e-4 | 1.67, 2.56 |
+
+All pass; B main's first order (1.52) is close to the limit. The order of the second step is
+inflated because the 1600-panel reference carries its own error. The CSVs stay exactly as
+printed; the two suspected misprints are listed in `tests/data/williams/ERRATA_SUSPECTED.md`.
+
+Benchmark report command: `python -m foil_lab.benchmark report` (and `all`) no longer writes
+`docs/baseline_v1.3.1.md`; only the explicit `baseline-doc` command does (test added).
+
+Changelog (Unreleased): exact quarter-chord moment; `panels.py` removed.
+
 ---
 
 ## Later

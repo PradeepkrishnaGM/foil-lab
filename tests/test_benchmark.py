@@ -120,3 +120,11 @@ def test_attached_filter_stops_before_ninety_percent_of_max_lift():
 def test_attached_filter_empty_without_positive_points():
     filt, cut = attached_filter(_polar({-1.0: -0.1, 0.0: None, 1.0: None}))
     assert filt == [] and cut is None
+
+
+def test_report_command_never_writes_the_baseline_document(tmp_path, monkeypatch):
+    """'report' writes only into the output folder; docs/baseline_v1.3.1.md is left alone."""
+    from foil_lab.benchmark.__main__ import main
+    monkeypatch.chdir(tmp_path)
+    assert main(["report", "--output", str(tmp_path / "out")]) == 0
+    assert not (tmp_path / "docs").exists()
