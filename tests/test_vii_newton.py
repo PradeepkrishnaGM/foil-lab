@@ -55,12 +55,12 @@ def test_newton_converges_at_low_re_low_alpha():
 
 @pytest.mark.xfail(strict=True, raises=AssertionError,
                    reason="fixed in M3: Newton VII convergence at Re 5e4 depends on panel count "
-                          "on both trailing edges")
+                          "on both trailing edges (the open 120-panel case happens to converge)")
 @pytest.mark.slow
 def test_newton_low_re_drag_right_order_of_magnitude():
     """At a converged low-Re point, Cd must be the right order vs XFOIL (~0.02-
     0.03), not the ~0.001 the old one-way path gave."""
-    af = generate_naca4("2412", 120)
+    af = generate_naca4("2412", 120, trailing_edge="closed")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         r = solve_vii_newton(af, 2.0, reynolds=50000, max_iter=60, tol=1e-4)

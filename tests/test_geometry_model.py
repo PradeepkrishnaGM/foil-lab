@@ -60,13 +60,19 @@ def test_naca_symmetric_section_is_symmetric():
     assert np.max(np.abs(up[:, 0] - lo[:, 0])) <= 1e-15
 
 
+def _paired(c, num_panels):
+    """Upper and lower nodes of a NACA generator output, paired by construction station."""
+    n_up = num_panels // 2 + 1
+    return c[:n_up][::-1], c[n_up - 1:]
+
+
 @pytest.mark.parametrize("code,t", [("0012", 0.12), ("2412", 0.12), ("4415", 0.15), ("23012", 0.12)])
 def test_naca_maximum_thickness(code, t):
+    """Thickness perpendicular to the mean line: the distance between the upper and lower points
+    of one construction station (2 y_t). Tolerance 2e-4, symmetric and cambered sections."""
     gen = generate_naca5 if len(code) == 5 else generate_naca4
-    up, lo = _surfaces(gen(code, 4000))
-    x = np.linspace(0.01, 0.99, 2001)
-    thick = np.interp(x, up[:, 0], up[:, 1]) - np.interp(x, lo[:, 0], lo[:, 1])
-    assert abs(thick.max() - t) <= 2e-4
+    up, lo = _paired(gen(code, 4000), 4000)
+    assert abs(np.hypot(*(up - lo).T).max() - t) <= 2e-4
 
 
 def test_naca_open_gap_closed_form():
@@ -168,10 +174,26 @@ def test_thickness_scaling_gives_requested_thickness():
     assert abs(thick.max() - 1.5 * 0.12) <= 2e-4
 
 
+def test_symmetric_generator_output_is_symmetric_by_index():
+    """Raw NACA 0012 output: upper and lower nodes paired by index, y_u = -y_l to 1e-12."""
+    up, lo = _paired(generate_naca4("0012", 200), 200)
+    assert np.max(np.abs(up[:, 1] + lo[:, 1])) <= 1e-12
+    assert np.max(np.abs(up[:, 0] - lo[:, 0])) <= 1e-12
+
+
 def test_zero_camber_gives_symmetric_section():
+    """NACA 4412 with camber scaled to zero: both surfaces resampled with the arc-length cubic
+    spline at common x stations of the section's own chord frame; |y_u + y_l| <= 1e-5 chord for
+    x/c 0.01-0.99. (The earlier 1e-12 was attached to an interpolating check; DECISIONS.md.)"""
+    from foil_lab.geometry import _ArcSpline, _other_surface_y, _to_chord_frame
     c = scale_thickness_camber(generate_naca4("4412", 200), camber=0.0)
-    up, lo = _surfaces(c)
-    assert np.max(np.abs(np.interp(up[:, 0], lo[:, 0], lo[:, 1]) + up[:, 1])) <= 1e-12 + 1e-6
+    sp = _ArcSpline(c)
+    _, frame = _to_chord_frame(c, sp)
+    x = np.linspace(0.01, 0.99, 197)
+    yu = np.array([_other_surface_y(sp, frame, xi, upper=False) for xi in x])
+    yl = np.array([_other_surface_y(sp, frame, xi, upper=True) for xi in x])
+    assert np.all(yu > 0) and np.all(yl < 0)
+    assert np.max(np.abs(yu + yl)) <= 1e-5
 
 
 def test_te_gap_tool():
@@ -259,16 +281,36 @@ def _distance_to_polyline(points, poly):
                   axis=1)
 
 
-@pytest.mark.slow
-@pytest.mark.xfoil
-def test_open_naca2412_matches_xfoil_naca_command():
+def _xfoil_naca(code):
     from foil_lab.benchmark.xfoil import run_xfoil
     from foil_lab.params import XFOIL
     from foil_lab.utils.io import load_dat
     with tempfile.TemporaryDirectory() as d:
         work = Path(d)
-        run = run_xfoil("NACA 2412\nSAVE naca.dat\n\nQUIT\n", work, "naca.dat", params=XFOIL)
+        run = run_xfoil(f"NACA {code}\nSAVE naca.dat\n\nQUIT\n", work, "naca.dat", params=XFOIL)
         assert run.polar_text, "XFOIL wrote no coordinate file"
-        pts = load_dat(str(work / "naca.dat"))
-    ours = generate_naca4("2412", 4000)
-    assert np.max(_distance_to_polyline(pts, ours)) <= 1e-4
+        return load_dat(str(work / "naca.dat"))
+
+
+@pytest.mark.slow
+@pytest.mark.xfoil
+def test_open_naca0012_matches_xfoil_naca_command():
+    """Symmetric section (identical in both constructions): XFOIL's points within 1e-4 chord of
+    our 4000-panel open NACA 0012."""
+    assert np.max(_distance_to_polyline(_xfoil_naca("0012"), generate_naca4("0012", 4000))) <= 1e-4
+
+
+@pytest.mark.slow
+@pytest.mark.xfoil
+def test_naca2412_functions_match_xfoil_vertical_construction():
+    """XFOIL's NACA command adds the thickness vertically (judged from its coordinates). Our
+    mean-line and thickness functions combined vertically must match its NACA 2412 within 1e-5
+    chord (set after seeing 3.1e-7; DECISIONS.md). Our generator itself keeps the perpendicular
+    construction."""
+    from foil_lab.generators import _naca4_camber, _naca_thickness
+    x = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, 2001)))
+    yc, _ = _naca4_camber(x, 0.02, 0.4)
+    yt = _naca_thickness(x, 0.12, "open")
+    vertical = np.vstack([np.column_stack([x[::-1], (yc + yt)[::-1]]),
+                          np.column_stack([x[1:], (yc - yt)[1:]])])
+    assert np.max(_distance_to_polyline(_xfoil_naca("2412"), vertical)) <= 1e-5

@@ -21,15 +21,34 @@ def _naca_thickness(x: np.ndarray, t: float, trailing_edge: str) -> np.ndarray:
     return 5 * t * (0.2969 * np.sqrt(x) - 0.1260 * x - 0.3516 * x**2 + 0.2843 * x**3 + a4 * x**4)
 
 
+def _naca4_camber(x: np.ndarray, m: float, p: float):
+    """NACA 4-digit mean line y_c(x) and its slope dy_c/dx (zero for a symmetric section)."""
+    yc = np.zeros_like(x)
+    dyc_dx = np.zeros_like(x)
+    if m > 0:
+        # Forward of max camber
+        front_idx = x <= p
+        yc[front_idx] = (m / p**2) * (2 * p * x[front_idx] - x[front_idx]**2)
+        dyc_dx[front_idx] = (2 * m / p**2) * (p - x[front_idx])
+
+        # Aft of max camber
+        back_idx = x > p
+        yc[back_idx] = (m / (1 - p)**2) * ((1 - 2 * p) + 2 * p * x[back_idx] - x[back_idx]**2)
+        dyc_dx[back_idx] = (2 * m / (1 - p)**2) * (p - x[back_idx])
+    return yc, dyc_dx
+
+
 def generate_naca4(naca_string: str, num_panels: int = 120,
                    trailing_edge: str = "open") -> np.ndarray:
     """
     Generates a NACA 4-digit airfoil using cosine spacing.
     Expects a 4-character string (e.g., '2412', '0012').
 
-    ``trailing_edge`` selects the thickness definition: ``"open"`` (default since v2.0; NACA
-    Report 460, as used by XFOIL's ``NACA`` command) or ``"closed"`` (sharp trailing edge;
-    output unchanged from v1.3.1).
+    The thickness is laid off perpendicular to the mean line (the standard definition; NACA
+    Report 460 and Abbott and von Doenhoff, to be verified against the source in M9). XFOIL's
+    ``NACA`` command, judged from its saved coordinates, adds the thickness vertically instead
+    (DECISIONS.md, M2). ``trailing_edge``: ``"open"`` (default since v2.0; NACA Report 460) or
+    ``"closed"`` (sharp trailing edge; output unchanged from v1.3.1).
     """
     if len(naca_string) != 4 or not naca_string.isdigit():
         raise ValueError("NACA 4-digit string must be exactly 4 numbers (e.g., '2412').")
@@ -48,19 +67,7 @@ def generate_naca4(naca_string: str, num_panels: int = 120,
     yt = _naca_thickness(x, t, trailing_edge)
 
     # Calculate Camber Line (yc) and its gradient (dyc/dx)
-    yc = np.zeros_like(x)
-    dyc_dx = np.zeros_like(x)
-
-    if m > 0:
-        # Forward of max camber
-        front_idx = x <= p
-        yc[front_idx] = (m / p**2) * (2 * p * x[front_idx] - x[front_idx]**2)
-        dyc_dx[front_idx] = (2 * m / p**2) * (p - x[front_idx])
-
-        # Aft of max camber
-        back_idx = x > p
-        yc[back_idx] = (m / (1 - p)**2) * ((1 - 2 * p) + 2 * p * x[back_idx] - x[back_idx]**2)
-        dyc_dx[back_idx] = (2 * m / (1 - p)**2) * (p - x[back_idx])
+    yc, dyc_dx = _naca4_camber(x, m, p)
 
     # Calculate the angle of the camber line
     theta = np.arctan(dyc_dx)

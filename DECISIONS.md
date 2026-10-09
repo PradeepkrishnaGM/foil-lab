@@ -1357,6 +1357,38 @@ Failing (full suite: 311 passed, 6 failed, 3 expected failures):
 Fixed during step 4 without changing a tolerance: `set_trailing_edge_gap` searched a bracket
 symmetric in the gap and so could not open a closed trailing edge.
 
+### Decisions on the step 4 failures (2026-10-09)
+
+1. NACA definition: thickness stays perpendicular to the mean line, for 4- and 5-digit sections
+   (the standard definition). XFOIL's `NACA` command, judged from its saved coordinates, adds the
+   thickness vertically (its NACA 2412 matches a vertical construction to 3.1e-7 c). The XFOIL
+   cross-check is changed by the user. Original test: XFOIL's NACA 2412 within 1e-4 c of our open
+   NACA 2412; it could not pass because the two codes use different constructions (1.13e-3 c at
+   x/c 0.014-0.025). New test, two parts: (a) NACA 0012, identical in both constructions, direct
+   comparison, 1e-4 c (unchanged); (b) NACA 2412, our mean-line and thickness functions combined
+   vertically inside the test, against XFOIL's coordinates, 1e-5 c; this tolerance was set after
+   the 3.1e-7 result had been seen. The 4-digit mean line is now a separate function
+   (`generators._naca4_camber`, same arithmetic; the closed-geometry SHA-256 pins still pass).
+2. Maximum-thickness test: thickness measured perpendicular to the mean line, as the distance
+   between the upper and lower points of one construction station (2 y_t); tolerance 2e-4
+   unchanged, symmetric and cambered sections. Passes.
+3. Zero-camber symmetry: the earlier 1e-12 was attached to the wrong measurement (an
+   interpolating check). Replaced by two checks: (a) raw NACA 0012 output, upper and lower nodes
+   paired by index, y_u = -y_l to 1e-12 (passes); (b) NACA 4412 with camber scaled to zero, both
+   surfaces resampled with the arc-length cubic spline at common x stations of the section's own
+   chord frame, |y_u + y_l| <= 1e-5 c for x/c 0.01-0.99. (b) FAILS: 4.42e-5 at x/c 0.99. Where:
+   the asymmetry is linear in x (slope 3.80e-5, offset 6.3e-6; 3.6e-7 after removing the linear
+   part), i.e. a tilt of 0.0011 deg between the result's own chord line and its symmetry line.
+   Measured in the chord frame the operation used, the result is symmetric to 3.9e-8. Cause: the
+   two trailing-edge nodes of the open cambered section have different chordwise positions in
+   that frame, so they receive different thicknesses; the lower trailing-edge point moves from y
+   -0.001249 to -0.001294 while the upper stays at +0.001249, which shifts the trailing-edge
+   midpoint and so the recomputed chord line. Stopped here as instructed; not loosened.
+4. Newton test: pinned to `trailing_edge="closed"` (the geometry it always tested); strict
+   expected-failure mark kept; its reason notes that the open 120-panel case happens to converge.
+5. Defaults approved by the user: `DESIGN.min_te_gap` 0.001 c; `GEOMETRY` num_panels 160,
+   te_gap_warn 0.01, te_gap_blend_start 0.8, le_search_samples 20; version 2.0.0.dev0.
+
 ---
 
 ## Later
@@ -1405,3 +1437,9 @@ symmetric in the gap and so could not open a closed trailing edge.
   panel) limit more closely at zero gap. The jump is first order on the PARSEC start section
   (1.1e-3 at 100 panels, 1.4e-4 at 800) and falls faster on NACA 2412 (5e-5 at 100, 1.6e-6 at
   640).
+- M9: verify against the source: NACA Report 460 (Jacobs, Ward and Pinkerton, 1933) and Abbott
+  and von Doenhoff, for the NACA 4- and 5-digit construction with thickness perpendicular to the
+  mean line (in addition to the coefficient -0.1015 listed above).
+- M7: the farthest-point leading edge gives a generated NACA 2412 a chord of 1.00008, so its
+  coefficients differ from the nominal unit chord by about 8e-5. Decide then whether generated
+  sections keep their nominal chord.
