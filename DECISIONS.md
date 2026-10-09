@@ -684,9 +684,81 @@ gaps made by opening the closed section linearly in x, a test-local construction
   nodes nearest each trailing edge; trailing-edge node strength at 1280 panels <= 1.1 times its
   value at 160.
 
-Proposed (awaiting approval) for the inviscid XFOIL cross-check in the slow xfoil group (open
-NACA 2412, same canonical file, 0 / 5 / 10 deg, XFOIL without VISC, PANE 160, our core 160
-panels): |dCl| <= 0.01 and |dCm| <= 0.003; XFOIL's own 160-versus-240 spread is reported with it.
+Inviscid XFOIL cross-check (slow, xfoil group): tighter than proposed, set by the user before the
+run: open NACA 2412, canonical 160-panel file, 0 / 5 / 10 deg, XFOIL without VISC at PANE 160
+against the core at 160 panels, |dCl| <= 0.005 and |dCm| <= 0.002. Differences at 320 (canonical
+320-panel file, PANE 320) are reported without a tolerance.
+
+### Open trailing edge: option (A), implemented
+
+Source: M. Drela, "XFOIL: An Analysis and Design System for Low Reynolds Number Airfoils", in
+T. J. Mueller (ed.), *Low Reynolds Number Aerodynamics*, Lecture Notes in Engineering 54,
+Springer (1989), pp. 1-12 (`review-gui/drela-1989-xfoil.pdf`, a 12-page scan; read from page
+images). XFOIL source was not opened.
+
+Equations used, with their place in the paper:
+
+- Eq. (2), page 2, and the trailing-edge detail of Figure 1, page 2: a panel across the gap with
+  uniform source and vortex strengths tied to the surface vorticity,
+  sigma_TE = 1/2 (gamma_1 - gamma_N) |s x t|, gamma_TE = 1/2 (gamma_1 - gamma_N) |s . t|,
+  where s bisects the trailing-edge angle and t is the unit vector along the panel.
+- Eq. (3), page 2, last term: the panel enters the influence sum through (gamma_1 - gamma_N)
+  only, so it adds no unknowns.
+- Eq. (8), page 3: Kutta condition gamma_1 + gamma_N = 0 (unchanged from step 1).
+
+Not used: the streamfunction kernels (eqs. 4-6) and the nodal streamfunction condition (eq. 7),
+page 3. The core keeps its midpoint Neumann condition and its own closed-form kernels; only the
+trailing-edge panel is taken from the paper.
+
+Our sign convention: nodes run clockwise, so 1/2 (gamma_first - gamma_last) is the mean speed q
+of the flow leaving the trailing edge along s (the same expression as eq. 2). The panel runs from
+the last node to the first, and with the flow inside the body at rest the jump conditions across
+the panel give sigma_TE = q (s . n) and gamma_TE = -q (s . t) in this code's vortex sign, whose
+magnitudes are those of eq. (2); a test checks q = 1/2 (gamma_first - gamma_last) and
+sigma_TE > 0 (outflow through the base). A body whose gap is below 1e-10 of its size has no
+trailing-edge panel, so closed results are unchanged bit for bit. Loads are integrated over the
+body panels only (no base pressure); the circulation includes the panel's vortex.
+
+Plan change (accepted 2026-10-09), with citations: the surface speed is the local sheet strength,
+because the flow inside the body is at rest (Katz and Plotkin 2001, section 11.4.2); wall
+transpiration enters as known equivalent sources, outward normal velocity equal to the source
+strength (M. J. Lighthill, "On displacement thickness", J. Fluid Mech. 4 (1958) 383-392).
+
+Results against the fixed tolerances (NACA 2412, alpha 5 deg):
+
+| Check | Result | Tolerance |
+|---|---|---|
+| Gap to zero, 320 panels: |dCl| at 0.0025 / 0.001 / 0.0003 / 0.0001 c | 1.79e-3 / 6.1e-4 / 7.3e-5 / 3.9e-5 | falling; <= 2e-3 at 1e-4 |
+| Gap to zero: |dCm| | 7.2e-4 / 2.7e-4 / 5.5e-5 / 3.7e-6 | falling; <= 5e-4 at 1e-4 |
+| Flow through a 0.25 % gap (inner side, 9 points) | mean 0.0044, max 0.0094 | mean <= 0.02 |
+| Last-panel Cp, 160-1280 panels | 0.435 to 0.458 | <= 1.1 |
+| Last-panel Cp change 640 -> 1280 | 0.0034 | <= 0.02 |
+| |Cl(N) - Cl(1280)| at 160 / 320 / 640 | 2.8e-4 / 7.0e-5 / 1.5e-5 | 5e-3 / 2e-3 / 2e-3 |
+| |Cm(N) - Cm(1280)| at 160 / 320 / 640 | 4.2e-5 / 9e-6 / 2e-6 | 1e-3 / 5e-4 / 5e-4 |
+| Successive changes, Cl / Cm | 2.1e-4, 5.5e-5, 1.5e-5 / 3.3e-5, 7.6e-6, 1.7e-6 | decreasing |
+| Trailing-edge node strength 1280 vs 160 | 0.7370 vs 0.7342 | <= 1.1 times |
+| Sawtooth (sign alternation of the second difference) | none | none |
+
+Before the gap panel (step 1) the same section had trailing-edge strengths doubling with N,
+last-panel Cp down to -289 and a gap flow of about 0.17. Matrix condition number with the panel:
+2.8e2-3.8e2.
+
+Reading of "sign alternation": in each 5 % segment the second difference changes sign exactly
+once, a single smooth inflection (at 1280 panels: +4.9e-3, +4.5e-4, +1.5e-4, +4.6e-5, +6e-6,
+then negative and smooth). The test treats a sawtooth as two consecutive sign flips (+-+ or
+-+-), which never occurs. Reported to the user, not silently adopted.
+
+Inviscid XFOIL cross-check, Cl / Cm differences (core minus XFOIL):
+
+| alpha | 160 vs PANE 160 | 320 vs PANE 320 | XFOIL PANE 240 minus PANE 160 |
+|---|---|---|---|
+| 0 | +0.0007 / -0.0001 | +0.0004 / -0.0001 | +0.0004 / -0.0001 |
+| 5 | +0.0009 / -0.0003 | +0.0005 / -0.0002 | +0.0006 / -0.0001 |
+| 10 | +0.0010 / -0.0004 | +0.0006 / -0.0002 | +0.0008 / -0.0001 |
+
+All within |dCl| <= 0.005 and |dCm| <= 0.002. The 0.832-0.858 spread of XFOIL's inviscid Cl with
+PANE count mentioned at the M2 stop came from an untrusted scratch parse in M1 and is not
+reproduced.
 
 ### Williams R&M 3717: transcription and exact helper
 
@@ -733,6 +805,15 @@ Exact helper (option (a)): the image series (eqs. 1-9, Appendix I), the Kutta co
 - Cp therefore differs by order 1 near the trailing edges. Per the agreed rule, option (a) is
   stopped and option (b) is proposed; neither the helper nor the transcription was changed to
   make them agree. The helper is not committed.
+
+Decision (2026-10-09): the exact helper failed for the reasons above and is kept out of the
+repository. Option (b) is approved with the Q5 tolerances unchanged: the tabulated Table 2
+geometry is panelled directly. Recorded with it: the page 6 sign inconsistency (-a sin beta1 in
+the formula for the second centre, +a sin beta1 consistent with Table 1), and that integrating
+the tabulated Cp cannot resolve 1e-3 with about 61 points per element. Rules: a single tabulated
+point that disagrees while its neighbours agree is shown to the user (file, row, both values,
+neighbours, page) and the CSV is not edited; if the 200 -> 400 criterion fails, the numbers and
+the evidence for the cause are shown and the criterion is not changed.
 
 ---
 

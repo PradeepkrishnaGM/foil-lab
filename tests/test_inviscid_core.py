@@ -118,13 +118,14 @@ def test_mirrored_pair_new_core():
 # --------------------------------------------------------------------------------------- #
 # NumPy and JAX run the same assembly
 # --------------------------------------------------------------------------------------- #
+@pytest.mark.parametrize("trailing_edge", ["closed", "open"])
 @pytest.mark.parametrize("name", ["0012", "2412", "4412", "23012"])
-def test_numpy_and_jax_same_core(name):
+def test_numpy_and_jax_same_core(name, trailing_edge):
     """Inviscid Cl agrees to 1e-6 at -4, 4 and 10 deg; JAX's global x64 setting is unchanged."""
     jax = pytest.importorskip("jax")
     import jax.numpy as jnp
     gen = generate_naca5 if len(name) == 5 else generate_naca4
-    ps = core.PanelSet.from_bodies(gen(name, 200, trailing_edge="closed"))
+    ps = core.PanelSet.from_bodies(gen(name, 200, trailing_edge=trailing_edge))
     before = jax.config.x64_enabled
     for alpha in (-4.0, 4.0, 10.0):
         cl_np = core.body_loads(core.solve(ps, alpha), 0).cl

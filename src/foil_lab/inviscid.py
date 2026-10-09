@@ -11,9 +11,24 @@ unknowns. Boundary conditions:
 * one Kutta condition per body, ``gamma_first + gamma_last = 0`` at the trailing edge.
 
 There are no unknown sources. Each body's nodes and its Kutta condition belong to that body
-only ("each body closes on itself"); bodies are coupled through their induced velocities. A
-finite trailing-edge gap is not panelled: the two trailing-edge points are distinct nodes and
-the Kutta condition applies to them.
+only ("each body closes on itself"); bodies are coupled through their induced velocities.
+
+Open trailing edge: a body whose first and last nodes do not coincide gets one straight
+trailing-edge panel across the gap, carrying a uniform source sigma_TE and a uniform vortex
+gamma_TE tied to the two trailing-edge node strengths, so it adds no unknowns and the Kutta
+condition is unchanged. From M. Drela, "XFOIL: An Analysis and Design System for Low Reynolds
+Number Airfoils", in T. J. Mueller (ed.), *Low Reynolds Number Aerodynamics*, Lecture Notes in
+Engineering 54, Springer (1989), pp. 1-12: eq. (2) and Figure 1 on page 2 (panel strengths
+sigma_TE = 1/2 (gamma_1 - gamma_N) |s x t|, gamma_TE = 1/2 (gamma_1 - gamma_N) |s . t|, with s
+the unit vector bisecting the trailing-edge angle and t the unit vector along the panel), the
+last term of eq. (3) on page 2 (how the panel enters the influence sum), and eq. (8) on page 3
+(Kutta condition). Only the trailing-edge panel is taken from that paper; the boundary condition
+here is the midpoint Neumann condition, not the nodal streamfunction condition of its eq. (7).
+In the clockwise solver order, 1/2 (gamma_first - gamma_last) is the mean speed of the flow
+leaving the trailing edge along s (the same expression as Drela's); the panel is oriented from
+the last node to the first, and with the flow inside the body at rest the jump conditions across
+the panel give sigma_TE = q (s . n) and gamma_TE = -q (s . t) in this module's sign convention,
+whose magnitudes are those of eq. (2). See DECISIONS.md, M2.
 
 References: J. L. Kuethe and C.-Y. Chow, *Foundations of Aerodynamics*, 5th ed., Wiley (1998),
 section 5.10 (vortex panel method with linearly varying strength); J. Katz and A. Plotkin,
@@ -240,6 +255,76 @@ def _node_maps(ps: PanelSet) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return p_start, p_end, kutta
 
 
+@dataclass(frozen=True)
+class TrailingEdgePanels:
+    """Trailing-edge panels of the bodies with an open trailing edge (Drela 1989, eq. 2).
+
+    Arrays have one entry per open body. ``coupling`` (n_te, M) gives the mean trailing-edge
+    speed q = 1/2 (gamma_first - gamma_last) from the nodal strengths; the panel source is
+    ``s_dot_n * q`` and its vortex ``-s_dot_t * q``.
+    """
+
+    body: np.ndarray
+    x1: np.ndarray
+    y1: np.ndarray
+    x2: np.ndarray
+    y2: np.ndarray
+    s_dot_n: np.ndarray
+    s_dot_t: np.ndarray
+    coupling: np.ndarray
+
+    @property
+    def size(self) -> int:
+        return int(self.body.size)
+
+    @property
+    def lengths(self) -> np.ndarray:
+        return np.hypot(self.x2 - self.x1, self.y2 - self.y1)
+
+
+#: A trailing-edge gap shorter than this fraction of the body's size counts as closed.
+CLOSED_GAP_FRACTION = 1e-10
+
+
+def trailing_edge_panels(ps: PanelSet) -> TrailingEdgePanels:
+    """Trailing-edge panel geometry for every body whose first and last nodes differ."""
+    rows = []
+    for k, (sp, sn) in enumerate(zip(ps.body_panels, ps.body_nodes)):
+        first, last = sn.start, sn.stop - 1
+        xa, ya = ps.node_x[last], ps.node_y[last]
+        xb, yb = ps.node_x[first], ps.node_y[first]
+        size = max(np.ptp(ps.node_x[sn]), np.ptp(ps.node_y[sn]))
+        gap = np.hypot(xb - xa, yb - ya)
+        if gap <= CLOSED_GAP_FRACTION * size:
+            continue
+        # s: bisector of the trailing-edge angle, pointing downstream (Drela 1989, Fig. 1)
+        j0, j1 = sp.start, sp.stop - 1
+        t0 = np.array([ps.x2[j0] - ps.x1[j0], ps.y2[j0] - ps.y1[j0]])
+        t1 = np.array([ps.x2[j1] - ps.x1[j1], ps.y2[j1] - ps.y1[j1]])
+        sv = t1 / np.hypot(*t1) - t0 / np.hypot(*t0)
+        sv = sv / np.hypot(*sv)
+        tt = np.array([xb - xa, yb - ya]) / gap
+        nn = np.array([-tt[1], tt[0]])          # outward normal, same rule as the body panels
+        c = np.zeros(ps.num_nodes)
+        c[first], c[last] = 0.5, -0.5
+        rows.append((k, xa, ya, xb, yb, float(sv @ nn), float(sv @ tt), c))
+    if not rows:
+        e = np.zeros(0)
+        return TrailingEdgePanels(np.zeros(0, dtype=int), e, e, e, e, e, e, np.zeros((0, ps.num_nodes)))
+    k, xa, ya, xb, yb, dn, dt, c = zip(*rows)
+    return TrailingEdgePanels(np.array(k), np.array(xa), np.array(ya), np.array(xb), np.array(yb),
+                              np.array(dn), np.array(dt), np.stack(c))
+
+
+def _te_velocity(xp: Any, te: TrailingEdgePanels, px, py):
+    """Velocity at points per unit mean trailing-edge speed q of each TE panel: (u, v), (P, n_te)."""
+    x1, y1, x2, y2 = (xp.asarray(a) for a in (te.x1, te.y1, te.x2, te.y2))
+    su, sv = source_panel_velocity(xp, px, py, x1, y1, x2, y2)
+    ua, va, ub, vb = panel_velocity(xp, px, py, x1, y1, x2, y2)
+    dn, dt = xp.asarray(te.s_dot_n), xp.asarray(te.s_dot_t)
+    return su * dn - (ua + ub) * dt, sv * dn - (va + vb) * dt
+
+
 def influence_matrices(ps: PanelSet, xp: Any = np):
     """Normal and tangential velocity at every panel midpoint per unit nodal strength.
 
@@ -255,6 +340,12 @@ def influence_matrices(ps: PanelSet, xp: Any = np):
     p_start, p_end, _ = (xp.asarray(a) for a in _node_maps(ps))
     an = (ua * nx[:, None] + va * ny[:, None]) @ p_start + (ub * nx[:, None] + vb * ny[:, None]) @ p_end
     at = (ua * tx[:, None] + va * ty[:, None]) @ p_start + (ub * tx[:, None] + vb * ty[:, None]) @ p_end
+    te = trailing_edge_panels(ps)
+    if te.size:
+        tu, tv = _te_velocity(xp, te, mx, my)
+        cpl = xp.asarray(te.coupling)
+        an = an + (tu * nx[:, None] + tv * ny[:, None]) @ cpl
+        at = at + (tu * tx[:, None] + tv * ty[:, None]) @ cpl
     return an, at
 
 
@@ -325,6 +416,12 @@ def solve(ps: PanelSet, alpha_deg: float, source_strength=None, xp: Any = np,
     cp = 1.0 - vt * vt
     per_panel = g_mid * xp.asarray(ps.lengths)
     circ = xp.stack([xp.sum(per_panel[sl]) for sl in ps.body_panels])
+    te = trailing_edge_panels(ps)
+    if te.size:
+        # the trailing-edge panel's vortex -(s . t) q over its length adds to the body circulation
+        q = xp.asarray(te.coupling) @ gamma
+        add = -xp.asarray(te.s_dot_t) * q * xp.asarray(te.lengths)
+        circ = circ + xp.asarray(np.eye(ps.num_bodies)[:, te.body]) @ add
     return InviscidSolution(ps, alpha_deg, gamma, vt, cp, circ, vt_ind, mat if keep_matrix else None)
 
 
@@ -336,6 +433,11 @@ def induced_velocity(ps: PanelSet, gamma, px, py, source_strength=None, xp: Any 
     g = xp.asarray(gamma)
     gs, ge = g[xp.asarray(ps.start_node)], g[xp.asarray(ps.end_node)]
     u, v = ua @ gs + ub @ ge, va @ gs + vb @ ge
+    te = trailing_edge_panels(ps)
+    if te.size:
+        tu, tv = _te_velocity(xp, te, px, py)
+        q = xp.asarray(te.coupling) @ g
+        u, v = u + tu @ q, v + tv @ q
     if source_strength is not None:
         su, sv = source_panel_velocity(xp, px, py, x1, y1, x2, y2)
         sig = xp.asarray(source_strength)
