@@ -176,3 +176,60 @@ def ctau_transition(hk, ctau_eq_, xp=None):
     """FID eq. (17): C_tau^1/2 = C_tau exp(-E_tau/(H_k - 1)) C_tau,EQ^1/2."""
     xp = xp or ns(hk)
     return (C_TAU * xp.exp(-E_TAU / (hk - 1.0))) ** 2 * ctau_eq_
+
+
+
+# --------------------------------------------------------------------------------------- #
+# Wake (FID pp. 7, 18-19): one layer; closures use delta* - h_w (eq. 15)
+# --------------------------------------------------------------------------------------- #
+#: wall/wake dissipation length ratio in the wake (Table 2)
+ETA_D_WAKE = 0.9
+HK_MIN_WAKE = 1.00005
+US_MAX_WAKE = 0.99995
+F_W = 2.5
+#: clip of the trailing-edge thickness slope dt/dxi in eq. (15): +-3/f_w
+WAKE_DTDX_CLIP = 3.0 / F_W
+PROVENANCE.update({
+    "wake_start": "FID eq. (14): theta, delta* + h_TE summed; C_tau^1/2 theta-weighted; laminar TE: eq. (17)",
+    "dead_air": "FID eq. (15): h_w = h_TE [1 + (2 + f_w dt/dxi) xi_w/L_w](1 - xi_w/L_w)^2, L_w = 2.5 h_TE, |dt/dxi| <= 3/f_w",
+    "cd_wake": "FID eqs. (66)-(67); Cf = 0 in the wake (p. 17)",
+    "wake_closures": "FID: H_k >= 1.00005, U_s <= 0.99995, eta_D = 0.9, G~C = 0 in the wake (eqs. 68, 77-78, Table 2)",
+})
+
+
+def hk_wake(h, xp=None):
+    """FID eq. (45), limited to 1.00005 in the wake (p. 18)."""
+    xp = xp or ns(h)
+    return maximum(xp, h, HK_MIN_WAKE + 0.0 * h)
+
+
+def us_wake(hstar, h, hk, xp=None):
+    """FID eq. (68), max 0.99995 in the wake."""
+    xp = xp or ns(h)
+    u = 0.5 * hstar * (1.0 - (hk - 1.0) / (h * G_BETA))
+    return minimum(xp, u, US_MAX_WAKE + 0.0 * u)
+
+
+def ctau_eq_wake(hstar, h, hk, us_, ret, xp=None):
+    """FID eq. (79) with H_kc = H_k - 1 (G~C = 0 in the wake, eq. 78)."""
+    return hstar * (hk - 1.0) ** 3 / (2.0 * G_A ** 2 * G_BETA * (1.0 - us_) * h * hk ** 2)
+
+
+def cd_wake(hk, ret, us_, ctau, hstar, dead_frac=0.0, xp=None):
+    """C_D in the wake from FID eqs. (66)-(67) (``dead_frac`` unused in this set)."""
+    xp = xp or ns(hk)
+    outer = ctau * (0.995 - us_) * 2.0 / hstar
+    stress = 0.3 * (0.995 - us_) ** 2 / (hstar * ret)
+    lamwake = 2.2 * (1.0 - 1.0 / hk) ** 2 * (1.0 / hk) / (hstar * ret)
+    return 0.5 * hstar * maximum(xp, outer + stress, lamwake)
+
+
+def uq_wake(hk, ret, dstar, xp=None):
+    """FID eq. (77) in the wake: Cf = 0, eta_D = 0.9, H_kc = H_k - 1."""
+    return (0.0 - ((hk - 1.0) / (G_A * ETA_D_WAKE * hk)) ** 2) / (G_BETA * dstar)
+
+
+def ctau_wake_start(theta_u, ctau_u, theta_l, ctau_l, xp=None):
+    """FID eq. (14): C_tau^1/2 of the first wake station, theta-weighted."""
+    xp = xp or ns(theta_u)
+    return ((theta_u * xp.sqrt(ctau_u) + theta_l * xp.sqrt(ctau_l)) / (theta_u + theta_l)) ** 2

@@ -16,6 +16,8 @@ The papers give no limits on H_k or Re_theta; none are applied here.
 
 from __future__ import annotations
 
+import numpy as np
+
 from ._xp import branch, ns, re
 
 NAME = "drela1987"
@@ -177,3 +179,51 @@ def dn_dxi(hk, theta, ret, n=None, n_crit=None, xp=None):
 def ctau_transition(hk, ctau_eq_, xp=None):
     """Initial C_tau at transition onset: C_tau^1/2 = 0.7 C_tau,EQ^1/2 (DG87 p. 1351, Fig. 5)."""
     return 0.49 * ctau_eq_
+
+
+
+# --------------------------------------------------------------------------------------- #
+# Wake: Drela, AIAA-89-2200 ("BTE89") eqs. (13)-(33); LNE89 eqs. (28)-(29)
+# --------------------------------------------------------------------------------------- #
+ETA_D_WAKE = 1.0
+#: BTE89 eq. (20) uses dt/dx as it is (no clip)
+WAKE_DTDX_CLIP = None
+K_INNER = 0.016
+PROVENANCE.update({
+    "wake_start": "BTE89 eqs. (16)-(18) = LNE89 eqs. (28)-(29): theta, delta* + h_TE summed; C_tau theta-weighted; "
+                  "laminar TE: the set's transition value (DG87 p. 1351)",
+    "dead_air": "BTE89 eqs. (20)-(22): delta_w = h_TE {1 + [2 + (L_w/h_TE) dt/dx] xibar}(1 - xibar)^2, L_w = 2.5 h_TE; "
+                "Htilde = H - delta_w/theta in all wake closures (23)-(28)",
+    "cd_wake": "BTE89 eq. (33): C_D = 2 [C_tau (1 - U_s) + K (pi^2/16) U_s^3 delta_w/h_TE], K = 0.016; Cf = 0 (eq. 14)",
+    "wake_closures": "BTE89 eqs. (13), (23)-(28): C_tau,EQ quadrupled; DG87 eq. (21) U_s; lag LNE89 eq. (23) with Cf = 0",
+})
+
+
+def hk_wake(h, xp=None):
+    """BTE89 eq. (23) at M_e = 0."""
+    return h
+
+
+def us_wake(hstar, h, hk, xp=None):
+    """BTE89 eq. (27): DG87 eq. (21) of the modified quantities."""
+    return us(hstar, h, hk, xp)
+
+
+def ctau_eq_wake(hstar, h, hk, us_, ret=None, xp=None):
+    """BTE89 eqs. (13), (28): four times DG87 eq. (24)."""
+    return 4.0 * ctau_eq(hstar, h, hk, us_, ret, xp)
+
+
+def cd_wake(hk, ret, us_, ctau, hstar, dead_frac=0.0, xp=None):
+    """BTE89 eq. (33); ``dead_frac`` = delta_w/h_TE (0 for a closed trailing edge)."""
+    return 2.0 * (ctau * (1.0 - us_) + K_INNER * np.pi ** 2 / 16.0 * us_ ** 3 * dead_frac)
+
+
+def uq_wake(hk, ret, dstar, xp=None):
+    """Equilibrium (1/ue) due/dxi of LNE89 eq. (23) with Cf = 0 (BTE89 eq. 14)."""
+    return (4.0 / (3.0 * dstar)) * (0.0 - ((hk - 1.0) / (6.7 * hk)) ** 2)
+
+
+def ctau_wake_start(theta_u, ctau_u, theta_l, ctau_l, xp=None):
+    """BTE89 eq. (18) = LNE89 eq. (29): C_tau of the first wake station, theta-weighted."""
+    return (theta_u * ctau_u + theta_l * ctau_l) / (theta_u + theta_l)

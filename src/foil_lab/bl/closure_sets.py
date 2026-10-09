@@ -21,7 +21,8 @@ from . import drela1987, fidkowski2022
 #: functions and constants every closure set provides (signatures in the set modules)
 INTERFACE = ("NAME", "PROVENANCE", "ETA_D", "hk", "hstar_lam", "cf_lam", "cd_lam", "hstar_turb",
              "cf_turb", "us", "delta", "ctau_eq", "cd_turb", "lag_k", "uq", "dn_dxi",
-             "ctau_transition")
+             "ctau_transition", "ETA_D_WAKE", "WAKE_DTDX_CLIP", "hk_wake", "us_wake", "ctau_eq_wake",
+             "cd_wake", "uq_wake", "ctau_wake_start")
 
 CLOSURE_SETS: dict[str, ModuleType] = {m.NAME: m for m in (fidkowski2022, drela1987)}
 

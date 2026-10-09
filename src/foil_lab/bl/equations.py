@@ -62,15 +62,38 @@ class Station:
     us: Any = None
     delta: Any = None
     ctau_eq: Any = None
+    h_full: Any = None      # delta*/theta (equals h except in the wake with a dead-air region)
+    k_lag: Any = None       # lag-equation rate constant, eta_D, equilibrium u_q
+    eta_d: Any = None
+    uq: Any = None
 
 
-def station(theta, dstar, third, ue, reynolds, turbulent: bool, xp=np, cs="fidkowski2022") -> Station:
-    """Closure quantities at one station (turbulent C_D uses the station's C_tau)."""
+def station(theta, dstar, third, ue, reynolds, turbulent: bool, xp=np, cs="fidkowski2022",
+            wake: bool = False, hw=0.0, dead_frac=0.0) -> Station:
+    """Closure quantities at one station (turbulent C_D uses the station's C_tau).
+
+    Wake stations (``wake=True``) are turbulent; their closures use delta* - h_w, h_w being the
+    dead-air thickness (FID eq. 15, BTE89 eqs. 20-22), while the momentum and shape equations use
+    the full delta*/theta (``h_full``); Cf = 0; ``dead_frac`` = h_w/h_TE (BTE89 eq. 33)."""
     cs = closure_sets.get(cs)
-    h = dstar / theta
-    hk = cs.hk(h, xp)
+    h_full = dstar / theta
     ret = reynolds * ue * theta
-    st = Station(theta, dstar, third, ue, turbulent, h=h, hk=hk, ret=ret)
+    if wake:
+        dcl = dstar - hw
+        h = dcl / theta
+        hk = cs.hk_wake(h, xp)
+        st = Station(theta, dcl, third, ue, True, h=h, hk=hk, ret=ret, h_full=h_full)
+        st.hstar = cs.hstar_turb(hk, ret, xp)
+        st.cf = 0.0 * h
+        st.us = cs.us_wake(st.hstar, h, hk, xp)
+        st.delta = cs.delta(theta, hk, dcl, xp)
+        st.ctau_eq = cs.ctau_eq_wake(st.hstar, h, hk, st.us, ret, xp)
+        st.cd = cs.cd_wake(hk, ret, st.us, third, st.hstar, dead_frac, xp)
+        st.k_lag, st.eta_d, st.uq = cs.lag_k(st.us, xp), cs.ETA_D_WAKE, cs.uq_wake(hk, ret, dcl, xp)
+        return st
+    h = h_full
+    hk = cs.hk(h, xp)
+    st = Station(theta, dstar, third, ue, turbulent, h=h, hk=hk, ret=ret, h_full=h_full)
     if turbulent:
         st.hstar = cs.hstar_turb(hk, ret, xp)
         st.cf = cs.cf_turb(hk, ret, xp)
@@ -78,6 +101,7 @@ def station(theta, dstar, third, ue, reynolds, turbulent: bool, xp=np, cs="fidko
         st.delta = cs.delta(theta, hk, dstar, xp)
         st.ctau_eq = cs.ctau_eq(st.hstar, h, hk, st.us, ret, xp)
         st.cd = cs.cd_turb(hk, ret, st.cf, st.us, third, st.hstar, xp)
+        st.k_lag, st.eta_d, st.uq = cs.lag_k(st.us, xp), cs.ETA_D, cs.uq(st.cf, hk, ret, dstar, xp)
     else:
         st.hstar = cs.hstar_lam(hk, ret, xp)
         st.cf = cs.cf_lam(hk, ret, xp)
@@ -88,14 +112,14 @@ def station(theta, dstar, third, ue, reynolds, turbulent: bool, xp=np, cs="fidko
 def _common(s1: Station, s2: Station, xi1, xi2, xp, bias):
     lu = xp.log(s2.ue / s1.ue)
     lx = xp.log(xi2 / xi1)
-    h_a = 0.5 * (s1.h + s2.h)
+    h_a = 0.5 * (s1.h_full + s2.h_full)
     f1 = xi1 * s1.cf / s1.theta
     f2 = xi2 * s2.cf / s2.theta
     r1 = xp.log(s2.theta / s1.theta) + (2.0 + h_a) * lu - 0.5 * lx * 0.5 * (f1 + f2)
     src1 = xi1 * (2.0 * s1.cd / s1.hstar - 0.5 * s1.cf) / s1.theta
     src2 = xi2 * (2.0 * s2.cd / s2.hstar - 0.5 * s2.cf) / s2.theta
     src = (1.0 - bias) * src1 + bias * src2
-    r2 = (xp.log(s2.hstar / s1.hstar) + (1.0 - ((1.0 - bias) * s1.h + bias * s2.h)) * lu
+    r2 = (xp.log(s2.hstar / s1.hstar) + (1.0 - ((1.0 - bias) * s1.h_full + bias * s2.h_full)) * lu
           - lx * src)
     return r1, r2
 
@@ -105,11 +129,10 @@ def lam_rate(s: Station, xp, cs, n_crit):
 
 
 def turb_lograte(s: Station, due_dxi, xp, cs):
-    """d ln C_tau / d xi of the common lag equation (FID eq. 8; LNE89 eq. 23 as a special case)."""
-    cs = closure_sets.get(cs)
-    k = cs.lag_k(s.us, xp)
-    return (k * (xp.sqrt(s.ctau_eq) - cs.ETA_D * xp.sqrt(s.third)) / s.delta
-            + 2.0 * (cs.uq(s.cf, s.hk, s.ret, s.dstar, xp) - due_dxi / s.ue))
+    """d ln C_tau / d xi of the common lag equation (FID eq. 8; LNE89 eq. 23 as a special case);
+    K, eta_D and u_q come from the station (surface or wake closures of the set)."""
+    return (s.k_lag * (xp.sqrt(s.ctau_eq) - s.eta_d * xp.sqrt(s.third)) / s.delta
+            + 2.0 * (s.uq - due_dxi / s.ue))
 
 
 def laminar_interval(s1: Station, s2: Station, xi1, xi2, xp=np, bias=0.5, cs="fidkowski2022", n_crit=9.0):
