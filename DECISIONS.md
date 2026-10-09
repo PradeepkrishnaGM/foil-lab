@@ -1417,6 +1417,18 @@ part of the trailing-edge opening and keeps the chordwise offset between the two
 0.5123, 3.1e-5 from 0.5 x gap), x1.5 gives 0.0037625 (ratio 1.4930, 1.8e-5 off). Stopped before
 changing the definition, as instructed; check (2) not added.
 
+Decision (user, 2026-10-09): option (b), keep the current definition (thickness scaled normal to
+the chord; the chordwise offset of the trailing-edge points is a property of the edge). Check (2)
+is now: in the original chord frame, the chord-normal part of the trailing-edge gap scales by the
+factor to 1e-9 c and the chordwise offset between the two trailing-edge points is unchanged to
+1e-9 c (`test_thickness_scaling_gap_components`). The original check (gap length proportional)
+was over-specified.
+
+Rule from here to the end of M2 (user): definitional choices in geometry operations and tests of
+my own that measure the wrong thing are decided by me, recorded here with the reason, and listed
+in the final report. Still stop for any solver or accuracy tolerance, any benchmark or
+exact-solution test, any pre-existing test that fails, and anything that changes SPEC.md.
+
 ---
 
 ## Later

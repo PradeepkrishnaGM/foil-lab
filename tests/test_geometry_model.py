@@ -333,3 +333,20 @@ def test_thickness_scaling_keeps_trailing_edge_midpoint(factor):
     c = generate_naca4("4412", 200)
     g = scale_thickness_camber(c, thickness=factor)
     assert np.hypot(*(0.5 * (g[0] + g[-1]) - 0.5 * (c[0] + c[-1]))) <= 1e-9
+
+
+@pytest.mark.parametrize("factor", [0.5, 1.5])
+def test_thickness_scaling_gap_components(factor):
+    """Thickness scaling on an open cambered section, in the original chord frame: the
+    chord-normal part of the trailing-edge gap scales by the factor and the chordwise offset
+    between the two trailing-edge points is unchanged, both to 1e-9 chord."""
+    from foil_lab.geometry import _ArcSpline, _to_chord_frame
+    c = generate_naca4("4412", 200)
+    sp = _ArcSpline(c)
+    before, frame = _to_chord_frame(c, sp)
+    g = scale_thickness_camber(c, thickness=factor)
+    le, e, nrm, chord = frame
+    after = np.column_stack([(g - le) @ e, (g - le) @ nrm]) / chord
+    d0, d1 = before[0] - before[-1], after[0] - after[-1]
+    assert abs(d1[1] - factor * d0[1]) <= 1e-9
+    assert abs(d1[0] - d0[0]) <= 1e-9
