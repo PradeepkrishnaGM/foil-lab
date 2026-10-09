@@ -168,6 +168,13 @@ def scale_thickness_camber(coords: np.ndarray, thickness: float = 1.0,
         yu, ylo = (yl, yo) if upper else (yo, yl)
         cam, thk = 0.5 * (yu + ylo), yu - ylo
         out[i, 1] = camber * cam + (0.5 if upper else -0.5) * thickness * thk
+    # The two trailing-edge nodes are one station (the trailing-edge midpoint, x' = 1): camber
+    # and thickness there come from the pair itself, so a zero-camber result keeps its
+    # trailing-edge midpoint on the chord line (DECISIONS.md, M2 step 4).
+    if len(local) > 2 and not np.array_equal(local[0], local[-1]):
+        cam_te, thk_te = 0.5 * (local[0, 1] + local[-1, 1]), local[0, 1] - local[-1, 1]
+        out[0, 1] = camber * cam_te + 0.5 * thickness * thk_te
+        out[-1, 1] = camber * cam_te - 0.5 * thickness * thk_te
     return _from_chord_frame(out, frame)
 
 
@@ -203,6 +210,9 @@ def set_trailing_edge_gap(coords: np.ndarray, gap: float,
     s_nodes = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(c, axis=0).T))))
     side = np.where(s_nodes <= sp.s_le, 0.5, -0.5)
     w = np.where(local[:, 0] > xb, ((local[:, 0] - xb) / (1.0 - xb)) ** 2, 0.0)
+    # the two trailing-edge nodes are one station (x' = 1): equal and opposite changes, so the
+    # trailing-edge midpoint does not move when only the gap changes (DECISIONS.md, M2 step 4)
+    w[0] = w[-1] = 1.0
 
     def shaped(delta):
         out = local.copy()

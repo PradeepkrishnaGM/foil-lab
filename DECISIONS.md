@@ -1389,6 +1389,34 @@ symmetric in the gap and so could not open a closed trailing edge.
 5. Defaults approved by the user: `DESIGN.min_te_gap` 0.001 c; `GEOMETRY` num_panels 160,
    te_gap_warn 0.01, te_gap_blend_start 0.8, le_search_samples 20; version 2.0.0.dev0.
 
+### Trailing-edge pairing in the shape operations (2026-10-09)
+
+Cause of the zero-camber failure: `scale_thickness_camber` treated the two trailing-edge nodes as
+separate stations. On an open cambered section they lie at different chordwise positions in the
+chord frame (NACA 4412: offset 0.000325 c), so they received different thicknesses; after camber
+removal the trailing-edge midpoint left the chord line and the result's own chord line tilted by
+0.0011 deg (check 3b: 4.42e-5).
+
+Fix (option a, approved): the two trailing-edge nodes are one station, the trailing-edge midpoint
+(x' = 1). Camber and thickness there come from the pair itself: c_TE = (y_0 + y_N)/2, t_TE = y_0 -
+y_N in the chord frame; the nodes move to camber * c_TE +/- thickness * t_TE / 2, keeping their
+chordwise positions. Results: zero-camber check 3b passes as specified (|y_u + y_l| <= 1e-5 c, x/c
+0.01-0.99); scaling by 1 still returns the input (1e-12); the operations on transformed input still
+agree to 1e-9 c.
+
+`set_trailing_edge_gap` had the same issue: the two trailing-edge nodes got different blend
+weights, so the midpoint moved 1.2e-6 c when only the gap changed (NACA 4412, gap 0.004). Fixed the
+same way (both nodes take the weight of x' = 1, equal and opposite changes); new test: the
+midpoint does not move (1e-9 c, open cambered and closed sections) and the gap is exact (1e-12).
+
+Thickness-scaling check requested by the user: (1) the trailing-edge midpoint stays on the
+original mean line: holds (moved 2.2e-16 c; test added, 1e-9). (2) the gap scales by the same
+factor to 1e-9 c: does NOT hold with the current definition, which scales only the chord-normal
+part of the trailing-edge opening and keeps the chordwise offset between the two points. NACA 4412
+(gap 0.002520; normal part 0.002498, chordwise part 0.000325): x0.5 gives 0.0012911 (ratio
+0.5123, 3.1e-5 from 0.5 x gap), x1.5 gives 0.0037625 (ratio 1.4930, 1.8e-5 off). Stopped before
+changing the definition, as instructed; check (2) not added.
+
 ---
 
 ## Later

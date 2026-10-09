@@ -314,3 +314,22 @@ def test_naca2412_functions_match_xfoil_vertical_construction():
     vertical = np.vstack([np.column_stack([x[::-1], (yc + yt)[::-1]]),
                           np.column_stack([x[1:], (yc - yt)[1:]])])
     assert np.max(_distance_to_polyline(_xfoil_naca("2412"), vertical)) <= 1e-5
+
+
+def test_te_gap_tool_keeps_trailing_edge_midpoint():
+    """Changing only the gap does not move the trailing-edge midpoint (1e-9 chord), open
+    cambered and closed sections."""
+    for c in (generate_naca4("4412", 200), generate_naca4("2412", 160, trailing_edge="closed")):
+        g = set_trailing_edge_gap(c, 0.004)
+        assert abs(trailing_edge_gap(g) - 0.004) <= 1e-12
+        assert np.hypot(*(0.5 * (g[0] + g[-1]) - 0.5 * (c[0] + c[-1]))) <= 1e-9
+
+
+@pytest.mark.parametrize("factor", [0.5, 1.5])
+def test_thickness_scaling_keeps_trailing_edge_midpoint(factor):
+    """Thickness scaling on an open cambered section: the trailing-edge midpoint stays on the
+    original mean line (does not move), 1e-9 chord. (Gap proportionality: see DECISIONS.md, M2
+    step 4, pending.)"""
+    c = generate_naca4("4412", 200)
+    g = scale_thickness_camber(c, thickness=factor)
+    assert np.hypot(*(0.5 * (g[0] + g[-1]) - 0.5 * (c[0] + c[-1]))) <= 1e-9
