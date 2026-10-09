@@ -581,7 +581,7 @@ with page numbers and check results.
   NACA 2412 against coordinates saved from XFOIL's own `NACA` command, as a distance between the
   curves, with the tolerance stated before running. The other generators stay and return an
   `Airfoil`.
-- Q7 to Q11: pending (asked again on 2026-10-09).
+- Q7 to Q11: answered on 2026-10-09, see "Answers Q7-Q11" below.
 
 ### Additions to the plan
 
@@ -1189,6 +1189,116 @@ of 1e-8:
 
 The jump is first order on the PARSEC start section and falls faster on NACA 2412; both
 treatments converge to the same limit.
+
+### Step 4: tolerances fixed before running (2026-10-09)
+
+- XFOIL NACA cross-check (slow, xfoil group; Q6): XFOIL's own `NACA 2412` coordinates, saved
+  with `SAVE`, against our open NACA 2412: the largest distance from any XFOIL point to our
+  4000-panel open NACA 2412 polyline <= 1e-4 chord.
+- Closed NACA geometry pinned bit for bit under the explicit `trailing_edge="closed"` option
+  (Q2): SHA-256 of the coordinate array for 0012, 2412, 4412 and 23012 at 120 and 160 panels,
+  recorded before the default changes.
+- NACA 4/5 analytic properties: symmetric 00xx (upper y = -lower y to 1e-15); maximum thickness
+  equals t/c within 2e-4 at 4000 panels; open trailing-edge gap equals the closed-form value
+  10 t (0.2969 - 0.1260 - 0.3516 + 0.2843 - 0.1015) = 0.021 t within 1e-12 for a symmetric
+  section; 4-digit maximum camber m at x = p within 1e-3 (4000 panels);
+  5-digit 230xx maximum camber at x = 0.15 within 2e-3 (4000 panels).
+- Geometry operations on scaled (0.5), translated (0.2, 0.1) and rotated (10 deg about the
+  quarter chord) input: an operation applied to the transformed section equals the transformed
+  result of the operation on the original within 1e-9 chord (repanelling, trailing-edge gap,
+  thickness and camber scaling). The three repanelling tests of M1 keep their tolerance (1e-4
+  chord to a 4000-panel curve).
+- Thickness/camber scaling by 1 returns the input within 1e-12; scaled thickness has maximum
+  thickness f x the original within 2e-4 chord (NACA 2412, 4000 panels); scaled camber 0 on a
+  cambered NACA section gives a symmetric section within 1e-12 about the chord line.
+- Trailing-edge gap tool: the new gap equals the request within 1e-12 chord; points ahead of
+  the blending start are unchanged within 1e-12; a gap above 1 % chord gives a warning.
+- `fl.analyze` on an Airfoil equals `fl.analyze` on the one-element Configuration bit for bit;
+  per-element loads sum to the totals within 1e-12; NACA 2412 at 4 deg, 160 panels, open
+  trailing edge, Cl within 1e-12 of the core called directly on the same nodes.
+
+### Checks 3 and 4 after P3 (2026-10-09)
+
+Check 3, guard: `solver.drag_is_plausible` (finite, 0 <= Cd <= 1). A viscous result outside it
+is never reported as converged: `VIIResult.converged` of all three VII variants (so the CLI and
+GUI status follow), batch rows with a Reynolds number, and one-way rows of the benchmark adapter.
+Tests in `tests/test_drag_guard.py`.
+
+Check 4, benchmark before / after (before: stored M1 run of v1.3.1; after: the routed core with
+P3, same adapter and canonical files, 6 workers, one BLAS thread; output in
+`benchmark_output/m2_after/`, not committed):
+
+### open trailing edge, by Re
+
+| Re | method | not conv. before | mean dCl before | mean rel dCd before | mean dCm before | max dCl before | not conv. after | mean dCl after | mean rel dCd after | mean dCm after | max dCl after |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 50000 | inviscid | 0/63 | 0.2119 | - | 0.0236 | 0.5136 | 0/63 | 0.2148 | - | 0.0244 | 0.5227 |
+| 50000 | oneway | 0/63 | 0.2119 | 75.4 % | 0.0236 | 0.5136 | 0/63 | 0.2148 | 76.3 % | 0.0244 | 0.5227 |
+| 50000 | vii | 28/63 | 0.1563 | 28.8 % | 0.0251 | 0.3057 | 25/63 | 0.1743 | 31.2 % | 0.0267 | 0.4023 |
+| 50000 | newton | 8/9 | 0.1765 | 17.7 % | 0.0378 | 0.1765 | 7/9 | 0.2175 | 46.0 % | 0.0350 | 0.2957 |
+| 100000 | inviscid | 0/67 | 0.0982 | - | 0.0154 | 0.2477 | 0/67 | 0.1008 | - | 0.0162 | 0.2565 |
+| 100000 | oneway | 0/67 | 0.0982 | 69.4 % | 0.0154 | 0.2477 | 0/67 | 0.1008 | 70.6 % | 0.0162 | 0.2565 |
+| 100000 | vii | 24/67 | 0.1247 | 20.2 % | 0.0236 | 0.2020 | 22/67 | 0.1239 | 19.7 % | 0.0237 | 0.2074 |
+| 200000 | inviscid | 0/70 | 0.0654 | - | 0.0116 | 0.2973 | 0/70 | 0.0680 | - | 0.0123 | 0.3070 |
+| 200000 | oneway | 0/70 | 0.0654 | 64.9 % | 0.0116 | 0.2973 | 0/70 | 0.0680 | 66.2 % | 0.0123 | 0.3070 |
+| 200000 | vii | 19/70 | 0.0873 | 7.6 % | 0.0173 | 0.1471 | 20/70 | 0.0840 | 7.5 % | 0.0169 | 0.1420 |
+| 200000 | newton | 5/10 | 0.0840 | 3.6 % | 0.0158 | 0.1275 | 5/10 | 0.1010 | 6.4 % | 0.0220 | 0.1928 |
+| 500000 | inviscid | 0/70 | 0.0555 | - | 0.0108 | 0.2238 | 0/70 | 0.0591 | - | 0.0115 | 0.2335 |
+| 500000 | oneway | 0/70 | 0.0555 | 63.1 % | 0.0108 | 0.2238 | 0/70 | 0.0591 | 64.4 % | 0.0115 | 0.2335 |
+| 500000 | vii | 14/70 | 0.0552 | 6.9 % | 0.0114 | 0.1311 | 13/70 | 0.0553 | 8.8 % | 0.0117 | 0.2138 |
+| 1000000 | inviscid | 0/78 | 0.0625 | - | 0.0113 | 0.2717 | 0/78 | 0.0673 | - | 0.0125 | 0.2834 |
+| 1000000 | oneway | 0/78 | 0.0625 | 65.9 % | 0.0113 | 0.2717 | 0/78 | 0.0673 | 67.0 % | 0.0125 | 0.2834 |
+| 1000000 | vii | 13/78 | 0.0445 | 6.3 % | 0.0091 | 0.1235 | 16/78 | 0.0385 | 6.0 % | 0.0080 | 0.1162 |
+| 3000000 | inviscid | 0/88 | 0.0745 | - | 0.0124 | 0.3048 | 0/88 | 0.0802 | - | 0.0145 | 0.3183 |
+| 3000000 | oneway | 0/88 | 0.0745 | 73.1 % | 0.0124 | 0.3048 | 0/88 | 0.0802 | 74.0 % | 0.0145 | 0.3183 |
+| 3000000 | vii | 19/88 | 0.0422 | 7.0 % | 0.0088 | 0.2557 | 15/88 | 0.0404 | 8.5 % | 0.0088 | 0.2435 |
+| 6000000 | inviscid | 0/94 | 0.0750 | - | 0.0120 | 0.3088 | 0/94 | 0.0811 | - | 0.0146 | 0.3233 |
+| 6000000 | oneway | 0/94 | 0.0750 | 76.8 % | 0.0120 | 0.3088 | 0/94 | 0.0811 | 77.6 % | 0.0146 | 0.3233 |
+| 6000000 | vii | 18/94 | 0.0390 | 8.2 % | 0.0084 | 0.2434 | 16/94 | 0.0344 | 9.2 % | 0.0076 | 0.2454 |
+
+### open trailing edge, validated range pooled (Re 5e5-6e6)
+
+| Re | method | not conv. before | mean dCl before | mean rel dCd before | mean dCm before | max dCl before | not conv. after | mean dCl after | mean rel dCd after | mean dCm after | max dCl after |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| pooled | inviscid | 0/330 | 0.0678 | - | 0.0117 | 0.3088 | 0/330 | 0.0729 | - | 0.0134 | 0.3233 |
+| pooled | oneway | 0/330 | 0.0678 | 70.3 % | 0.0117 | 0.3088 | 0/330 | 0.0729 | 71.3 % | 0.0134 | 0.3233 |
+| pooled | vii | 64/330 | 0.0446 | 7.1 % | 0.0093 | 0.2557 | 60/330 | 0.0414 | 8.2 % | 0.0089 | 0.2454 |
+
+### E387 (sharp), by Re
+
+| Re | method | not conv. before | mean dCl before | mean rel dCd before | mean dCm before | max dCl before | not conv. after | mean dCl after | mean rel dCd after | mean dCm after | max dCl after |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 50000 | inviscid | 0/11 | 0.2780 | - | 0.0128 | 0.3440 | 0/11 | 0.2805 | - | 0.0138 | 0.3467 |
+| 50000 | oneway | 0/11 | 0.2780 | 74.8 % | 0.0128 | 0.3440 | 0/11 | 0.2805 | 72.8 % | 0.0138 | 0.3467 |
+| 50000 | vii | 3/11 | 0.2581 | 55.8 % | 0.0232 | 0.4130 | 1/11 | 0.2087 | 44.0 % | 0.0116 | 0.2892 |
+| 100000 | inviscid | 0/12 | 0.0364 | - | 0.0088 | 0.0927 | 0/12 | 0.0376 | - | 0.0090 | 0.0954 |
+| 100000 | oneway | 0/12 | 0.0364 | 59.3 % | 0.0088 | 0.0927 | 0/12 | 0.0376 | 55.6 % | 0.0090 | 0.0954 |
+| 100000 | vii | 2/12 | 0.0687 | 29.1 % | 0.0230 | 0.1586 | 0/12 | 0.0351 | 22.7 % | 0.0152 | 0.0606 |
+| 200000 | inviscid | 0/12 | 0.0335 | - | 0.0068 | 0.0929 | 0/12 | 0.0355 | - | 0.0072 | 0.0956 |
+| 200000 | oneway | 0/12 | 0.0335 | 49.1 % | 0.0068 | 0.0929 | 0/12 | 0.0355 | 44.1 % | 0.0072 | 0.0956 |
+| 200000 | vii | 1/12 | 0.0510 | 18.1 % | 0.0138 | 0.1530 | 0/12 | 0.0310 | 28.5 % | 0.0084 | 0.0628 |
+| 500000 | inviscid | 0/12 | 0.0478 | - | 0.0089 | 0.1501 | 0/12 | 0.0502 | - | 0.0099 | 0.1525 |
+| 500000 | oneway | 0/12 | 0.0478 | 45.8 % | 0.0089 | 0.1501 | 0/12 | 0.0502 | 43.0 % | 0.0099 | 0.1525 |
+| 500000 | vii | 3/12 | 0.0177 | 52.6 % | 0.0032 | 0.0458 | 0/12 | 0.0235 | 38.0 % | 0.0044 | 0.0678 |
+| 1000000 | inviscid | 0/12 | 0.0456 | - | 0.0084 | 0.1285 | 0/12 | 0.0479 | - | 0.0092 | 0.1309 |
+| 1000000 | oneway | 0/12 | 0.0456 | 53.5 % | 0.0084 | 0.1285 | 0/12 | 0.0479 | 50.1 % | 0.0092 | 0.1309 |
+| 1000000 | vii | 1/12 | 0.0205 | 27.0 % | 0.0042 | 0.0592 | 0/12 | 0.0151 | 19.0 % | 0.0030 | 0.0444 |
+| 3000000 | inviscid | 0/13 | 0.0371 | - | 0.0067 | 0.1032 | 0/13 | 0.0394 | - | 0.0075 | 0.1056 |
+| 3000000 | oneway | 0/13 | 0.0371 | 61.7 % | 0.0067 | 0.1032 | 0/13 | 0.0394 | 57.2 % | 0.0075 | 0.1056 |
+| 3000000 | vii | 0/13 | 0.0085 | 11.6 % | 0.0017 | 0.0201 | 0/13 | 0.0058 | 10.3 % | 0.0009 | 0.0165 |
+| 6000000 | inviscid | 0/12 | 0.0286 | - | 0.0054 | 0.0742 | 0/12 | 0.0309 | - | 0.0060 | 0.0769 |
+| 6000000 | oneway | 0/12 | 0.0286 | 64.9 % | 0.0054 | 0.0742 | 0/12 | 0.0309 | 60.5 % | 0.0060 | 0.0769 |
+| 6000000 | vii | 0/12 | 0.0050 | 10.2 % | 0.0011 | 0.0135 | 0/12 | 0.0048 | 11.4 % | 0.0010 | 0.0130 |
+
+Reading: open sections are unchanged from the step 3 run (P3 only affects closed edges). E387
+(sharp) is sane again and mostly better than v1.3.1: transpiration VII at Re 1e6 mean |dCl|
+0.0205 -> 0.0151, relative |dCd| 27.0 % -> 19.0 %, 0 of 12 not converged (was 1). Newton VII on
+its subset is worse (Re 2e5: |dCl| 0.084 -> 0.101, |dCd| 3.6 % -> 6.4 %), consistent with its
+panel-count sensitivity (M3).
+
+Batch example on the idle machine: runs, 504 points. Its "best L/D" (950-1440 at Re 3e6) is the
+known v1.3.1 one-way drag defect (NACA 2412 open, 12 deg: one-way Cd 0.00179, v1.3.1 0.00183,
+XFOIL 0.0151), not new; the one-way path is removed in M3.
 
 ---
 
