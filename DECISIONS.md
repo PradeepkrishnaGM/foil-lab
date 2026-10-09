@@ -815,6 +815,48 @@ point that disagrees while its neighbours agree is shown to the user (file, row,
 neighbours, page) and the CSV is not edited; if the 200 -> 400 criterion fails, the numbers and
 the evidence for the cause are shown and the criterion is not changed.
 
+Option (b) results (`tests/test_williams.py`, `tests/williams_tables.py`; cubic spline in arc
+length through [TE, rows 1..n-1, TE], cosine clustering at both edges, Cp interpolated in arc
+length to the tabulated points; Cl per element by pressure integration, total from circulation
+against CL**):
+
+| Config | N | Cl main (T3) | Cl flap (T3) | Total (CL**) | max dCp main | max dCp flap |
+|---|---|---|---|---|---|---|
+| A | 200 | 2.9040 (2.9065), -0.09 % | 0.8288 (0.8302), -0.17 % | 3.7321 (3.7386), -0.17 % | 0.0222 | 0.0108 |
+| A | 400 | 2.9039, -0.09 % | 0.8288, -0.17 % | 3.7325, -0.16 % | 0.0247 | 0.0107 |
+| A | 800 | 2.9038 | 0.8288 | 3.7326 | 0.0255 | 0.0108 |
+| B | 200 | 1.6877 (1.6915), -0.23 % | 0.3350 (0.3366), -0.48 % | 2.0222 (2.0290), -0.33 % | 0.0094 | 0.0076 |
+| B | 400 | 1.6876, -0.23 % | 0.3349, -0.50 % | 2.0224, -0.33 % | 0.0121 | 0.0074 |
+| B | 800 | 1.6875 | 0.3349 | 2.0224 | 0.0140 | 0.0078 |
+
+Cl (1 %) and max |dCp| (0.05) pass. The criterion "error falls from 200 to 400 panels" FAILS for
+both main elements (flaps: 0.0108 -> 0.0107 and 0.0076 -> 0.0074, pass). Not changed; the test is
+left uncommitted pending the user's decision. Evidence for the cause:
+
+1. The core converges on this geometry: max |Cp_N - Cp_3200| in the window is 2.1e-2 / 5.7e-3 /
+   1.2e-3 / 4.1e-4 at N = 200 / 400 / 800 / 1600 (config A main), about second order. The
+   difference to the table levels off at a nonzero floor (0.026 for A, 0.015 for B), so the
+   error at 200 panels is lower only where discretisation error happens to offset it.
+2. One printed point: Table 2(a), main aerofoil, row 17 (`table2a_main.csv`; printed page 20,
+   PDF page 21): xi 0.41297, eta -0.07214, Cp 0.58264. Re-read on the page image: printed
+   exactly so. Its eta is 9.0e-4 off a quartic through its eight neighbours (other mid-chord rows
+   1e-4 or less; rounding 5e-6); the fit gives -0.07124, the printed value with two digits
+   swapped. Our converged Cp at rows 16 / 17 / 18 is 0.59070 / 0.55679 / 0.60222 against the
+   tabulated 0.58115 / 0.58264 / 0.59271 (table minus ours -0.0096 / +0.0259 / -0.0095), while
+   rows 15 and 19 agree to 1.1e-3: the tabulated Cp is smooth, the bump in ours comes from the
+   tabulated geometry. Likely a misprint in the original. Table 2(b) main row 16 (printed page
+   22, PDF page 23; eta -0.06936, also printed so) is 2.7e-4 off the same fit (-0.06963), with a
+   smaller Cp zigzag (+0.0066 / -0.0114 / +0.0073 at rows 15-17). The CSVs are unchanged.
+3. With only those two eta values replaced in memory by the fit (evidence only), max |dCp| for
+   the main elements still rises: A 0.0084 -> 0.0130 -> 0.0163, B 0.0073 -> 0.0121 -> 0.0140
+   (200 / 400 / 800). The maximum then sits on the upper surface just behind the leading edge
+   (A rows 34-35, x/c 0.027-0.046, Cp about -5.7 to -4.7; B row 34, x/c 0.026, Cp -2.77),
+   where about 61 points do not fix the shape of the curvature peak.
+4. Geometry sensitivity: building the spline through every other tabulated point changes the
+   converged Cp by up to 0.059 (A main), 0.037 (B main), 0.017-0.020 (flaps), more than the
+   floor in item 1. The floor is set by reconstructing the geometry from the table, which
+   refinement of our panels cannot reduce.
+
 ---
 
 ## Later
