@@ -97,13 +97,10 @@ def _make_jax_cl(num_panels: int):
     """
     from .jax_backend import HAS_JAX
     if HAS_JAX:
-        import jax.numpy as jnp
         from . import jax_core
 
         def f(coords, alpha_deg):
-            cw = jnp.asarray(jax_core.ensure_cw_static(coords))
-            cl, cm = jax_core.solve_cl_cm(cw, jnp.asarray(np.deg2rad(alpha_deg)))
-            return float(cl), float(cm)
+            return jax_core.solve_numpy_compatible(coords, alpha_deg)
         return f
 
     def f(coords, alpha_deg):

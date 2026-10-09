@@ -18,7 +18,6 @@ def main():
         print("JAX is not installed. Install with: pip install 'jax[cpu]'")
         return
 
-    import jax.numpy as jnp
     from foil_lab import jax_core
 
     af = generate_naca4("2412", 200)
@@ -34,11 +33,11 @@ def main():
     t = time.perf_counter()
     _ = [solve_flow(af, a).cl for a in alphas]
     t_np = time.perf_counter() - t
-    cw = jnp.asarray(jax_core.ensure_cw_static(af))
-    aj = jnp.deg2rad(jnp.asarray(alphas))
-    jax_core.batched_cl(cw, aj).block_until_ready()       # warm compile
+    cw = jax_core.ensure_cw_static(af)
+    aj = np.deg2rad(alphas)
+    jax_core.batched_cl(cw, aj)                           # warm compile
     t = time.perf_counter()
-    jax_core.batched_cl(cw, aj).block_until_ready()
+    jax_core.batched_cl(cw, aj)
     t_jx = time.perf_counter() - t
     print(f"  NumPy loop: {t_np*1000:7.1f} ms")
     print(f"  JAX vmap:   {t_jx*1000:7.1f} ms   ({t_np/t_jx:.0f}x faster)")
@@ -48,7 +47,7 @@ def main():
     print(f"  dCl/dalpha = {slope:.4f} /rad   (thin-airfoil 2*pi = {2*np.pi:.4f})")
     print(f"  zero-lift angle = {a0:.2f} deg  (NACA 2412 ~ -2.1 deg)")
     # Geometry sensitivity: which nodes most affect lift?
-    g = np.asarray(jax_core.dcl_dgeom(cw, jnp.deg2rad(5.0)))
+    g = jax_core.dcl_dgeom(cw, np.deg2rad(5.0))
     k = int(np.argmax(np.abs(g[:, 1])))
     print(f"  most lift-sensitive node: #{k}, dCl/dy = {g[k,1]:+.2f} "
           f"(at x/c={float(cw[k,0]):.3f})")

@@ -1,4 +1,4 @@
-"""Tests for v0.6 Tier-1 features: multi-element, kernels, trip wires, batch."""
+"""Tests for v0.6 Tier-1 features: multi-element, trip wires, batch."""
 
 import numpy as np
 import pytest
@@ -6,27 +6,7 @@ import pytest
 from foil_lab.generators import generate_naca4
 from foil_lab.geometry import translate, bodies_overlap
 from foil_lab.solver import solve_flow
-from foil_lab.panels import build_panels
-from foil_lab.influence import LinearVortexModel, ConstantVortexModel
-from foil_lab.linear_system import assemble_and_solve
-from foil_lab.forces import integrate_loads
-
-
-# --- Higher-order kernels --------------------------------------------------- #
-def test_both_kernels_correct_lift():
-    af = generate_naca4("0012", 200)
-    for model in (LinearVortexModel(), ConstantVortexModel()):
-        cl0 = solve_flow(af, 0.0, influence_model=model).cl
-        cl5 = solve_flow(af, 5.0, influence_model=model).cl
-        assert abs(cl0) < 1e-6, f"{type(model).__name__} nonzero at a=0"
-        assert 0.5 < cl5 < 0.7, f"{type(model).__name__} Cl5={cl5}"
-
-
-def test_kernels_agree_closely():
-    af = generate_naca4("2412", 200)
-    lin = solve_flow(af, 5.0, influence_model=LinearVortexModel()).cl
-    con = solve_flow(af, 5.0, influence_model=ConstantVortexModel()).cl
-    assert abs(lin - con) < 0.05
+from foil_lab import inviscid as core
 
 
 # --- True multi-element ----------------------------------------------------- #
@@ -35,12 +15,9 @@ def test_multielement_far_separation_recovers_isolated():
     rear = translate(generate_naca4("2412", 160), 20.0, 0.0)
     solo = solve_flow(front, 5.0).cl
 
-    g = build_panels([front, rear])
-    C = LinearVortexModel().compute(g)
-    flow = assemble_and_solve(g, C, np.deg2rad(5.0))
-    cp = 1 - flow.vt_total ** 2
-    cl_front = integrate_loads(g, cp, np.deg2rad(5.0), body_index=0).cl
-    cl_rear = integrate_loads(g, cp, np.deg2rad(5.0), body_index=1).cl
+    sol = core.solve(core.PanelSet.from_bodies([front, rear]), 5.0)
+    cl_front = core.body_loads(sol, 0).cl
+    cl_rear = core.body_loads(sol, 1).cl
     # Far apart: each recovers (close to) the isolated value.
     assert abs(cl_front - solo) < 0.05
     assert abs(cl_rear - solo) < 0.05
@@ -49,11 +26,10 @@ def test_multielement_far_separation_recovers_isolated():
 def test_multielement_independent_circulations():
     front = generate_naca4("2412", 160)
     rear = translate(generate_naca4("0012", 160), 2.0, -0.4)
-    g = build_panels([front, rear])
-    C = LinearVortexModel().compute(g)
-    flow = assemble_and_solve(g, C, np.deg2rad(5.0))
-    # Two distinct bodies => two circulation unknowns.
-    assert flow.gammas.shape == (2,)
+    sol = core.solve(core.PanelSet.from_bodies([front, rear]), 5.0)
+    # Two distinct bodies => one circulation each, both free (not tied together).
+    assert sol.circulation.shape == (2,)
+    assert abs(sol.circulation[0] - sol.circulation[1]) > 1e-3
 
 
 def test_overlap_detection():

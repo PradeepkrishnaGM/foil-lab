@@ -857,6 +857,162 @@ left uncommitted pending the user's decision. Evidence for the cause:
    floor in item 1. The floor is set by reconstructing the geometry from the table, which
    refinement of our panels cannot reduce.
 
+### Step 3: routing through the core
+
+Everything that solved a potential flow now goes through `foil_lab.inviscid`:
+
+- `solver.solve_flow`: the core, then the unchanged compressibility, 3D, one-way drag and
+  post-stall layers. `SolutionData` keeps its fields; `gamma` now holds the core's nodal
+  strengths, `sources` the known panel sources (VII transpiration, else zeros), and a new
+  `panels` field carries the core's panel set. `influence_model` is removed (one vorticity
+  model). `compute_panel_geometry` keeps its 13-tuple, in the same clockwise order.
+- `vii`, `vii_newton`, `vii_qs`: `_inviscid_with_transpiration` calls the core with the
+  transpiration as known equivalent sources (outer normal velocity = v_n, the same condition the
+  old right-hand side imposed). The matrices are assembled once per geometry
+  (`inviscid.assemble`) and reused across iterations; the iteration schemes, relaxation,
+  clipping and smoothing are unchanged (VII itself is M3).
+- `flowfield`: velocities from the solution's own singularities (`inviscid.induced_velocity`,
+  including sources and the trailing-edge panel), evaluated in blocks; points inside a body are
+  found by ray casting on the body polygon (was a bounding box).
+- `ground_effect`: the section and its mirror image about y = 0, solved as two bodies by the
+  core in a stream parallel to the ground (Q3 option (a)). Behaviour change: the section is
+  pitched by alpha about its quarter-chord point and raised by `height` (quarter-chord point);
+  v1.3.1 inclined the stream instead, so the stream crossed the wall. The returned `alpha_deg`
+  is the stream direction in the solution frame (0); `coords_list` holds the pitched, raised
+  section; loads are in ground axes, moment about the raised quarter-chord point.
+- `jax_core`: thin wrappers over the core with `xp = jax.numpy` (same names and signatures).
+  The import-time `jax.config.update("jax_enable_x64", True)` of v1.3.1 is removed: every public
+  function runs inside the scoped `jax.enable_x64(True)` and takes NumPy arrays, so JAX's global
+  configuration is never changed (test added). Callers (`design`, `examples/jax_demo.py`,
+  `tests/test_jax.py`) pass NumPy arrays; a JAX float32 array built outside the scope would lose
+  precision.
+- Benchmark adapter: panel midpoints from `inviscid.PanelSet` (same order).
+- GUI: the streamline plot draws `sol.coords_list` (for ground effect the pitched, raised
+  section) instead of the unsolved input.
+- Deleted: `influence.py`, `linear_system.py`, `forces.py` (approved), and `panels.py`, which
+  nothing used any more (addition).
+- Quarter-chord moment: now the exact moment about (0.25, 0); v1.3.1 used cm_le + 0.25 cl,
+  which mixes lift and normal force (differs by 0.25 (cl - c_n), about 4e-3 at Cl 1.5 and 10
+  deg). Recorded as a behaviour change.
+
+Tests rewritten or removed:
+
+- `test_tier1.py`: `test_both_kernels_correct_lift` and `test_kernels_agree_closely` removed (they
+  compared the two removed kernels). The two multi-element tests now use the core; the
+  independent-circulation test also checks that the two circulations differ by more than 1e-3.
+- `test_solver.py`: Kutta-Joukowski check uses the core's circulation (tolerance unchanged);
+  the clockwise check uses `PanelSet`.
+- `test_vii_newton.py`: sensitivity-matrix test with the new signature (tolerance unchanged).
+- `test_exact_solutions.py`: two-body and circulation helpers use the core. Expected-failure
+  marks removed because the tests now pass with unchanged tolerances: Kármán-Trefftz at 4 deg,
+  stacked two-body, mirrored pair, far-field lift, NumPy/JAX for NACA 4412 at -4 deg (M2), and
+  both ground-effect tests (M6; per Q3 the no-penetration test is the one that counts). Still
+  marked: repanelling of scaled/translated/rotated shapes (M2 step 4) and the aspect-ratio
+  compressibility test (M6).
+- `test_jax.py`: NumPy inputs; new test that `jax_core` leaves the global x64 setting unchanged.
+
+Failing after routing, not changed (decision needed): four VII tests on the closed NACA 2412
+(`test_vii.py`: converges_attached, reduces_lift_vs_inviscid, drag_physically_plausible;
+`test_transition.py`: vii_en_converges). Cause: on a closed (sharp, finite-angle) trailing edge
+the core gives the correct inviscid stagnation point (edge velocity 0.02 on the last panels,
+Cp +0.96 to +1.0); v1.3.1's Hess-Smith core gave 0.66 there. The v1.3.1 VII marches the
+boundary layer to the trailing edge, meets that deceleration in the last panel and does not
+converge (residual 1.5e-3 to 2.1e-3 after 200 iterations at 4 deg), with Cl above inviscid and
+Cd about 1e-4. Away from the trailing edge the response of the edge velocity to transpiration
+agrees with v1.3.1 to about 1 % (single-panel blowing at mid-chord: -4.73e-3 / 7.0e-5 /
+4.87e-3 against -4.72e-3 / 7.0e-5 / 4.86e-3). On the open trailing edge (the benchmark files and
+the approved step-4 generator default) VII converges in about 90 iterations: NACA 2412, 4 deg,
+Re 1e6, Cl 0.644 (inviscid 0.743), Cd 0.0071. The one-way drag on closed sections is affected in
+the same way (CLI, NACA 2412, 5 deg, Re 1e6: Cd 0.00069).
+
+Smoke checks after routing: CLI analyze / polar / info run (VII on the closed default section
+shows the problem above); GUI under Xvfb runs single analysis (inviscid, ground effect, VII)
+and polar; the streamline view of ground effect keeps the GUI's fixed window (y within 0.5) and
+also shows the mirror flow below the wall (cosmetic, GUI follow-up); inverse-design example and
+JAX example run (JAX vs NumPy 7e-14).
+
+Benchmark before / after (before: stored M1 run of v1.3.1; after: the same adapter on the routed
+code, same canonical files, 6 workers, one BLAS thread each; output in
+`benchmark_output/m2_after/`, not committed). Errors against viscous XFOIL at PANE 160, attached
+filter as in M1; "not conv." = excluded / compared.
+
+### open trailing edge, by Re
+
+| Re | method | not conv. before | mean dCl before | mean rel dCd before | mean dCm before | max dCl before | not conv. after | mean dCl after | mean rel dCd after | mean dCm after | max dCl after |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 50000 | inviscid | 0/63 | 0.2119 | - | 0.0236 | 0.5136 | 0/63 | 0.2148 | - | 0.0244 | 0.5227 |
+| 50000 | oneway | 0/63 | 0.2119 | 75.4 % | 0.0236 | 0.5136 | 0/63 | 0.2148 | 76.3 % | 0.0244 | 0.5227 |
+| 50000 | vii | 28/63 | 0.1563 | 28.8 % | 0.0251 | 0.3057 | 25/63 | 0.1743 | 31.2 % | 0.0267 | 0.4023 |
+| 50000 | newton | 8/9 | 0.1765 | 17.7 % | 0.0378 | 0.1765 | 7/9 | 0.2175 | 46.0 % | 0.0350 | 0.2957 |
+| 100000 | inviscid | 0/67 | 0.0982 | - | 0.0154 | 0.2477 | 0/67 | 0.1008 | - | 0.0162 | 0.2565 |
+| 100000 | oneway | 0/67 | 0.0982 | 69.4 % | 0.0154 | 0.2477 | 0/67 | 0.1008 | 70.6 % | 0.0162 | 0.2565 |
+| 100000 | vii | 24/67 | 0.1247 | 20.2 % | 0.0236 | 0.2020 | 22/67 | 0.1239 | 19.7 % | 0.0237 | 0.2074 |
+| 200000 | inviscid | 0/70 | 0.0654 | - | 0.0116 | 0.2973 | 0/70 | 0.0680 | - | 0.0123 | 0.3070 |
+| 200000 | oneway | 0/70 | 0.0654 | 64.9 % | 0.0116 | 0.2973 | 0/70 | 0.0680 | 66.2 % | 0.0123 | 0.3070 |
+| 200000 | vii | 19/70 | 0.0873 | 7.6 % | 0.0173 | 0.1471 | 20/70 | 0.0840 | 7.5 % | 0.0169 | 0.1420 |
+| 200000 | newton | 5/10 | 0.0840 | 3.6 % | 0.0158 | 0.1275 | 5/10 | 0.1010 | 6.4 % | 0.0220 | 0.1928 |
+| 500000 | inviscid | 0/70 | 0.0555 | - | 0.0108 | 0.2238 | 0/70 | 0.0591 | - | 0.0115 | 0.2335 |
+| 500000 | oneway | 0/70 | 0.0555 | 63.1 % | 0.0108 | 0.2238 | 0/70 | 0.0591 | 64.4 % | 0.0115 | 0.2335 |
+| 500000 | vii | 14/70 | 0.0552 | 6.9 % | 0.0114 | 0.1311 | 13/70 | 0.0553 | 8.8 % | 0.0117 | 0.2138 |
+| 1000000 | inviscid | 0/78 | 0.0625 | - | 0.0113 | 0.2717 | 0/78 | 0.0673 | - | 0.0125 | 0.2834 |
+| 1000000 | oneway | 0/78 | 0.0625 | 65.9 % | 0.0113 | 0.2717 | 0/78 | 0.0673 | 67.0 % | 0.0125 | 0.2834 |
+| 1000000 | vii | 13/78 | 0.0445 | 6.3 % | 0.0091 | 0.1235 | 16/78 | 0.0385 | 6.0 % | 0.0080 | 0.1162 |
+| 3000000 | inviscid | 0/88 | 0.0745 | - | 0.0124 | 0.3048 | 0/88 | 0.0802 | - | 0.0145 | 0.3183 |
+| 3000000 | oneway | 0/88 | 0.0745 | 73.1 % | 0.0124 | 0.3048 | 0/88 | 0.0802 | 74.0 % | 0.0145 | 0.3183 |
+| 3000000 | vii | 19/88 | 0.0422 | 7.0 % | 0.0088 | 0.2557 | 15/88 | 0.0404 | 8.5 % | 0.0088 | 0.2435 |
+| 6000000 | inviscid | 0/94 | 0.0750 | - | 0.0120 | 0.3088 | 0/94 | 0.0811 | - | 0.0146 | 0.3233 |
+| 6000000 | oneway | 0/94 | 0.0750 | 76.8 % | 0.0120 | 0.3088 | 0/94 | 0.0811 | 77.6 % | 0.0146 | 0.3233 |
+| 6000000 | vii | 18/94 | 0.0390 | 8.2 % | 0.0084 | 0.2434 | 16/94 | 0.0344 | 9.2 % | 0.0076 | 0.2454 |
+
+### open trailing edge, validated range pooled (Re 5e5-6e6)
+
+| Re | method | not conv. before | mean dCl before | mean rel dCd before | mean dCm before | max dCl before | not conv. after | mean dCl after | mean rel dCd after | mean dCm after | max dCl after |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| pooled | inviscid | 0/330 | 0.0678 | - | 0.0117 | 0.3088 | 0/330 | 0.0729 | - | 0.0134 | 0.3233 |
+| pooled | oneway | 0/330 | 0.0678 | 70.3 % | 0.0117 | 0.3088 | 0/330 | 0.0729 | 71.3 % | 0.0134 | 0.3233 |
+| pooled | vii | 64/330 | 0.0446 | 7.1 % | 0.0093 | 0.2557 | 60/330 | 0.0414 | 8.2 % | 0.0089 | 0.2454 |
+
+### E387 (sharp), by Re
+
+| Re | method | not conv. before | mean dCl before | mean rel dCd before | mean dCm before | max dCl before | not conv. after | mean dCl after | mean rel dCd after | mean dCm after | max dCl after |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 50000 | inviscid | 0/11 | 0.2780 | - | 0.0128 | 0.3440 | 0/11 | 0.2132 | - | 0.0229 | 0.3201 |
+| 50000 | oneway | 0/11 | 0.2780 | 74.8 % | 0.0128 | 0.3440 | 0/11 | 0.2132 | 395087977.8 % | 0.0229 | 0.3201 |
+| 50000 | vii | 3/11 | 0.2581 | 55.8 % | 0.0232 | 0.4130 | 6/11 | 0.1942 | 10743491.9 % | 0.0298 | 0.3130 |
+| 100000 | inviscid | 0/12 | 0.0364 | - | 0.0088 | 0.0927 | 0/12 | 0.0206 | - | 0.0206 | 0.0868 |
+| 100000 | oneway | 0/12 | 0.0364 | 59.3 % | 0.0088 | 0.0927 | 0/12 | 0.0206 | 474489432.7 % | 0.0206 | 0.0868 |
+| 100000 | vii | 2/12 | 0.0687 | 29.1 % | 0.0230 | 0.1586 | 1/12 | 0.0424 | 7877223.4 % | 0.0213 | 0.1175 |
+| 200000 | inviscid | 0/12 | 0.0335 | - | 0.0068 | 0.0929 | 0/12 | 0.0253 | - | 0.0135 | 0.0866 |
+| 200000 | oneway | 0/12 | 0.0335 | 49.1 % | 0.0068 | 0.0929 | 0/12 | 0.0253 | 622883438.5 % | 0.0135 | 0.0866 |
+| 200000 | vii | 1/12 | 0.0510 | 18.1 % | 0.0138 | 0.1530 | 4/12 | 0.0371 | 12392706.9 % | 0.0126 | 0.1313 |
+| 500000 | inviscid | 0/12 | 0.0478 | - | 0.0089 | 0.1501 | 0/12 | 0.0288 | - | 0.0132 | 0.0862 |
+| 500000 | oneway | 0/12 | 0.0478 | 45.8 % | 0.0089 | 0.1501 | 0/12 | 0.0288 | 744064824.5 % | 0.0132 | 0.0862 |
+| 500000 | vii | 3/12 | 0.0177 | 52.6 % | 0.0032 | 0.0458 | 3/12 | 0.0231 | 27656478.1 % | 0.0072 | 0.0850 |
+| 1000000 | inviscid | 0/12 | 0.0456 | - | 0.0084 | 0.1285 | 0/12 | 0.0287 | - | 0.0134 | 0.1078 |
+| 1000000 | oneway | 0/12 | 0.0456 | 53.5 % | 0.0084 | 0.1285 | 0/12 | 0.0287 | 660931643.7 % | 0.0134 | 0.1078 |
+| 1000000 | vii | 1/12 | 0.0205 | 27.0 % | 0.0042 | 0.0592 | 4/12 | 0.0237 | 18119094.0 % | 0.0079 | 0.0628 |
+| 3000000 | inviscid | 0/13 | 0.0371 | - | 0.0067 | 0.1032 | 0/13 | 0.0288 | - | 0.0133 | 0.1331 |
+| 3000000 | oneway | 0/13 | 0.0371 | 61.7 % | 0.0067 | 0.1032 | 0/13 | 0.0288 | 507711202.9 % | 0.0133 | 0.1331 |
+| 3000000 | vii | 0/13 | 0.0085 | 11.6 % | 0.0017 | 0.0201 | 0/13 | 0.0418 | 23923166.5 % | 0.0133 | 0.1290 |
+| 6000000 | inviscid | 0/12 | 0.0286 | - | 0.0054 | 0.0742 | 0/12 | 0.0228 | - | 0.0116 | 0.1053 |
+| 6000000 | oneway | 0/12 | 0.0286 | 64.9 % | 0.0054 | 0.0742 | 0/12 | 0.0228 | 385915262.1 % | 0.0116 | 0.1053 |
+| 6000000 | vii | 0/12 | 0.0050 | 10.2 % | 0.0011 | 0.0135 | 0/12 | 0.0402 | 22140889.7 % | 0.0134 | 0.1074 |
+
+Reading:
+
+- Inviscid and one-way Cl/Cm move slightly away from viscous XFOIL (pooled mean |dCl| 0.0678 ->
+  0.0729). Expected: the core is now the correct inviscid solution (NACA 2412, 5 deg: 0.863
+  against inviscid XFOIL 0.862; v1.3.1 0.858), and the benchmark compares it with viscous XFOIL
+  (0.810).
+- Transpiration VII on the open sections: pooled mean |dCl| 0.0446 -> 0.0414, |dCm| 0.0093 ->
+  0.0089, not converged 64 -> 60 of 330, mean relative |dCd| 7.1 % -> 8.2 %. Newton VII (small
+  subset) is worse: Re 2e5 mean |dCl| 0.084 -> 0.101, relative |dCd| 3.6 % -> 6.4 %.
+- E387 (sharp trailing edge): one-way and VII drag are meaningless after routing (Re 1e6:
+  one-way Cd 26 837 at 2 deg and 100 743 at 5 deg; VII 1 463 and 4 614, reported converged;
+  v1.3.1: 0.0034-0.014). Same cause as the four failing VII tests: the correct inviscid
+  stagnation point at a sharp trailing edge breaks the v1.3.1 boundary-layer march there.
+  Decision needed (VII and the one-way drag are M3).
+
 ---
 
 ## Later

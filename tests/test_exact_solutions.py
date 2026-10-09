@@ -10,15 +10,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from foil_lab import inviscid as core
 from foil_lab.flowfield import compute_velocity_field
-from foil_lab.forces import integrate_loads
 from foil_lab.generators import generate_naca4, generate_naca5
 from foil_lab.geometry import repanel_cosine, rotate, scale, translate
 from foil_lab.ground_effect import solve_ground_effect
-from foil_lab.influence import LinearVortexModel
-from foil_lab.linear_system import assemble_and_solve
-from foil_lab.panels import build_panels
-from foil_lab.solver import solve_flow
+from foil_lab.solver import loads_from_cp, solve_flow
 
 
 def _xfail(milestone: str, why: str):
@@ -71,7 +68,7 @@ def _kt(n_panels: int, alpha_deg: float):
 def _kt_error(n_panels: int, alpha_deg: float) -> float:
     coords, z_mid, cp_exact = _kt(n_panels, alpha_deg)
     sol = solve_flow(coords, alpha_deg)
-    g = build_panels(coords)
+    g = core.PanelSet.from_bodies(coords)
     # The solver orders panels clockwise; our nodes are counter-clockwise: reverse to match.
     cp_num = sol.cp_dist[::-1]
     assert np.allclose(g.mid_x[::-1], 0.5 * (coords[:-1, 0] + coords[1:, 0]))
@@ -81,11 +78,7 @@ def _kt_error(n_panels: int, alpha_deg: float) -> float:
     return float(np.max(np.abs(cp_num[band] - cp_exact[band])))
 
 
-@pytest.mark.parametrize("alpha", [
-    0.0,
-    pytest.param(4.0, marks=_xfail("M2", "measured max |dCp| 0.0220 > 0.02 at 200 panels; "
-                                         "first-order error just aft of the leading edge")),
-])
+@pytest.mark.parametrize("alpha", [0.0, 4.0])
 def test_karman_trefftz_surface_pressure(alpha):
     """max |dCp| <= 0.02 for x/c in [0.02, 0.98] at 200 panels; error falls from 160 to 320."""
     assert _kt_error(200, alpha) <= 0.02
@@ -96,13 +89,10 @@ def test_karman_trefftz_surface_pressure(alpha):
 # Multi-element, data-free checks (the Williams exact solution is added in M2)
 # --------------------------------------------------------------------------------------- #
 def _two_body_cl(bodies, alpha_deg):
-    g = build_panels(bodies)
-    flow = assemble_and_solve(g, LinearVortexModel().compute(g), np.deg2rad(alpha_deg))
-    cp = 1.0 - flow.vt_total ** 2
-    return [integrate_loads(g, cp, np.deg2rad(alpha_deg), body_index=k).cl for k in range(len(bodies))]
+    sol = core.solve(core.PanelSet.from_bodies(bodies), alpha_deg)
+    return [core.body_loads(sol, k).cl for k in range(len(bodies))]
 
 
-@_xfail("M2", "each body's vortex/source chain must close on itself")
 def test_two_different_bodies_far_apart_recover_isolated_lift():
     """NACA 0012 and NACA 4412 50 chords apart: each Cl within 0.5 % of its isolated value.
 
@@ -118,7 +108,6 @@ def test_two_different_bodies_far_apart_recover_isolated_lift():
     assert abs(cl_b / solve_flow(b, 4.0).cl - 1.0) <= 0.005
 
 
-@_xfail("M2", "each body's vortex/source chain must close on itself")
 def test_mirrored_pair_lift_equal_and_opposite():
     """A section and its mirror image about y = 0 in a horizontal stream: Cl1 = -Cl2 (1e-9)."""
     real = translate(rotate(generate_naca4("2412", 160), 4.0, pivot=(0.25, 0.0)), 0.0, 0.5)
@@ -130,7 +119,6 @@ def test_mirrored_pair_lift_equal_and_opposite():
 # --------------------------------------------------------------------------------------- #
 # Ground effect against the mirrored two-body problem in free air
 # --------------------------------------------------------------------------------------- #
-@_xfail("M6", "ground effect reformulated (needs the per-body assembly of M2)")
 def test_ground_effect_matches_mirror_problem():
     """Section rotated 4 deg about c/4 at h/c = 0.5, stream parallel to the ground: the image
     solution and the free-air mirrored pair agree to |dCl| <= 1e-6."""
@@ -141,7 +129,6 @@ def test_ground_effect_matches_mirror_problem():
     assert abs(ge.cl - cl_pair) <= 1e-6
 
 
-@_xfail("M6", "ground effect reformulated, with an off-body velocity that includes the image")
 def test_ground_plane_is_a_streamline():
     """Normal velocity on the ground plane y = 0 is zero to 1e-8."""
     sec = rotate(generate_naca4("2412", 160), 4.0, pivot=(0.25, 0.0))
@@ -154,10 +141,9 @@ def test_ground_plane_is_a_streamline():
 # Lift: surface pressure = circulation = far-field momentum
 # --------------------------------------------------------------------------------------- #
 def _pressure_and_circulation_cl(af, alpha_deg):
-    g = build_panels(af)
-    flow = assemble_and_solve(g, LinearVortexModel().compute(g), np.deg2rad(alpha_deg))
+    sol = core.solve(core.PanelSet.from_bodies(af), alpha_deg)
     cl_p = solve_flow(af, alpha_deg).cl
-    cl_g = abs(2.0 * np.sum(flow.vt_total * g.lengths))      # Kutta-Joukowski, c = V = 1
+    cl_g = abs(2.0 * float(sol.circulation[0]))               # Kutta-Joukowski, c = V = 1
     return cl_p, cl_g
 
 
@@ -186,7 +172,6 @@ def _farfield_cl(sol, alpha_deg, half=10.0, res=801):
     return 2.0 * (fy * np.cos(a) - fx * np.sin(a))
 
 
-@_xfail("M2", "off-body velocity consistent with the solver's singularity model")
 def test_farfield_lift_equals_pressure_lift():
     """Within 0.5 %."""
     af = generate_naca4("2412", 200)
@@ -233,9 +218,9 @@ def test_karman_tsien_applied_once():
     """Cl at Mach 0.5 equals the integral of the once-corrected incompressible Cp (1e-3)."""
     from foil_lab.corrections import karman_tsien_correction
     af = generate_naca4("2412", 160)
-    g = build_panels(af)
+    ps = core.PanelSet.from_bodies(af)
     cp_inc = solve_flow(af, 4.0).cp_dist
-    cl_once = integrate_loads(g, karman_tsien_correction(cp_inc, 0.5), np.deg2rad(4.0)).cl
+    cl_once = loads_from_cp(ps, karman_tsien_correction(cp_inc, 0.5), 4.0)[0]
     assert abs(solve_flow(af, 4.0, mach=0.5).cl - cl_once) <= 1e-3
 
 
@@ -257,11 +242,7 @@ _SECTIONS = {"0012": lambda: generate_naca4("0012", 200), "2412": lambda: genera
 def _jax_cases():
     for alpha in (-4.0, 4.0, 10.0):
         for name, make in _SECTIONS.items():
-            marks = ()
-            if (name, alpha) == ("4412", -4.0):
-                marks = _xfail("M2", "measured |dCl| 1.49e-6 > 1e-6; cause of the NumPy/JAX "
-                                     "difference to be found")
-            yield pytest.param(make, alpha, marks=marks, id=f"{alpha}-{name}")
+            yield pytest.param(make, alpha, id=f"{alpha}-{name}")
 
 
 @pytest.mark.parametrize("make,alpha", list(_jax_cases()))

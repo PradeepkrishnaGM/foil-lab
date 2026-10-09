@@ -250,15 +250,13 @@ def solve_vii_qs(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
     import numpy as np
     from .vii import (VIIResult, _inviscid_with_transpiration, _split_surfaces,
                       geom_to_coords_list)
+    from . import inviscid as core
     from .corrections import karman_tsien_correction
-    from .forces import integrate_loads
-    from .influence import LinearVortexModel
-    from .panels import build_panels
-    from .solver import SolutionData
+    from .solver import SolutionData, loads_from_cp
 
     alpha_rad = np.deg2rad(alpha_deg)
-    geom = build_panels(coords)
-    coeffs = LinearVortexModel().compute(geom)
+    geom = core.PanelSet.from_bodies(coords)
+    asm = core.assemble(geom, sources=True)
     n = geom.num_panels
 
     v_n = np.zeros(n)
@@ -279,7 +277,8 @@ def solve_vii_qs(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
     ue_a = ue_b = None
 
     for it in range(1, max_iter + 1):
-        strengths, vt = _inviscid_with_transpiration(geom, coeffs, alpha_rad, v_n, v_inf)
+        strengths, vt = _inviscid_with_transpiration(geom, alpha_rad, v_n, v_inf, asm)
+        v_n_solved = v_n.copy()     # the transpiration that produced (strengths, vt)
         idx_a, s_a, ue_a, idx_b, s_b, ue_b, stag = _split_surfaces(geom, vt)
 
         def trip_s_for(idx, s_arr):
@@ -337,7 +336,7 @@ def solve_vii_qs(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
 
     cp_inc = 1.0 - (vt / v_inf) ** 2
     cp = karman_tsien_correction(cp_inc, mach)
-    loads = integrate_loads(geom, cp, alpha_rad, body_index=None)
+    cl, cm_le, cm_qc = loads_from_cp(geom, cp, alpha_deg)
 
     def squire_young(prof, ue_arr):
         H_te = prof.H[-1]
@@ -348,10 +347,10 @@ def solve_vii_qs(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
 
     sol = SolutionData(
         alpha_deg=alpha_deg, mach=mach, reynolds=reynolds, aspect_ratio=0.0,
-        cp_dist=cp, cl=loads.cl, cd_ind=0.0, cd_visc=cd_wake,
-        cm_le=loads.cm_le, cm_qc=loads.cm_qc,
-        sources=strengths[:n], gamma=np.array([strengths[n]]),
-        coords_list=geom_to_coords_list(coords))
+        cp_dist=cp, cl=cl, cd_ind=0.0, cd_visc=cd_wake,
+        cm_le=cm_le, cm_qc=cm_qc,
+        sources=v_n_solved, gamma=strengths,
+        coords_list=geom_to_coords_list(coords), panels=geom)
     return VIIResult(solution=sol, converged=converged, iterations=it,
                      residual=float(residual), cd_wake=float(cd_wake),
                      delta_star=delta_star, transpiration=v_n)

@@ -31,8 +31,8 @@ Scope and honesty
   BL under prescribed u_e becomes ill-posed and the iteration will stall or
   refuse to converge. Capturing large separation bubbles needs the inverse /
   simultaneous-Newton formulation, which is the documented follow-on.
-* Single body. Uses the validated NumPy inviscid core and the integral BL in
-  ``bl_integral``.
+* Single body. Uses the inviscid core (:mod:`foil_lab.inviscid`), where the transpiration
+  enters as known equivalent sources (Lighthill 1958), and the integral BL in ``bl_integral``.
 """
 
 from __future__ import annotations
@@ -41,12 +41,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import inviscid as core
 from .bl_integral import march_boundary_layer
 from .corrections import karman_tsien_correction
-from .forces import integrate_loads
-from .influence import LinearVortexModel
-from .panels import build_panels
-from .solver import SolutionData, geom_to_coords_list
+from .solver import SolutionData, geom_to_coords_list, loads_from_cp
 
 
 @dataclass
@@ -60,35 +58,16 @@ class VIIResult:
     transpiration: np.ndarray
 
 
-def _inviscid_with_transpiration(geom, coeffs, alpha_rad, v_n, v_inf=1.0):
-    """Solve the panel system with an added wall transpiration source v_n.
+def _inviscid_with_transpiration(ps, alpha_rad, v_n, v_inf=1.0, assembly=None):
+    """Solve the core with a wall transpiration v_n (outward normal velocity per panel).
 
-    v_n is a per-panel wall-normal velocity (the displacement blowing). It enters
-    the flow-tangency RHS: instead of requiring zero normal velocity, we require
-    the normal velocity to equal v_n.
+    v_n enters the core as a known source strength per panel, so the boundary condition is
+    "outward normal velocity = v_n" (:func:`foil_lab.inviscid.solve`). Returns the nodal vortex
+    strengths and the tangential edge velocity (solver direction) scaled by ``v_inf``.
+    ``assembly`` (``core.assemble(ps, sources=True)``) avoids rebuilding the matrices.
     """
-    n = geom.num_panels
-    theta = geom.theta
-
-    Vn_body = np.sum(coeffs.V_n, axis=1, keepdims=True)
-    Vt_body = np.sum(coeffs.V_t, axis=1, keepdims=True)
-
-    A = np.zeros((n + 1, n + 1))
-    rhs = np.zeros(n + 1)
-
-    A[:n, :n] = coeffs.S_n
-    A[:n, n] = Vn_body[:, 0]
-    # RHS: freestream normal + transpiration source.
-    rhs[:n] = np.sin(theta - alpha_rad) + v_n
-
-    A[n, :n] = coeffs.S_t[0, :] + coeffs.S_t[n - 1, :]
-    A[n, n] = Vt_body[0, 0] + Vt_body[n - 1, 0]
-    rhs[n] = -(np.cos(theta[0] - alpha_rad) + np.cos(theta[n - 1] - alpha_rad))
-
-    strengths = np.linalg.solve(A, rhs)
-    vt = np.cos(theta - alpha_rad) + coeffs.S_t @ strengths[:n] + Vt_body[:, 0] * strengths[n]
-    vt *= v_inf
-    return strengths, vt
+    sol = core.solve(ps, float(np.rad2deg(alpha_rad)), source_strength=v_n, assembly=assembly)
+    return np.asarray(sol.gamma), np.asarray(sol.vt) * v_inf
 
 
 def _split_surfaces(geom, vt):
@@ -129,8 +108,8 @@ def solve_vii(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
     trip_x : optional explicit transition x/c (applied to both surfaces).
     """
     alpha_rad = np.deg2rad(alpha_deg)
-    geom = build_panels(coords)
-    coeffs = LinearVortexModel().compute(geom)
+    geom = core.PanelSet.from_bodies(coords)
+    asm = core.assemble(geom, sources=True)
     n = geom.num_panels
 
     v_n = np.zeros(n)             # transpiration, starts at zero (inviscid)
@@ -149,7 +128,8 @@ def solve_vii(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
         return out
 
     for it in range(1, max_iter + 1):
-        strengths, vt = _inviscid_with_transpiration(geom, coeffs, alpha_rad, v_n, v_inf)
+        strengths, vt = _inviscid_with_transpiration(geom, alpha_rad, v_n, v_inf, asm)
+        v_n_solved = v_n.copy()     # the transpiration that produced (strengths, vt)
 
         idx_a, s_a, ue_a, idx_b, s_b, ue_b, stag = _split_surfaces(geom, vt)
 
@@ -212,7 +192,7 @@ def solve_vii(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
     # Final loads from the converged (viscous) pressure field.
     cp_inc = 1.0 - (vt / v_inf) ** 2
     cp = karman_tsien_correction(cp_inc, mach)
-    loads = integrate_loads(geom, cp, alpha_rad, body_index=None)
+    cl, cm_le, cm_qc = loads_from_cp(geom, cp, alpha_deg)
 
     # Squire-Young profile drag from the TE momentum thickness & shape factor:
     # cd = 2 * theta_TE * (ue_TE)^((H_TE+5)/2), summed over both surfaces.
@@ -225,10 +205,10 @@ def solve_vii(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
 
     sol = SolutionData(
         alpha_deg=alpha_deg, mach=mach, reynolds=reynolds, aspect_ratio=0.0,
-        cp_dist=cp, cl=loads.cl, cd_ind=0.0, cd_visc=cd_wake,
-        cm_le=loads.cm_le, cm_qc=loads.cm_qc,
-        sources=strengths[:n], gamma=np.array([strengths[n]]),
-        coords_list=geom_to_coords_list(coords),
+        cp_dist=cp, cl=cl, cd_ind=0.0, cd_visc=cd_wake,
+        cm_le=cm_le, cm_qc=cm_qc,
+        sources=v_n_solved, gamma=strengths,
+        coords_list=geom_to_coords_list(coords), panels=geom,
     )
     return VIIResult(solution=sol, converged=converged, iterations=it,
                      residual=float(residual), cd_wake=float(cd_wake),

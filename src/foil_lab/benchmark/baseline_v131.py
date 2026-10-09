@@ -96,7 +96,7 @@ def _oneway(coords: np.ndarray, alpha: float, reynolds: float) -> dict:
 def _coupled(coords: np.ndarray, alpha: float, reynolds: float, newton: bool,
              bench: BenchmarkParams) -> dict:
     from .. import vii, vii_newton
-    from ..panels import build_panels
+    from ..inviscid import PanelSet
 
     mod = vii_newton if newton else vii
     calls: dict = {"split": [], "prof": []}
@@ -124,7 +124,7 @@ def _coupled(coords: np.ndarray, alpha: float, reynolds: float, newton: bool,
         else:
             r = vii.solve_vii(coords, alpha, reynolds=reynolds, max_iter=bench.vii_max_iter,
                               tol=bench.vii_tol, transition_model="en", n_crit=9.0)
-    g = build_panels(coords)
+    g = PanelSet.from_bodies(coords)
     (ia, ib), (ta, tb) = calls["split"][-1], calls["prof"][-2:]
     xt, xb = _branch_xtr(g.mid_x, g.mid_y, [(ia, ta), (ib, tb)])
     return dict(converged="1" if r.converged else "0", cl=r.solution.cl, cd=r.cd_wake,

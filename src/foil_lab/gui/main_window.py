@@ -463,8 +463,8 @@ class FoilLabMainWindow(QMainWindow):
         strm = ax_flow.streamplot(X, Y, U, V, color=speed, cmap='jet', 
                                   linewidth=1.2, density=1.5, arrowsize=1.0)
         
-        # Overlay all solid airfoil geometries
-        for body in self.panelled_bodies:
+        # Overlay the solved bodies (for ground effect: pitched and raised above the wall)
+        for body in sol.coords_list:
             ax_flow.fill(body[:,0], body[:,1], color='gray', zorder=5)
             ax_flow.plot(body[:,0], body[:,1], color='black', linewidth=1.5, zorder=6)
         

@@ -1,6 +1,6 @@
 """Core solver tests: orientation-independence, symmetry, and lift slope.
 
-These lock in the physics fix (Hess--Smith core). If the lumped-vortex
+These lock in the physics of the inviscid core (foil_lab.inviscid). If a lumped-vortex style
 regression ever returns, the symmetry and slope assertions fail loudly.
 """
 
@@ -9,7 +9,7 @@ import pytest
 
 from foil_lab.generators import generate_naca4
 from foil_lab.solver import solve_flow
-from foil_lab.panels import build_panels, ensure_cw, _signed_area
+from foil_lab import inviscid as core
 
 
 def test_symmetric_airfoil_zero_lift_at_zero_alpha():
@@ -51,22 +51,18 @@ def test_near_field_matches_circulation():
     Circulation is the closed-loop integral of tangential velocity around the
     surface, Gamma = -∮ V_t ds (sign per traversal). Cl = 2*Gamma / (V_inf * c).
     """
-    from foil_lab.influence import LinearVortexModel
-    from foil_lab.linear_system import assemble_and_solve
     af = generate_naca4("2412", 240)
     sol = solve_flow(af, 5.0)
-    geom = build_panels(af)
-    coeffs = LinearVortexModel().compute(geom)
-    flow = assemble_and_solve(geom, coeffs, np.deg2rad(5.0), 1.0)
-    gamma_total = np.sum(flow.vt_total * geom.lengths)
+    gamma_total = float(core.solve(core.PanelSet.from_bodies(af), 5.0).circulation[0])
     cl_kj = 2.0 * gamma_total
     assert abs(abs(cl_kj) - abs(sol.cl)) < 0.05
 
 
 def test_panels_are_clockwise():
     af = generate_naca4("0012", 80)  # generator emits CCW
-    cw = ensure_cw(af)
-    assert _signed_area(cw) < 0.0
+    ps = core.PanelSet.from_bodies(af)
+    assert ps.reversed_input[0]
+    assert core._signed_area(np.column_stack([ps.node_x, ps.node_y])) < 0.0
 
 
 def test_stagnation_cp_near_one():

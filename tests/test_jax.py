@@ -33,10 +33,9 @@ def test_symmetric_zero_lift_jax():
 
 @pytest.mark.slow
 def test_autodiff_matches_finite_difference():
-    import jax.numpy as jnp
     from foil_lab import jax_core
-    cw = jnp.asarray(jax_core.ensure_cw_static(generate_naca4("2412", 200)))
-    a0 = jnp.deg2rad(5.0)
+    cw = jax_core.ensure_cw_static(generate_naca4("2412", 200))
+    a0 = np.deg2rad(5.0)
     dcl = float(jax_core.dcl_dalpha(cw, a0))
     h = 1e-6
     fd = float((jax_core.cl_of_alpha(cw, a0 + h)
@@ -46,23 +45,21 @@ def test_autodiff_matches_finite_difference():
 
 @pytest.mark.slow
 def test_geometry_gradient_shape_and_fd():
-    import jax.numpy as jnp
     from foil_lab import jax_core
     af = generate_naca4("2412", 120)
     cw = jax_core.ensure_cw_static(af)
-    a0 = jnp.deg2rad(5.0)
-    g = jax_core.dcl_dgeom(jnp.asarray(cw), a0)
+    a0 = np.deg2rad(5.0)
+    g = jax_core.dcl_dgeom(cw, a0)
     assert g.shape == cw.shape
     # FD spot-check one node's y-sensitivity.
     i = 30
-    base = float(jax_core.cl_of_alpha(jnp.asarray(cw), a0))
+    base = float(jax_core.cl_of_alpha(cw, a0))
     pert = cw.copy(); pert[i, 1] += 1e-6
-    fd = (float(jax_core.cl_of_alpha(jnp.asarray(pert), a0)) - base) / 1e-6
+    fd = (float(jax_core.cl_of_alpha(pert, a0)) - base) / 1e-6
     assert abs(float(g[i, 1]) - fd) < 1e-2
 
 
 def test_vmap_batch_matches_loop():
-    import jax.numpy as jnp
     from foil_lab import jax_core
     af = generate_naca4("2412", 160)
     alphas = np.linspace(-5, 12, 18)
@@ -84,3 +81,12 @@ def test_jax_batch_path():
     rows = run_batch_jax(afs, np.linspace(-4, 10, 15))
     assert len(rows) == 30
     assert all(r["converged"] for r in rows)
+
+
+def test_jax_core_leaves_global_x64_unchanged():
+    import jax
+    from foil_lab import jax_core
+    before = jax.config.x64_enabled
+    jax_core.batch_polar(generate_naca4("2412", 120), [0.0, 4.0])
+    jax_core.dcl_dalpha(jax_core.ensure_cw_static(generate_naca4("2412", 120)), 0.05)
+    assert jax.config.x64_enabled == before

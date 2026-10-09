@@ -51,25 +51,26 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import inviscid as core
 from .bl_integral import march_boundary_layer
-from .influence import LinearVortexModel
-from .panels import build_panels
 from .vii import (_inviscid_with_transpiration, _split_surfaces,
                   VIIResult)
 
 
-def _build_sensitivity_matrix(geom, coeffs, alpha_rad, v_inf=1.0):
+def _build_sensitivity_matrix(geom, alpha_rad, v_inf=1.0, assembly=None):
     """Exact constant matrix D mapping transpiration v_n -> edge velocity vt.
 
     Because the panel system is linear, vt = vt0 + D @ v_n exactly. Built by
     n one-time linear solves.
     """
     n = geom.num_panels
-    _, vt0 = _inviscid_with_transpiration(geom, coeffs, alpha_rad, np.zeros(n), v_inf)
+    if assembly is None:
+        assembly = core.assemble(geom, sources=True)
+    _, vt0 = _inviscid_with_transpiration(geom, alpha_rad, np.zeros(n), v_inf, assembly)
     D = np.zeros((n, n))
     for j in range(n):
         e = np.zeros(n); e[j] = 1.0
-        _, vt_j = _inviscid_with_transpiration(geom, coeffs, alpha_rad, e, v_inf)
+        _, vt_j = _inviscid_with_transpiration(geom, alpha_rad, e, v_inf, assembly)
         D[:, j] = vt_j - vt0
     return vt0, D
 
@@ -129,16 +130,15 @@ def solve_vii_newton(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
         stacklevel=2,
     )
     from .corrections import karman_tsien_correction
-    from .forces import integrate_loads
-    from .solver import SolutionData, geom_to_coords_list
+    from .solver import SolutionData, geom_to_coords_list, loads_from_cp
 
     alpha_rad = np.deg2rad(alpha_deg)
-    geom = build_panels(coords)
-    coeffs = LinearVortexModel().compute(geom)
+    geom = core.PanelSet.from_bodies(coords)
+    asm = core.assemble(geom, sources=True)
     n = geom.num_panels
 
     # Exact constant inviscid sensitivity.
-    vt0, D = _build_sensitivity_matrix(geom, coeffs, alpha_rad, v_inf)
+    vt0, D = _build_sensitivity_matrix(geom, alpha_rad, v_inf, asm)
 
     def ue_of_vn(v_n):
         return vt0 + D @ v_n
@@ -205,7 +205,7 @@ def solve_vii_newton(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
 
     cp_inc = 1.0 - (vt / v_inf) ** 2
     cp = karman_tsien_correction(cp_inc, mach)
-    loads = integrate_loads(geom, cp, alpha_rad, body_index=None)
+    cl, cm_le, cm_qc = loads_from_cp(geom, cp, alpha_deg)
 
     def squire_young(prof, ue_arr):
         H_te = prof.H[-1]
@@ -219,10 +219,11 @@ def solve_vii_newton(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
 
     sol = SolutionData(
         alpha_deg=alpha_deg, mach=mach, reynolds=reynolds, aspect_ratio=0.0,
-        cp_dist=cp, cl=loads.cl, cd_ind=0.0, cd_visc=cd_wake,
-        cm_le=loads.cm_le, cm_qc=loads.cm_qc,
-        sources=np.zeros(n), gamma=np.array([0.0]),
-        coords_list=geom_to_coords_list(coords))
+        cp_dist=cp, cl=cl, cd_ind=0.0, cd_visc=cd_wake,
+        cm_le=cm_le, cm_qc=cm_qc,
+        sources=np.asarray(v_n, dtype=float).copy(),
+        gamma=_inviscid_with_transpiration(geom, alpha_rad, v_n, v_inf, asm)[0],
+        coords_list=geom_to_coords_list(coords), panels=geom)
     return VIIResult(solution=sol, converged=converged, iterations=it,
                      residual=float(res_norm), cd_wake=float(cd_wake),
                      delta_star=delta_star, transpiration=v_n)

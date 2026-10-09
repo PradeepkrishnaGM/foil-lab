@@ -60,6 +60,17 @@ import numpy as np
 
 _TWO_PI = 2.0 * np.pi
 
+#: A trailing-edge gap shorter than this fraction of the body's size counts as closed.
+CLOSED_GAP_FRACTION = 1e-10
+
+
+def _ns(a: Any) -> Any:
+    """Array namespace of ``a``: ``jax.numpy`` for JAX arrays and tracers, else ``numpy``."""
+    if type(a).__module__.split(".")[0] in ("jax", "jaxlib"):
+        import jax.numpy as jnp
+        return jnp
+    return np
+
 
 def _signed_area(c: np.ndarray) -> float:
     x, y = c[:, 0], c[:, 1]
@@ -88,6 +99,7 @@ class PanelSet:
     body_panels: tuple[slice, ...]
     body_nodes: tuple[slice, ...]
     reversed_input: tuple[bool, ...]
+    open_te: tuple[bool, ...] = ()
 
     @property
     def num_panels(self) -> int:
@@ -103,11 +115,13 @@ class PanelSet:
 
     @property
     def lengths(self) -> np.ndarray:
-        return np.hypot(self.x2 - self.x1, self.y2 - self.y1)
+        xp = _ns(self.x1)
+        return xp.hypot(self.x2 - self.x1, self.y2 - self.y1)
 
     @property
     def theta(self) -> np.ndarray:
-        return np.arctan2(self.y2 - self.y1, self.x2 - self.x1)
+        xp = _ns(self.x1)
+        return xp.arctan2(self.y2 - self.y1, self.x2 - self.x1)
 
     @property
     def mid_x(self) -> np.ndarray:
@@ -121,13 +135,15 @@ class PanelSet:
     def normal(self) -> tuple[np.ndarray, np.ndarray]:
         """Outward unit normal of every panel."""
         t = self.theta
-        return -np.sin(t), np.cos(t)
+        xp = _ns(t)
+        return -xp.sin(t), xp.cos(t)
 
     @property
     def tangent(self) -> tuple[np.ndarray, np.ndarray]:
         """Unit tangent in the (clockwise) solver direction."""
         t = self.theta
-        return np.cos(t), np.sin(t)
+        xp = _ns(t)
+        return xp.cos(t), xp.sin(t)
 
     @classmethod
     def from_bodies(cls, bodies: np.ndarray | Sequence[np.ndarray]) -> "PanelSet":
@@ -135,7 +151,7 @@ class PanelSet:
         if isinstance(bodies, np.ndarray) and bodies.ndim == 2:
             bodies = [bodies]
         xs1, ys1, xs2, ys2, nxs, nys, sn, en = [], [], [], [], [], [], [], []
-        bp, bn, rev = [], [], []
+        bp, bn, rev, ote = [], [], [], []
         p0 = n0 = 0
         for b in bodies:
             c = np.asarray(b, dtype=float)
@@ -149,11 +165,30 @@ class PanelSet:
             nxs.append(c[:, 0]); nys.append(c[:, 1])
             sn.append(n0 + np.arange(n)); en.append(n0 + np.arange(1, n + 1))
             bp.append(slice(p0, p0 + n)); bn.append(slice(n0, n0 + n + 1)); rev.append(bool(r))
+            ote.append(has_open_te(c))
             p0 += n
             n0 += n + 1
         cat = np.concatenate
         return cls(cat(xs1), cat(ys1), cat(xs2), cat(ys2), cat(nxs), cat(nys), cat(sn), cat(en),
-                   tuple(bp), tuple(bn), tuple(rev))
+                   tuple(bp), tuple(bn), tuple(rev), tuple(ote))
+
+    @classmethod
+    def from_clockwise_nodes(cls, nodes: Any, open_te: bool) -> "PanelSet":
+        """One body from clockwise nodes without inspecting their values (traceable by JAX).
+
+        ``open_te`` must be decided beforehand from concrete coordinates (:func:`has_open_te`).
+        """
+        n = nodes.shape[0] - 1
+        return cls(nodes[:-1, 0], nodes[:-1, 1], nodes[1:, 0], nodes[1:, 1], nodes[:, 0],
+                   nodes[:, 1], np.arange(n), np.arange(1, n + 1), (slice(0, n),),
+                   (slice(0, n + 1),), (False,), (bool(open_te),))
+
+
+def has_open_te(nodes: np.ndarray) -> bool:
+    """True if the first and last nodes are farther apart than CLOSED_GAP_FRACTION of the size."""
+    c = np.asarray(nodes, dtype=float)
+    size = max(np.ptp(c[:, 0]), np.ptp(c[:, 1]))
+    return bool(np.hypot(*(c[0] - c[-1])) > CLOSED_GAP_FRACTION * size)
 
 
 def panel_velocity(xp: Any, px, py, x1, y1, x2, y2, self_mask=None):
@@ -279,41 +314,37 @@ class TrailingEdgePanels:
 
     @property
     def lengths(self) -> np.ndarray:
-        return np.hypot(self.x2 - self.x1, self.y2 - self.y1)
-
-
-#: A trailing-edge gap shorter than this fraction of the body's size counts as closed.
-CLOSED_GAP_FRACTION = 1e-10
+        return _ns(self.x1).hypot(self.x2 - self.x1, self.y2 - self.y1)
 
 
 def trailing_edge_panels(ps: PanelSet) -> TrailingEdgePanels:
-    """Trailing-edge panel geometry for every body whose first and last nodes differ."""
-    rows = []
-    for k, (sp, sn) in enumerate(zip(ps.body_panels, ps.body_nodes)):
-        first, last = sn.start, sn.stop - 1
-        xa, ya = ps.node_x[last], ps.node_y[last]
-        xb, yb = ps.node_x[first], ps.node_y[first]
-        size = max(np.ptp(ps.node_x[sn]), np.ptp(ps.node_y[sn]))
-        gap = np.hypot(xb - xa, yb - ya)
-        if gap <= CLOSED_GAP_FRACTION * size:
-            continue
-        # s: bisector of the trailing-edge angle, pointing downstream (Drela 1989, Fig. 1)
-        j0, j1 = sp.start, sp.stop - 1
-        t0 = np.array([ps.x2[j0] - ps.x1[j0], ps.y2[j0] - ps.y1[j0]])
-        t1 = np.array([ps.x2[j1] - ps.x1[j1], ps.y2[j1] - ps.y1[j1]])
-        sv = t1 / np.hypot(*t1) - t0 / np.hypot(*t0)
-        sv = sv / np.hypot(*sv)
-        tt = np.array([xb - xa, yb - ya]) / gap
-        nn = np.array([-tt[1], tt[0]])          # outward normal, same rule as the body panels
-        c = np.zeros(ps.num_nodes)
-        c[first], c[last] = 0.5, -0.5
-        rows.append((k, xa, ya, xb, yb, float(sv @ nn), float(sv @ tt), c))
-    if not rows:
+    """Trailing-edge panel geometry for every body with an open trailing edge (``ps.open_te``)."""
+    xp = _ns(ps.x1)
+    bodies = [k for k, o in enumerate(ps.open_te) if o]
+    if not bodies:
         e = np.zeros(0)
         return TrailingEdgePanels(np.zeros(0, dtype=int), e, e, e, e, e, e, np.zeros((0, ps.num_nodes)))
-    k, xa, ya, xb, yb, dn, dt, c = zip(*rows)
-    return TrailingEdgePanels(np.array(k), np.array(xa), np.array(ya), np.array(xb), np.array(yb),
-                              np.array(dn), np.array(dt), np.stack(c))
+    first = np.array([ps.body_nodes[k].start for k in bodies])
+    last = np.array([ps.body_nodes[k].stop - 1 for k in bodies])
+    j0 = np.array([ps.body_panels[k].start for k in bodies])
+    j1 = np.array([ps.body_panels[k].stop - 1 for k in bodies])
+    xa, ya = ps.node_x[last], ps.node_y[last]
+    xb, yb = ps.node_x[first], ps.node_y[first]
+    # s: bisector of the trailing-edge angle, pointing downstream (Drela 1989, Fig. 1)
+    t0x, t0y = ps.x2[j0] - ps.x1[j0], ps.y2[j0] - ps.y1[j0]
+    t1x, t1y = ps.x2[j1] - ps.x1[j1], ps.y2[j1] - ps.y1[j1]
+    l0, l1 = xp.hypot(t0x, t0y), xp.hypot(t1x, t1y)
+    sx, sy = t1x / l1 - t0x / l0, t1y / l1 - t0y / l0
+    ls = xp.hypot(sx, sy)
+    sx, sy = sx / ls, sy / ls
+    gap = xp.hypot(xb - xa, yb - ya)
+    tx, ty = (xb - xa) / gap, (yb - ya) / gap
+    nx, ny = -ty, tx                          # outward normal, same rule as the body panels
+    coupling = np.zeros((len(bodies), ps.num_nodes))
+    coupling[np.arange(len(bodies)), first] = 0.5
+    coupling[np.arange(len(bodies)), last] = -0.5
+    return TrailingEdgePanels(np.array(bodies), xa, ya, xb, yb, sx * nx + sy * ny,
+                              sx * tx + sy * ty, coupling)
 
 
 def _te_velocity(xp: Any, te: TrailingEdgePanels, px, py):
@@ -370,8 +401,45 @@ class InviscidSolution:
     matrix: Any = field(repr=False, default=None)
 
 
+@dataclass
+class Assembly:
+    """The alpha-independent part of the system for one panel set, built once and reused.
+
+    ``matrix``: Neumann rows (N, M) stacked on the Kutta rows (nb, M); ``at``: tangential
+    induced velocity per nodal strength (N, M); ``sn``, ``st``: normal and tangential velocity
+    per unit panel source strength (N, N), present when built with ``sources=True``.
+    """
+
+    panels: PanelSet
+    matrix: Any
+    at: Any
+    sn: Any = None
+    st: Any = None
+
+
+def _source_matrices(ps: PanelSet, xp: Any):
+    nx, ny = (xp.asarray(v) for v in ps.normal)
+    tx, ty = (xp.asarray(v) for v in ps.tangent)
+    x1, y1, x2, y2 = (xp.asarray(v) for v in (ps.x1, ps.y1, ps.x2, ps.y2))
+    mx, my = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
+    su, sv = source_panel_velocity(xp, mx, my, x1, y1, x2, y2,
+                                   self_mask=xp.asarray(np.eye(ps.num_panels, dtype=bool)))
+    return su * nx[:, None] + sv * ny[:, None], su * tx[:, None] + sv * ty[:, None]
+
+
+def assemble(ps: PanelSet, xp: Any = np, sources: bool = False) -> Assembly:
+    """Build the influence matrices of ``ps`` once (for repeated solves, e.g. VII iterations)."""
+    an, at = influence_matrices(ps, xp)
+    _, _, kutta = _node_maps(ps)
+    mat = xp.concatenate([an, xp.asarray(kutta)], axis=0)
+    sn = st = None
+    if sources:
+        sn, st = _source_matrices(ps, xp)
+    return Assembly(ps, mat, at, sn, st)
+
+
 def solve(ps: PanelSet, alpha_deg: float, source_strength=None, xp: Any = np,
-          keep_matrix: bool = False) -> InviscidSolution:
+          keep_matrix: bool = False, assembly: Assembly | None = None) -> InviscidSolution:
     """Solve the panel system for freestream angle ``alpha_deg`` (degrees, unit speed).
 
     ``source_strength`` (N), if given, is a known constant source strength per panel, used to
@@ -385,9 +453,12 @@ def solve(ps: PanelSet, alpha_deg: float, source_strength=None, xp: Any = np,
     velocity at a panel midpoint is therefore taken as the mean of its two nodal strengths. On the
     Kármán-Trefftz test this read-out converges at second order, whereas the induced-velocity sum
     at the midpoints (kept as ``vt_induced``) converges at first order (DECISIONS.md, M2).
+
+    ``assembly`` (from :func:`assemble` on the same panel set) skips rebuilding the matrices.
     """
-    an, at = influence_matrices(ps, xp)
-    _, _, kutta = _node_maps(ps)
+    if assembly is None:
+        assembly = assemble(ps, xp)
+    mat, at = assembly.matrix, assembly.at
     a = xp.deg2rad(alpha_deg) if xp is not np else np.deg2rad(alpha_deg)
     nx, ny = (xp.asarray(v) for v in ps.normal)
     tx, ty = (xp.asarray(v) for v in ps.tangent)
@@ -397,16 +468,12 @@ def solve(ps: PanelSet, alpha_deg: float, source_strength=None, xp: Any = np,
     vt_src = 0.0
     if source_strength is not None:
         sig = xp.asarray(source_strength)
-        x1, y1, x2, y2 = (xp.asarray(v) for v in (ps.x1, ps.y1, ps.x2, ps.y2))
-        mx, my = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
-        su, sv = source_panel_velocity(xp, mx, my, x1, y1, x2, y2,
-                                       self_mask=xp.asarray(np.eye(ps.num_panels, dtype=bool)))
-        sn = su * nx[:, None] + sv * ny[:, None]
-        st = su * tx[:, None] + sv * ty[:, None]
+        sn, st = assembly.sn, assembly.st
+        if sn is None:
+            sn, st = _source_matrices(ps, xp)
         # outer-side normal velocity must equal sigma: (vinf + vortex + sources) . n = sigma
         rhs_n = sig - vinf_n - sn @ sig
         vt_src = st @ sig
-    mat = xp.concatenate([an, xp.asarray(kutta)], axis=0)
     rhs = xp.concatenate([rhs_n, xp.zeros(ps.num_bodies)])
     gamma = xp.linalg.solve(mat, rhs)
     gs, ge = xp.asarray(ps.start_node), xp.asarray(ps.end_node)
@@ -457,21 +524,39 @@ class BodyLoads:
     cm: float
 
 
+def pressure_loads(ps: PanelSet, cp, alpha_deg, bodies=None, ref_chord: float = 1.0,
+                   ref_point: tuple[float, float] = (0.25, 0.0)):
+    """Integrate a panel Cp distribution into (cl, cd, cm), in the namespace of ``cp``.
+
+    ``bodies``: None for all panels, an int, or a sequence of body indices. ``cm`` is about
+    ``ref_point``, nose-up positive. The trailing-edge panel of an open trailing edge carries no
+    pressure (it is not a wall).
+    """
+    xp = _ns(cp)
+    if bodies is None:
+        idx = np.arange(ps.num_panels)
+    else:
+        ks = [bodies] if isinstance(bodies, (int, np.integer)) else list(bodies)
+        idx = np.concatenate([np.arange(ps.body_panels[k].start, ps.body_panels[k].stop) for k in ks])
+    nx, ny = (xp.asarray(v)[idx] for v in ps.normal)
+    ln = xp.asarray(ps.lengths)[idx]
+    c = xp.asarray(cp)[idx]
+    fx = -c * nx * ln
+    fy = -c * ny * ln
+    a = xp.deg2rad(alpha_deg)
+    cl = (xp.sum(fy) * xp.cos(a) - xp.sum(fx) * xp.sin(a)) / ref_chord
+    cd = (xp.sum(fx) * xp.cos(a) + xp.sum(fy) * xp.sin(a)) / ref_chord
+    rx = xp.asarray(ps.mid_x)[idx] - ref_point[0]
+    ry = xp.asarray(ps.mid_y)[idx] - ref_point[1]
+    cm = -xp.sum(rx * fy - ry * fx) / ref_chord ** 2
+    return cl, cd, cm
+
+
 def body_loads(sol: InviscidSolution, body: int, ref_chord: float = 1.0,
                ref_point: tuple[float, float] = (0.25, 0.0)) -> BodyLoads:
     """Integrate the surface pressure of one body into lift, pressure drag and moment."""
-    ps = sol.panels
-    sl = ps.body_panels[body]
-    cp = np.asarray(sol.cp)[sl]
-    nx, ny = (v[sl] for v in ps.normal)
-    ln = ps.lengths[sl]
-    fx = -cp * nx * ln
-    fy = -cp * ny * ln
-    a = np.deg2rad(sol.alpha_deg)
-    cl = (np.sum(fy) * np.cos(a) - np.sum(fx) * np.sin(a)) / ref_chord
-    cd = (np.sum(fx) * np.cos(a) + np.sum(fy) * np.sin(a)) / ref_chord
-    rx, ry = ps.mid_x[sl] - ref_point[0], ps.mid_y[sl] - ref_point[1]
-    cm = -np.sum(rx * fy - ry * fx) / ref_chord ** 2
+    cl, cd, cm = pressure_loads(sol.panels, np.asarray(sol.cp), sol.alpha_deg, body, ref_chord,
+                                ref_point)
     return BodyLoads(float(cl), float(cd), float(cm))
 
 

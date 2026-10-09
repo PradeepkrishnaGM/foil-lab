@@ -13,22 +13,20 @@ import pytest
 from foil_lab.generators import generate_naca4
 from foil_lab.vii import solve_vii
 from foil_lab.vii_newton import solve_vii_newton, _build_sensitivity_matrix
-from foil_lab.panels import build_panels
-from foil_lab.influence import LinearVortexModel
+from foil_lab.inviscid import PanelSet
 
 
 def test_sensitivity_matrix_is_exact_affine():
     """vt = vt0 + D @ v_n must hold to machine precision (linear system)."""
     af = generate_naca4("2412", 80)
-    geom = build_panels(af)
-    coeffs = LinearVortexModel().compute(geom)
+    geom = PanelSet.from_bodies(af)
     n = geom.num_panels
     ar = np.deg2rad(4.0)
-    vt0, D = _build_sensitivity_matrix(geom, coeffs, ar)
+    vt0, D = _build_sensitivity_matrix(geom, ar)
     from foil_lab.vii import _inviscid_with_transpiration
     rng = np.random.default_rng(0)
     vn = rng.normal(0, 0.05, n)
-    _, vt_actual = _inviscid_with_transpiration(geom, coeffs, ar, vn)
+    _, vt_actual = _inviscid_with_transpiration(geom, ar, vn)
     assert np.max(np.abs(vt0 + D @ vn - vt_actual)) < 1e-10
 
 
