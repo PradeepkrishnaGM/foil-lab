@@ -7,9 +7,29 @@
   pressure about (0.25, 0). v1.3.1 used `cm_le + 0.25 * cl`, which mixes lift and normal force
   (about 4e-3 different at Cl 1.5 and 10 deg).
 
+* All potential-flow solves go through one inviscid core (`foil_lab.inviscid`, linear-strength
+  vortex panels): `solve_flow`, the three VII variants, the flow field, ground effect and the
+  JAX entry points. Results change accordingly (see DECISIONS.md, M2).
+* Open trailing edges carry a trailing-edge panel (Drela 1989, eq. 2); closed (sharp) trailing
+  edges use Drela's eq. (9) with the Kutta condition imposed exactly.
+* Ground effect: the section is pitched by alpha about its quarter chord and raised by `height`
+  in a stream parallel to the ground (v1.3.1 inclined the stream, which crossed the wall). The
+  returned `alpha_deg` is 0 (the stream direction) and `coords_list` holds the pitched, raised
+  section.
+* `SolutionData.gamma` holds the nodal vortex strengths, `sources` the known panel sources
+  (transpiration), and a new field `panels` the panel set.
+* `compute_velocity_field` uses the solution's own singularities and a true inside-body test.
+* `jax_core` no longer switches JAX's global float64 setting on import; each call runs in a
+  scoped float64 context and takes NumPy arrays.
+* `python -m foil_lab.benchmark report` no longer rewrites `docs/baseline_v1.3.1.md`; use the
+  new `baseline-doc` command.
+
 ### Removed
 * `foil_lab.panels` (`build_panels`, `PanelGeometry`, `ensure_cw`): replaced by
   `foil_lab.inviscid.PanelSet`.
+* `foil_lab.influence`, `foil_lab.linear_system`, `foil_lab.forces` (the Hess-Smith kernels,
+  the private assembly and the old load integration), and the `influence_model` argument of
+  `solve_flow`.
 
 ## v1.3 — Low-Re VII: simultaneous Newton coupling (partial success)
 

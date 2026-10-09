@@ -30,6 +30,17 @@ the last node to the first, and with the flow inside the body at rest the jump c
 the panel give sigma_TE = q (s . n) and gamma_TE = -q (s . t) in this module's sign convention,
 whose magnitudes are those of eq. (2). See DECISIONS.md, M2.
 
+Closed (sharp) trailing edge: when the first and last nodes of a body coincide, the two
+trailing-edge nodal strengths are poorly determined by the midpoint conditions (a near-null
+mode in which both flip sign while the Kutta condition still holds). Following Drela (1989),
+page 3, eq. (9), the mean strength between top and bottom is extrapolated linearly to the
+trailing edge: (gamma_3 - 2 gamma_2 + gamma_1) - (gamma_{N-2} - 2 gamma_{N-1} + gamma_N) = 0.
+Drela imposes it in place of one of two identical nodal streamfunction equations. The midpoint
+Neumann method has no identical pair, so here (our own adaptation, DECISIONS.md M2) the Kutta
+condition and eq. (9) are imposed exactly by eliminating gamma_first and gamma_last, and the N
+Neumann equations of the system are solved in least squares for the remaining unknowns. Bodies
+with an open trailing edge keep the exact square system.
+
 References: J. L. Kuethe and C.-Y. Chow, *Foundations of Aerodynamics*, 5th ed., Wiley (1998),
 section 5.10 (vortex panel method with linearly varying strength); J. Katz and A. Plotkin,
 *Low-Speed Aerodynamics*, 2nd ed., Cambridge University Press (2001), sections 10.3-10.4 (linear
@@ -405,9 +416,13 @@ class InviscidSolution:
 class Assembly:
     """The alpha-independent part of the system for one panel set, built once and reused.
 
-    ``matrix``: Neumann rows (N, M) stacked on the Kutta rows (nb, M); ``at``: tangential
-    induced velocity per nodal strength (N, M); ``sn``, ``st``: normal and tangential velocity
-    per unit panel source strength (N, N), present when built with ``sources=True``.
+    ``matrix``: without closed trailing edges, the Neumann rows (N, M) stacked on the Kutta rows
+    (nb, M), solved exactly; with at least one closed trailing edge, the Neumann rows times
+    ``elimination`` (N, K), solved in least squares. ``elimination`` (M, K) maps the free unknowns
+    to all nodal strengths with the Kutta condition (every body) and Drela's eq. (9) (closed
+    bodies) built in; None when no body is closed. ``at``: tangential induced velocity per nodal
+    strength (N, M); ``sn``, ``st``: normal and tangential velocity per unit panel source
+    strength (N, N), present when built with ``sources=True``.
     """
 
     panels: PanelSet
@@ -415,6 +430,7 @@ class Assembly:
     at: Any
     sn: Any = None
     st: Any = None
+    elimination: Any = None
 
 
 def _source_matrices(ps: PanelSet, xp: Any):
@@ -427,15 +443,57 @@ def _source_matrices(ps: PanelSet, xp: Any):
     return su * nx[:, None] + sv * ny[:, None], su * tx[:, None] + sv * ty[:, None]
 
 
+def trailing_edge_elimination(ps: PanelSet) -> np.ndarray | None:
+    """Matrix T (M, K) with gamma = T y: Kutta for every body, Drela eq. (9) for closed bodies.
+
+    Body-local nodes 0..L (L = last): Kutta gives gamma_L = -gamma_0. For a closed body, eq. (9)
+    of Drela (1989), page 3, (g2 - 2 g1 + g0) - (g[L-2] - 2 g[L-1] + gL) = 0, with the Kutta
+    condition gives g0 = (2 g1 - g2 + g[L-2] - 2 g[L-1]) / 2. Returns None if no body is closed
+    (the exact square system is used then).
+    """
+    if all(ps.open_te):
+        return None
+    m = ps.num_nodes
+    eliminated = []
+    rows = {}
+    for k, sl in enumerate(ps.body_nodes):
+        f, last = sl.start, sl.stop - 1
+        if ps.open_te[k]:
+            rows[last] = {f: -1.0}
+            eliminated.append(last)
+        else:
+            g0 = {f + 1: 1.0, f + 2: -0.5, last - 2: 0.5, last - 1: -1.0}
+            rows[f] = g0
+            rows[last] = {j: -c for j, c in g0.items()}
+            eliminated += [f, last]
+    free = [j for j in range(m) if j not in set(eliminated)]
+    col = {j: i for i, j in enumerate(free)}
+    t = np.zeros((m, len(free)))
+    for j in free:
+        t[j, col[j]] = 1.0
+    for j, combo in rows.items():
+        for src, c in combo.items():
+            if src in col:
+                t[j, col[src]] += c
+            else:                                   # open body: gamma_last = -gamma_first (free)
+                raise AssertionError("elimination refers to an eliminated node")
+    return t
+
+
 def assemble(ps: PanelSet, xp: Any = np, sources: bool = False) -> Assembly:
     """Build the influence matrices of ``ps`` once (for repeated solves, e.g. VII iterations)."""
     an, at = influence_matrices(ps, xp)
-    _, _, kutta = _node_maps(ps)
-    mat = xp.concatenate([an, xp.asarray(kutta)], axis=0)
+    t = trailing_edge_elimination(ps)
+    if t is None:
+        _, _, kutta = _node_maps(ps)
+        mat = xp.concatenate([an, xp.asarray(kutta)], axis=0)
+    else:
+        t = xp.asarray(t)
+        mat = an @ t
     sn = st = None
     if sources:
         sn, st = _source_matrices(ps, xp)
-    return Assembly(ps, mat, at, sn, st)
+    return Assembly(ps, mat, at, sn, st, t)
 
 
 def solve(ps: PanelSet, alpha_deg: float, source_strength=None, xp: Any = np,
@@ -474,8 +532,13 @@ def solve(ps: PanelSet, alpha_deg: float, source_strength=None, xp: Any = np,
         # outer-side normal velocity must equal sigma: (vinf + vortex + sources) . n = sigma
         rhs_n = sig - vinf_n - sn @ sig
         vt_src = st @ sig
-    rhs = xp.concatenate([rhs_n, xp.zeros(ps.num_bodies)])
-    gamma = xp.linalg.solve(mat, rhs)
+    if assembly.elimination is None:
+        rhs = xp.concatenate([rhs_n, xp.zeros(ps.num_bodies)])
+        gamma = xp.linalg.solve(mat, rhs)
+    else:
+        # Kutta and eq. (9) exact (built into the elimination); Neumann rows in least squares
+        q, r = xp.linalg.qr(mat)
+        gamma = assembly.elimination @ xp.linalg.solve(r, q.T @ rhs_n)
     gs, ge = xp.asarray(ps.start_node), xp.asarray(ps.end_node)
     g_mid = 0.5 * (gamma[gs] + gamma[ge])
     vt = -g_mid                       # counter-clockwise sheet, clockwise solver direction

@@ -134,3 +134,78 @@ def test_numpy_and_jax_same_core(name, trailing_edge):
             sj.cp = np.asarray(sj.cp)
         assert abs(cl_np - core.body_loads(sj, 0).cl) <= 1e-6
     assert jax.config.x64_enabled == before
+
+
+# --------------------------------------------------------------------------------------- #
+# Closed (sharp) trailing edge: Drela (1989) eq. (9) with Kutta exact, Neumann least squares
+# --------------------------------------------------------------------------------------- #
+def _kt_edge_errors(n, alpha):
+    coords, z_mid, cp_ex = _kt(n, alpha)
+    sol = core.solve(core.PanelSet.from_bodies(coords), alpha)
+    q = np.abs(core.to_selig_order(sol, sol.vt, 0))
+    cp = core.to_selig_order(sol, sol.cp, 0)
+    q_ex = np.sqrt(np.maximum(1.0 - cp_ex, 0.0))
+    xc = (z_mid.real - coords[:, 0].min()) / (coords[0, 0] - coords[:, 0].min())
+    region = np.flatnonzero(xc > 0.98)
+    edge = np.isin(region, [0, n - 1])
+    return np.abs(q - q_ex)[region], np.abs(cp - cp_ex)[region], edge
+
+
+@pytest.mark.parametrize("n", [200, 400, 800])
+@pytest.mark.parametrize("alpha", [0.0, 4.0])
+def test_karman_trefftz_trailing_edge_region(alpha, n):
+    """x/c > 0.98, both surfaces. Panel touching the edge: |dq| <= 0.03, |dCp| <= 0.05 (set after
+    the P2 scratch result was seen); every other panel: |dq| <= 0.01, |dCp| <= 0.02."""
+    dq, dcp, edge = _kt_edge_errors(n, alpha)
+    assert edge.sum() == 2
+    assert dq[edge].max() <= 0.03 and dcp[edge].max() <= 0.05
+    assert dq[~edge].max() <= 0.01 and dcp[~edge].max() <= 0.02
+
+
+def test_closed_te_constraints_exact_per_body():
+    """Closed + open + closed bodies: Kutta on every body and eq. (9) on the closed ones hold
+    exactly; the open body uses its trailing-edge panel."""
+    closed_a = generate_naca4("2412", 160, trailing_edge="closed")
+    open_b = translate(generate_naca4("0012", 120, trailing_edge="open"), 0.0, 3.0)
+    closed_c = translate(generate_naca4("4412", 140, trailing_edge="closed"), 0.0, -3.0)
+    ps = core.PanelSet.from_bodies([closed_a, open_b, closed_c])
+    assert ps.open_te == (False, True, False)
+    g = np.asarray(core.solve(ps, 4.0).gamma)
+    for k, sl in enumerate(ps.body_nodes):
+        b = g[sl]
+        assert abs(b[0] + b[-1]) <= 1e-12
+        if not ps.open_te[k]:
+            assert abs((b[2] - 2 * b[1] + b[0]) - (b[-3] - 2 * b[-2] + b[-1])) <= 1e-12
+            # no flipped pair: the edge nodes carry the sign of their neighbours
+            assert np.sign(b[0]) == np.sign(b[1]) and np.sign(b[-1]) == np.sign(b[-2])
+
+
+def test_closed_te_least_squares_invariant_to_neumann_row_scaling():
+    """Scaling all Neumann rows by 0.1 or 10 leaves the solution unchanged (1e-12)."""
+    ps = core.PanelSet.from_bodies(generate_naca4("2412", 160, trailing_edge="closed"))
+    asm = core.assemble(ps)
+    a = np.deg2rad(5.0)
+    nx, ny = ps.normal
+    b = -(np.cos(a) * nx + np.sin(a) * ny)
+    base = np.asarray(core.solve(ps, 5.0, assembly=asm).gamma)
+    for s in (0.1, 10.0):
+        q, r = np.linalg.qr(asm.matrix * s)
+        g = asm.elimination @ np.linalg.solve(r, q.T @ (b * s))
+        assert np.max(np.abs(g - base)) <= 1e-12
+
+
+def test_closed_te_jax_gradient_matches_finite_difference():
+    """dCl/d(node y) on a closed section: JAX gradient vs central differences, relative 1e-4,
+    at a mid-chord node and at the node next to the trailing edge (in eq. 9)."""
+    pytest.importorskip("jax")
+    from foil_lab import jax_core
+    cw = jax_core.ensure_cw_static(generate_naca4("2412", 120, trailing_edge="closed"))
+    a0 = np.deg2rad(5.0)
+    g = jax_core.dcl_dgeom(cw, a0)
+    h = 1e-6
+    for i in (30, 1):
+        up, dn = cw.copy(), cw.copy()
+        up[i, 1] += h
+        dn[i, 1] -= h
+        fd = (jax_core.cl_of_alpha(up, a0) - jax_core.cl_of_alpha(dn, a0)) / (2 * h)
+        assert abs(g[i, 1] - fd) <= 1e-4 * max(abs(fd), 1.0), (i, g[i, 1], fd)

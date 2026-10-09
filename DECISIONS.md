@@ -1061,6 +1061,93 @@ Benchmark report command: `python -m foil_lab.benchmark report` (and `all`) no l
 
 Changelog (Unreleased): exact quarter-chord moment; `panels.py` removed.
 
+### Closed (sharp) trailing edge: verdict (ii) and fix P3 (2026-10-09)
+
+Check against the exact solution (the user's concern): on the Kármán-Trefftz section (tau = 10
+deg) the exact speed on the panel touching the edge is 0.69-0.75, while the core gave 0.12-0.15
+(Cp about +0.98 against +0.44 to +0.53) at 200, 400 and 800 panels and at 0 and 4 deg. The second
+panel was 0.03 low at every N. On closed NACA 2412 the last panel dropped to 0.06 / 0.01 (160 /
+320 panels), against 0.64-0.72 with gaps of 1e-4 and 1e-3 c. Cause: the two coincident
+trailing-edge nodes took the wrong sign (Kármán-Trefftz, 200 panels: -0.427 next to +0.723), so
+the Kutta condition held with a flipped pair. Verdict (ii), accepted by the user: the core was
+locally wrong at a closed trailing edge. The step 3 explanation (a correct stagnation point
+breaking the boundary layer) was wrong.
+
+Fix (approved form, P3): Drela (1989), page 3, eq. (9), (gamma_3 - 2 gamma_2 + gamma_1) -
+(gamma_{N-2} - 2 gamma_{N-1} + gamma_N) = 0, for bodies without a trailing-edge panel. Drela
+replaces one of two identical nodal streamfunction equations with it. The least-squares
+formulation is our own adaptation for the midpoint Neumann method, which has no identical pair:
+the Kutta condition and eq. (9) are imposed exactly by eliminating gamma_first and gamma_last
+(gamma_last = -gamma_first; gamma_first = (2 gamma_1 - gamma_2 + gamma_{L-2} - 2 gamma_{L-1}) / 2 in
+body-local node numbers), and the N Neumann equations are solved in least squares (QR) for the
+remaining unknowns (`inviscid.trailing_edge_elimination`). Per body; open bodies keep their
+exact Kutta row; with no closed body the exact square system is used as before (results
+unchanged). Same assembly for NumPy and JAX.
+
+P3 against P2 (P2: all rows in one least-squares problem):
+
+| Metric | P2 | P3 |
+|---|---|---|
+| KT edge-panel \|dq\|, 200 / 400 / 800, 0 deg | 0.0218 / 0.0212 / 0.0205 | identical |
+| KT next panel \|dq\| | 0.0015-0.0016 | identical |
+| KT max \|dCp\| x/c 0.02-0.98, 200 panels, 0 / 4 deg | 0.00116 / 0.00097 | identical |
+| NACA 2412 closed, 160 panels: edge \|q\|, Cl (gap 1e-4 c: 0.636, 0.86143) | 0.718, 0.86145 | identical |
+| Kutta residual | up to 4.7e-11 | 0 |
+| eq. (9) residual | up to 1.6e-9 | up to 6.7e-16 |
+| Max Neumann residual | 2.8e-6 (KT 200), 6.6e-6 (NACA 160) | identical |
+| All Neumann rows scaled by 0.1 / 10: max change in \|q\| | 1.2e-11 / 1.2e-9 | 3.3e-15 / 2.9e-15 |
+| Only the two edge-panel rows scaled by 0.1 / 10 | 1.5e-5 / 1.5e-7 | 1.5e-5 / 1.5e-7 |
+
+Condition number of the closed system: 4.4e4-1.2e5 before, 7.8 after (NACA 2412, 160-640
+panels).
+
+Kármán-Trefftz extension (tolerances fixed by the user; 0 and 4 deg; 200, 400, 800 panels; both
+surfaces; x/c > 0.98): panel touching the edge |dq| <= 0.03 and |dCp| <= 0.05; every other panel
+|dq| <= 0.01 and |dCp| <= 0.02. The edge-panel tolerance was set after the P2 scratch result
+(about 0.021) had been seen. Passes. New tests also check the per-body constraints in a
+closed + open + closed configuration, invariance to scaling of the Neumann rows, and the JAX
+gradient of Cl on a closed section against central differences (relative 1e-4, nodes 30 and 1).
+
+Ordered checks after the fix:
+
+1. Core, gap, Williams, exact-solution and inviscid XFOIL tests, tolerances unchanged: 58 passed,
+   4 expected failures (repanelling, step 4; aspect ratio, M6).
+2. The six VII tests on closed geometry, unedited: five pass. STOPPED here as instructed:
+   `test_vii_newton.py::test_newton_low_re_drag_right_order_of_magnitude` fails on
+   `r.converged` (Newton VII, NACA 2412, Re 5e4, 2 deg, 120 panels; residual 2.0e-2 after 60
+   iterations; Cd 0.0180, inside the test's band). Newton VII at this point converges or not
+   depending on panel count on both trailing edges: closed 100 yes, 120 no, 140 no (2.5e-1), 160
+   yes but Cl 0.60; open 100 yes, 120 yes, 140 no (9.5e-2), 160 yes (Cl 0.68).
+   Steps 3 (guard) and 4 (benchmark, batch) and the merge were not started.
+
+### Citations made without the source at hand
+
+Added by me in M1 and M2 without the book or paper at hand (the user will check them):
+
+- `src/foil_lab/inviscid.py` module docstring and DECISIONS.md (M2 plan): J. L. Kuethe and
+  C.-Y. Chow, *Foundations of Aerodynamics*, 5th ed., Wiley (1998), section 5.10.
+- `src/foil_lab/inviscid.py` module docstring: J. Katz and A. Plotkin, *Low-Speed
+  Aerodynamics*, 2nd ed., CUP (2001), sections 10.3-10.4 and 11.4.2.
+- `src/foil_lab/inviscid.py` (`source_panel_velocity`): Katz and Plotkin (2001), section 10.2.
+- `src/foil_lab/inviscid.py` (`solve`) and DECISIONS.md (M2 step 1, plan change): Katz and
+  Plotkin (2001), section 11.4.2 (surface speed equals the sheet strength).
+- DECISIONS.md (M2 step 1, alternative B): Katz and Plotkin (2001), chapter 11.
+- `src/foil_lab/inviscid.py` (`solve`), `src/foil_lab/vii.py` and DECISIONS.md: M. J. Lighthill,
+  "On displacement thickness", J. Fluid Mech. 4 (1958) 383-392.
+- `tests/test_exact_solutions.py` (M1): L. M. Milne-Thomson, *Theoretical Aerodynamics* (1958),
+  chapter 7; Katz and Plotkin (2001), section 6.7.
+- `src/foil_lab/generators.py` (M1): Jacobs, Ward and Pinkerton, NACA Report 460 (1933), and the
+  open-trailing-edge coefficient -0.1015; Abbott and von Doenhoff. Also cited in
+  `benchmark/sections.py`, `benchmark/report.py` and DECISIONS.md (M1 D1).
+
+With the source at hand: Drela (1989) (`review-gui/drela-1989-xfoil.pdf`) and Williams, ARC R&M
+3717 (`review-gui/arc-rm-3717.pdf`).
+
+Already in the v1.3.1 code, not added or checked by me: Thwaites (`boundary_layer.py`,
+`vii_qs.py`), Head (`vii_qs.py`), Michel, Tollmien-Schlichting and Drela & Giles (1987)
+(`transition.py`), Squire-Young (`vii.py`), Kármán-Tsien (`corrections.py`), Busemann
+(`gui/main_window.py`).
+
 ---
 
 ## Later
@@ -1097,3 +1184,8 @@ Changelog (Unreleased): exact quarter-chord moment; `panels.py` removed.
 - M9 (THIRD_PARTY.md): Williams, B. R., "An Exact Test Case for the Plane Potential Flow About
   Two Adjacent Lifting Aerofoils", ARC R&M 3717, HMSO, 1973; transcribed values used as test
   data.
+- M9: check every citation listed under "Citations made without the source at hand" (M2)
+  against the books and papers; each is marked "section unverified" until then: Kuethe & Chow
+  (1998) section 5.10; Katz & Plotkin (2001) sections 6.7, 10.2, 10.3-10.4, 11.4.2 and chapter
+  11; Lighthill (1958); Milne-Thomson (1958) chapter 7; NACA Report 460 (1933) and its -0.1015
+  coefficient; Abbott and von Doenhoff. Also the pre-existing v1.3.1 citations listed there.
