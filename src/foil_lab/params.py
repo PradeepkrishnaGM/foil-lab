@@ -3,7 +3,8 @@
 Every number a user or developer might want to change lives here as a documented default.
 Changing a default changes results, so it needs an entry in ``DECISIONS.md``.
 
-Contents: benchmark settings (M1); geometry, repanelling and shape-optimisation settings (M2).
+Contents: benchmark settings (M1); geometry, repanelling and shape-optimisation settings (M2);
+the coupled viscous solver (M3).
 The inviscid core has no tunable numbers apart from ``inviscid.CLOSED_GAP_FRACTION``.
 """
 
@@ -147,8 +148,58 @@ class DesignParams:
     min_te_gap: float = 0.001
 
 
+@dataclass(frozen=True)
+class ViscousParams:
+    """Coupled viscous-inviscid solver (``foil_lab.viscous``, ``foil_lab.bl``; M3).
+
+    Attributes
+    ----------
+    closure_set:
+        Closure set of the boundary layer, ``"fidkowski2022"`` or ``"drela1987"``
+        (``foil_lab.bl.closure_sets``). Provisional default: the set the SPEC 4.1 targets are
+        judged with; the user chooses the default after checkpoint C3 (DECISIONS.md M3).
+    n_crit:
+        Critical amplification factor of the e^n envelope method (both surfaces).
+    residual_tol:
+        Converged when the largest scaled residual is at most this (approved starting value).
+    update_tol:
+        ... and the last Newton update of theta and m = ue delta* is at most this, relative.
+    max_iter:
+        Newton iterations per operating point (approved starting value).
+    hk_min:
+        A Newton step is scaled down so that H_k stays at or above this at every station (counted
+        in the result). New, proposed.
+    re_theta_min:
+        A Newton step is scaled down so that Re_theta stays at or above this at turbulent stations,
+        where the turbulent Cf contains log10 Re_theta (FID eq. 59 limits it to 1.303, i.e. 20).
+        New, proposed.
+    shape_eq_bias:
+        Weight of the downstream station in the source term of the shape equation; 0.5 = central
+        (DG87 p. 1351). Changed only if a checkpoint shows the stiffness DG87 describes.
+    init_hk_max_lam, init_hk_max_turb:
+        H_k above which the starting march switches to its inverse mode (FID p. 9: 3.8 and 2.5).
+    jacobian:
+        ``"complex_step"`` (NumPy: complex step of the local residuals with the chain rule through
+        the edge velocity and the stagnation point) or ``"jax"`` (automatic differentiation of the
+        full residual; needs JAX). Both are tested against each other and finite differences.
+    """
+
+    closure_set: str = "fidkowski2022"
+    n_crit: float = 9.0
+    residual_tol: float = 1e-8
+    update_tol: float = 1e-6
+    max_iter: int = 50
+    hk_min: float = 1.02
+    re_theta_min: float = 20.0
+    shape_eq_bias: float = 0.5
+    init_hk_max_lam: float = 3.8
+    init_hk_max_turb: float = 2.5
+    jacobian: str = "complex_step"
+
+
 XFOIL = XfoilParams()
 SWEEP = SweepParams()
 BENCHMARK = BenchmarkParams()
 GEOMETRY = GeometryParams()
 DESIGN = DesignParams()
+VISCOUS = ViscousParams()

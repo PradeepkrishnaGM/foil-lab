@@ -1770,6 +1770,80 @@ March fix found by C1: a laminar step without a solution now also triggers the t
 (accepted only if the onset lies inside the interval). Before, transition at 0 deg lower was
 missed when XFOIL's ue was already transitional (0.714 instead of 0.682).
 
+### C2: coupled Newton solver (2026-10-09), decisions and results; stopped
+
+`foil_lab/viscous.py`, `ViscousParams` in `params.py`. Changes against the formulation fixed
+before C1, each forced by a C2 failure (histories in the report), each from FID unless marked:
+
+1. **Augmented state** (FID p. 6, eq. 27) instead of my earlier choice of m = ue delta* with ue
+   eliminated: unknowns (theta, delta*, n or C_tau, ue) per station, residuals the three BL
+   equations and R_u = ue - ue_inv - D (ue delta*). With m as unknown, delta* = m/ue is
+   ill-conditioned at the stations next to the stagnation point (ue -> 0): cold starts at 0, -4,
+   10 deg stalled at residuals 50-600. With the augmented state they converge.
+2. **Stagnation point** from the two adjacent speeds, s_stag = s_k + ds ue_k/(ue_k + ue_k+1)
+   (FID p. 6), its derivative in the Jacobian (FID eq. 28). First interval: the stagnation
+   equations (ue = K xi) on the state extrapolated linearly to xi = 0, K from a quadratic fit
+   (FID p. 7), replacing the similarity relations at the first station (which gave an odd-even
+   H oscillation behind the stagnation point, as FID describes for XFOIL).
+3. **Source terms integrated in ln xi** (FID eqs. 9-10) for momentum and shape, for both sets,
+   replacing dxi times the average. When the stagnation point comes close to a station, Cf and C_D
+   grow like 1/xi and the old form became inconsistent on the first interval (a residual jump to
+   90 when the stagnation point moved one panel). This reverses the "not adopted" entry of the
+   two-sets section for these two terms; the lag and amplification equations keep dxi (FID eqs.
+   11-12). C0 and C1 rerun after the change: all pass (C1 TE delta* ratios 1.007, 1.000, 1.009,
+   1.011; transition 0.657 / 0.682 / 0.294 / laminar).
+4. **Step limits** of FID p. 11 (theta, delta* not below half; n up <= 2, n > 0.2 down <= 80 %;
+   C_tau^1/2 up <= 0.05, down <= 80 % where C_tau^1/2 > 0.1 max; ue <= 20 %), then halving for
+   positivity, H_k >= hk_min and turbulent Re_theta >= re_theta_min. Mine: the ue limit and the
+   H_k check are not applied at the two stations next to a stagnation point where ue changes sign
+   (a sign change only moves the stagnation point). Each scaled step and its binding limit is
+   counted in the result (`step_limits`).
+5. **Branch change** (mine): a station that changes branch keeps its speed (sign with d) and takes
+   theta and delta* of its downstream neighbour on the new branch, n = 0 (Hiemenz: theta, delta*
+   nearly uniform at a stagnation point). Replaces "keeps its values" of the plan.
+6. **Transition re-identification** after each update by marching n (FID p. 8); the implicit
+   trapezoid of that march is iterated to round-off. With 8 fixed-point iterations it left n
+   1e-7 off the Newton solution and 7 deg stalled at a residual 8.3e-8 (> 1e-8) with full steps
+   (history in the report); a bug, fixed, no tolerance changed.
+7. **Angle-of-attack continuation** (FID section VIII.C): a warm-started point that fails is
+   reached through intermediate angles (increment halved, at most three times); iterations of
+   the intermediate solves are counted in the point's iterations.
+8. **Starting march** (FID section V.A, eqs. 20-21; `march_init`): direct, inverse with prescribed
+   H_k where the direct Newton fails or H_k > 3.8 (laminar) / 2.5 (turbulent), else scaling. Mine:
+   the H_k switch is not applied on the transition interval itself (its downstream station still
+   carries the laminar H_k; applying it corrupted the start at 5 deg), and the fallback sets
+   C_tau from the set's transition value when the station turns turbulent. The first station of
+   the starting march uses m = 1 (next to a stagnation point).
+9. New parameters (proposed defaults, awaiting approval): `hk_min` 1.02, `re_theta_min` 20 (FID
+   eq. 59 guard: log10 Re_theta >= 1.303), `init_hk_max_lam` 3.8, `init_hk_max_turb` 2.5 (FID
+   p. 9), `jacobian` "complex_step" (0.08 s per Jacobian against 7.9 s for eager JAX at 161
+   stations; both tested). `shape_eq_bias` stays 0.5: 0.6 and 1.0 did not help the stagnation
+   oscillation, which item 2 removed.
+
+Tests (`tests/test_viscous.py`): complex-step Jacobian = central finite differences of the full
+residual (1e-5 of each column), JAX = complex step (1e-8; measured 2e-9), cold start at 5 deg
+converges in under 20 iterations with quadratic tail, 4 deg from the march and from 2 deg give the
+same Cl, Cd, Cm, transition (1e-7).
+
+**C2 results, NACA 2412, Re 1e6, "fidkowski2022"** (`tests/diagnostics/c2_polar.py`): converged at
+every angle -4 to 15 deg (16 deg not; attached range per the benchmark filter: below 12 deg).
+Against the C2 targets: iterations < 20 missed at -2 (180, continuation), -1 (65, continuation),
+0 (22, cold start), 14 (116, continuation); |dCl| <= 0.02 at 0-10 deg missed at 1-4 deg (-0.021 to
+-0.047) and 8-10 deg (-0.054 to -0.151); Cl_max 1.24 against XFOIL 1.52 (missed); |dCm| <= 0.01
+missed at 3 deg and from 8 deg; Cd within 15 % up to 9 deg (-1 to -14 %), missed from 10 deg
+(-18 to -24 %).
+
+Cause located: the missing wake. With XFOIL's own delta*, our core gives XFOIL's Cl to 0.002, and
+the wake adds only 0.006 (10 deg) and 0.019 (14 deg) directly; but it raises the upper edge
+speed near the trailing edge by 0.02 at x/c 0.95 and 0.04-0.08 at 0.995 (5-14 deg). Without it the
+trailing-edge deceleration thickens the coupled layer over the last 10 % of chord: at 0 deg
+delta* is within 2 % at x/c 0.5 and 4 % at 0.9 but 34-39 % high at the trailing edge, with TE ue
+0.838 against 0.887; at 10 deg the upper layer separates at the trailing edge (H 4.6 against
+2.7), which lowers circulation and Cl. Proposed: take C4 ("add the wake") before C3.
+
+"drela1987" (no targets): C1 as in the two-sets section; C2 converged -4 to 5 deg, not from 6 deg;
+at 0-5 deg dCl -0.014 to -0.070, Cd +1 to +13 %.
+
 ---
 
 ## Later

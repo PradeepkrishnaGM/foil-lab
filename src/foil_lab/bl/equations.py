@@ -18,16 +18,18 @@ Equations (DG87 = Drela & Giles 1987; LNE89 = Drela 1989; FID = Fidkowski):
   onset is the root of the amplification residual on the laminar subinterval, with the state
   interpolated linearly to xi_t and n = N_crit there (FID eq. 18); C_tau at onset from the set.
 
-Two-point central differences (DG87 p. 1351) in logarithmic form, so every residual is
-dimensionless (scaling in DECISIONS.md, M3):
+Two-point differences in logarithmic form, so every residual is dimensionless (scaling in
+DECISIONS.md, M3); the source terms of the momentum and shape equations are integrated in ln xi,
+with xi carried inside the average (FID eqs. 9-10), which keeps the first interval next to a
+stagnation point consistent (there Cf and C_D grow like 1/ue ~ 1/xi; DECISIONS.md M3, C2):
 
-    R1 = ln(theta2/theta1) + (2 + H)_a ln(ue2/ue1) - dxi (Cf/2)_a / theta_a
-    R2 = ln(H*2/H*1) + (1 - H)_a ln(ue2/ue1) - dxi (2C_D/H* - Cf/2)_a / theta_a
+    R1 = ln(theta2/theta1) + (2 + H)_a ln(ue2/ue1) - ln(xi2/xi1) (xi Cf/(2 theta))_a
+    R2 = ln(H*2/H*1) + (1 - H)_b ln(ue2/ue1) - ln(xi2/xi1) (xi (2C_D/H* - Cf/2)/theta)_b
     R3 = n2 - n1 - dxi (dn/dxi)_a                                                  laminar
     R3 = ln(C_tau2/C_tau1) - dxi (dln C_tau/dxi)_a                                 turbulent
 
-(_a = average of the two stations; the shape equation may be biased toward the downstream station
-with ``bias``, 0.5 = central). Every function accepts complex values (complex-step derivatives)
+(_a = average of the two stations; _b = weighted toward the downstream station with ``bias``,
+0.5 = central; dxi = xi2 - xi1). Every function accepts complex values (complex-step derivatives)
 and is written against an array namespace.
 """
 
@@ -83,17 +85,18 @@ def station(theta, dstar, third, ue, reynolds, turbulent: bool, xp=np, cs="fidko
     return st
 
 
-def _common(s1: Station, s2: Station, dxi, xp, bias):
+def _common(s1: Station, s2: Station, xi1, xi2, xp, bias):
     lu = xp.log(s2.ue / s1.ue)
-    th_a = 0.5 * (s1.theta + s2.theta)
+    lx = xp.log(xi2 / xi1)
     h_a = 0.5 * (s1.h + s2.h)
-    r1 = xp.log(s2.theta / s1.theta) + (2.0 + h_a) * lu - dxi * 0.5 * (s1.cf + s2.cf) * 0.5 / th_a
-    src1 = 2.0 * s1.cd / s1.hstar - 0.5 * s1.cf
-    src2 = 2.0 * s2.cd / s2.hstar - 0.5 * s2.cf
+    f1 = xi1 * s1.cf / s1.theta
+    f2 = xi2 * s2.cf / s2.theta
+    r1 = xp.log(s2.theta / s1.theta) + (2.0 + h_a) * lu - 0.5 * lx * 0.5 * (f1 + f2)
+    src1 = xi1 * (2.0 * s1.cd / s1.hstar - 0.5 * s1.cf) / s1.theta
+    src2 = xi2 * (2.0 * s2.cd / s2.hstar - 0.5 * s2.cf) / s2.theta
     src = (1.0 - bias) * src1 + bias * src2
-    th_b = (1.0 - bias) * s1.theta + bias * s2.theta
     r2 = (xp.log(s2.hstar / s1.hstar) + (1.0 - ((1.0 - bias) * s1.h + bias * s2.h)) * lu
-          - dxi * src / th_b)
+          - lx * src)
     return r1, r2
 
 
@@ -109,14 +112,16 @@ def turb_lograte(s: Station, due_dxi, xp, cs):
             + 2.0 * (cs.uq(s.cf, s.hk, s.ret, s.dstar, xp) - due_dxi / s.ue))
 
 
-def laminar_interval(s1: Station, s2: Station, dxi, xp=np, bias=0.5, cs="fidkowski2022", n_crit=9.0):
-    r1, r2 = _common(s1, s2, dxi, xp, bias)
+def laminar_interval(s1: Station, s2: Station, xi1, xi2, xp=np, bias=0.5, cs="fidkowski2022", n_crit=9.0):
+    r1, r2 = _common(s1, s2, xi1, xi2, xp, bias)
+    dxi = xi2 - xi1
     r3 = s2.third - s1.third - dxi * 0.5 * (lam_rate(s1, xp, cs, n_crit) + lam_rate(s2, xp, cs, n_crit))
     return xp.stack([r1, r2, r3])
 
 
-def turbulent_interval(s1: Station, s2: Station, dxi, xp=np, bias=0.5, cs="fidkowski2022"):
-    r1, r2 = _common(s1, s2, dxi, xp, bias)
+def turbulent_interval(s1: Station, s2: Station, xi1, xi2, xp=np, bias=0.5, cs="fidkowski2022"):
+    r1, r2 = _common(s1, s2, xi1, xi2, xp, bias)
+    dxi = xi2 - xi1
     due = (s2.ue - s1.ue) / dxi
     g = 0.5 * (turb_lograte(s1, due, xp, cs) + turb_lograte(s2, due, xp, cs))
     r3 = xp.log(s2.third / s1.third) - dxi * g
@@ -160,7 +165,7 @@ def transition_onset(s1: Station, theta2, dstar2, ue2, dxi, reynolds, n_crit, xp
     return w
 
 
-def transition_interval(theta1, dstar1, n1, ue1, theta2, dstar2, ctau2, ue2, dxi, reynolds,
+def transition_interval(theta1, dstar1, n1, ue1, theta2, dstar2, ctau2, ue2, xi1, xi2, reynolds,
                         n_crit, xp=np, bias=0.5, forced_w=None, cs="fidkowski2022"):
     """Residuals of an interval containing transition onset (DG87 Fig. 5; FID eqs. 16-18).
 
@@ -171,6 +176,7 @@ def transition_interval(theta1, dstar1, n1, ue1, theta2, dstar2, ctau2, ue2, dxi
     ``forced_w``: onset fraction of a forced trip instead of the amplification criterion.
     Returns (residuals, w).
     """
+    dxi = xi2 - xi1
     s1 = station(theta1, dstar1, n1, ue1, reynolds, False, xp, cs)
     w = (transition_onset(s1, theta2, dstar2, ue2, dxi, reynolds, n_crit, xp, cs)
          if forced_w is None else forced_w)
@@ -182,9 +188,10 @@ def transition_interval(theta1, dstar1, n1, ue1, theta2, dstar2, ctau2, ue2, dxi
     ct_t = closure_sets.get(cs).ctau_transition(st_tmp.hk, st_tmp.ctau_eq, xp)
     stt = station(th_t, ds_t, ct_t, ue_t, reynolds, True, xp, cs)
     s2 = station(theta2, dstar2, ctau2, ue2, reynolds, True, xp, cs)
-    d1, d2 = w * dxi, (1.0 - w) * dxi
-    a1, a2 = _common(s1, stl, d1, xp, bias)
-    b1, b2 = _common(stt, s2, d2, xp, bias)
+    d2 = (1.0 - w) * dxi
+    xt = xi1 + w * dxi
+    a1, a2 = _common(s1, stl, xi1, xt, xp, bias)
+    b1, b2 = _common(stt, s2, xt, xi2, xp, bias)
     due = (s2.ue - stt.ue) / xp.where(_re(d2) > 1e-12 * _re(dxi), d2, 1e-12 * dxi)
     g = 0.5 * (turb_lograte(stt, due, xp, cs) + turb_lograte(s2, due, xp, cs))
     r3 = xp.log(s2.third / stt.third) - d2 * g

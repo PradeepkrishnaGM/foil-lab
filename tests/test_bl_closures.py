@@ -76,15 +76,16 @@ CASES = {
 
 def _residual(kind, v, re, cs, xp=np):
     t1, d1, c1, u1, t2, d2, c2, u2, dxi = v
+    xi1 = 0.05
     if kind == "transition":
-        r, _ = eq.transition_interval(t1, d1, c1, u1, t2, d2, c2, u2, dxi, re, 9.0, xp=xp, cs=cs)
+        r, _ = eq.transition_interval(t1, d1, c1, u1, t2, d2, c2, u2, xi1, xi1 + dxi, re, 9.0, xp=xp, cs=cs)
         return r
     turb = kind == "turbulent"
     s1 = eq.station(t1, d1, c1, u1, re, turb, xp, cs)
     s2 = eq.station(t2, d2, c2, u2, re, turb, xp, cs)
     if turb:
-        return eq.turbulent_interval(s1, s2, dxi, xp=xp, cs=cs)
-    return eq.laminar_interval(s1, s2, dxi, xp=xp, cs=cs)
+        return eq.turbulent_interval(s1, s2, xi1, xi1 + dxi, xp=xp, cs=cs)
+    return eq.laminar_interval(s1, s2, xi1, xi1 + dxi, xp=xp, cs=cs)
 
 
 @pytest.mark.parametrize("cs", SETS)

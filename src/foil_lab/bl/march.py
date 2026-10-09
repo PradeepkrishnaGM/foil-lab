@@ -136,17 +136,17 @@ def march(xi, reynolds, ue=None, dstar=None, n_crit=9.0, xi_trip=None, bias=0.5,
             t, d, c, u = unpack(x)
             s1 = eq.station(*prev, reynolds, False, cs=cs)
             s2 = eq.station(t, d, c, u, reynolds, False, cs=cs)
-            return eq.laminar_interval(s1, s2, dxi, bias=bias, cs=cs, n_crit=n_crit)
+            return eq.laminar_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs, n_crit=n_crit)
 
         def turb_res(x, prev=prev, dxi=dxi, unpack=unpack):
             t, d, c, u = unpack(x)
             s1 = eq.station(*prev, reynolds, True, cs=cs)
             s2 = eq.station(t, d, c, u, reynolds, True, cs=cs)
-            return eq.turbulent_interval(s1, s2, dxi, bias=bias, cs=cs)
+            return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs)
 
         def trans_res(x, forced=None, prev=prev, dxi=dxi, unpack=unpack):
             t, d, c, u = unpack(x)
-            return eq.transition_interval(*prev, t, d, c, u, dxi, reynolds, n_crit, bias=bias,
+            return eq.transition_interval(*prev, t, d, c, u, xi[i - 1], xi[i], reynolds, n_crit, bias=bias,
                                           forced_w=forced, cs=cs)
         guess = np.array([prev[0], prev[1] if direct else prev[3], prev[2]])
         if not turbulent:
@@ -171,6 +171,122 @@ def march(xi, reynolds, ue=None, dstar=None, n_crit=9.0, xi_trip=None, bias=0.5,
             failed.append(i)
         t, d, c, u = unpack(x)
         th[i], ds[i], third[i], out_ue[i] = np.real(t), np.real(d), np.real(c), np.real(u)
+        turb[i] = turbulent
+    h = ds / th
+    ret = reynolds * out_ue * th
+    hk = cs.hk(h)
+    with np.errstate(all="ignore"):
+        cf = np.where(turb, cs.cf_turb(hk, np.maximum(ret, 1.0001)), cs.cf_lam(hk, ret))
+    return MarchResult(np.asarray(xi), out_ue, th, ds, third, turb, h, cf, xtr, failed, cs.NAME)
+
+
+def march_init(xi, ue_inv, reynolds, n_crit=9.0, xi_trip=None, bias=0.5, cs="fidkowski2022",
+               hk_max_lam=3.8, hk_max_turb=2.5) -> MarchResult:
+    """Starting state of the coupled Newton solver on one branch (FID section V.A, p. 9).
+
+    Direct march on the inviscid edge velocity. Where the direct Newton fails or H_k exceeds
+    ``hk_max_lam`` / ``hk_max_turb`` (FID: 3.8, 2.5), the station is solved in an inverse mode with
+    ue unknown and a prescribed H_k (FID eqs. 20-21, as printed, with Delta H_k = (xi2 - xi1)/theta1):
+
+        laminar:   H_k2 = max(H_k1 + 0.03 Delta H_k, H_k,max,lam)
+        turbulent: H_k2 = max(H_k1 - 0.15 Delta H_k, H_k,max,turb)
+
+    If that fails too, theta and delta* are scaled from the previous station by (xi2/xi1)^0.5 with
+    the inviscid ue (FID p. 9). Only a starting state: the converged coupled solution does not
+    depend on it. ``failed`` lists the stations that needed the inverse mode or the fallback.
+    """
+    cs = closure_sets.get(cs)
+    n = len(xi)
+    out_ue = np.array(ue_inv, dtype=float)
+    th = np.zeros(n); ds = np.zeros(n); third = np.zeros(n)
+    turb = np.zeros(n, dtype=bool)
+    th[0], ds[0] = similarity_start_state(xi[0], ue_inv[0], None, None, reynolds, cs, m=1.0)   # next to stagnation
+    xtr, failed, turbulent = None, [], False
+    for i in range(1, n):
+        dxi = xi[i] - xi[i - 1]
+        prev = (th[i - 1], ds[i - 1], third[i - 1], out_ue[i - 1])
+        trip_here = (not turbulent and xi_trip is not None and xi[i - 1] < xi_trip <= xi[i])
+        forced = (xi_trip - xi[i - 1]) / dxi if trip_here else None
+
+        def residual(x, kind, mode, hk_t=None, prev=prev, dxi=dxi, i=i, forced=forced):
+            if mode == "direct":
+                t, d, c, u = x[0], x[1], x[2], ue_inv[i]
+            else:                                   # prescribed H_k: x = (theta, ue, third)
+                t, d, c, u = x[0], hk_t * x[0], x[2], x[1]
+            if kind == "transition":
+                return eq.transition_interval(*prev, t, d, c, u, xi[i - 1], xi[i], reynolds, n_crit, bias=bias,
+                                              forced_w=forced, cs=cs)
+            tb = kind == "turbulent"
+            s1 = eq.station(*prev, reynolds, tb, cs=cs)
+            s2 = eq.station(t, d, c, u, reynolds, tb, cs=cs)
+            if tb:
+                return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs)
+            return eq.laminar_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs, n_crit=n_crit)
+
+        def solve(kind, mode, hk_t=None):
+            if kind == "transition":
+                st = eq.station(prev[0], prev[1], 1.0, prev[3], reynolds, True, cs=cs)
+                c0 = float(np.real(cs.ctau_transition(st.hk, st.ctau_eq)))
+                c_guess = c0 if np.isfinite(c0) and c0 > 0 else 1e-3
+            else:
+                c_guess = prev[2]
+            g = np.array([prev[0], prev[1] if mode == "direct" else prev[3], c_guess])
+            f = ((lambda x: residual(x, kind, mode, hk_t)[0]) if kind == "transition"
+                 else (lambda x: residual(x, kind, mode, hk_t)))
+            x, ok = _newton(f, g, direct=(mode == "direct"))
+            w = float(np.real(residual(x, kind, mode, hk_t)[1])) if (ok and kind == "transition") else None
+            return x, ok, w
+
+        def to_state(x, mode, hk_t=None):
+            if mode == "direct":
+                return x[0], x[1], x[2], ue_inv[i]
+            return x[0], hk_t * x[0], x[2], x[1]
+
+        # 1. direct
+        mode, hk_t = "direct", None
+        kind = "turbulent" if turbulent else "laminar"
+        x, ok, _ = solve(kind, mode) if not trip_here else (None, False, None)
+        new_turb = turbulent
+        if not turbulent and (trip_here or not ok or x[2] >= n_crit):
+            xt, okt, w = solve("transition", mode)
+            if okt and (trip_here or w < 1.0):
+                x, ok, new_turb, xtr_i = xt, True, True, float(xi[i - 1] + w * dxi)
+            else:
+                xtr_i = None
+        else:
+            xtr_i = None
+        hk_max = hk_max_turb if new_turb else hk_max_lam
+        # the H_k switch is not applied on the transition interval itself, whose downstream
+        # station still carries the laminar H_k (DECISIONS.md M3, C2)
+        if ok and (x[1] / x[0] <= hk_max or (new_turb and not turbulent)):
+            state = to_state(x, mode)
+        else:
+            # 2. inverse with prescribed H_k (FID eqs. 20-21)
+            failed.append(i)
+            hk1 = prev[1] / prev[0]
+            dhk = dxi / prev[0]
+            hk_t = (max(hk1 + 0.03 * dhk, hk_max_lam) if not new_turb
+                    else max(hk1 - 0.15 * dhk, hk_max_turb))
+            kind = "transition" if (new_turb and not turbulent) else ("turbulent" if turbulent else "laminar")
+            xi_, ok, w = solve(kind, "inverse", hk_t)
+            if ok and kind == "laminar" and xi_[2] >= n_crit:
+                xt, okt, w = solve("transition", "inverse", hk_t)
+                if okt and w < 1.0:
+                    xi_, new_turb, xtr_i = xt, True, float(xi[i - 1] + w * dxi)
+            if ok:
+                state = to_state(xi_, "inverse", hk_t)
+            else:
+                # 3. scaling fallback (FID p. 9)
+                fac = np.sqrt(xi[i] / xi[i - 1])
+                c_fb = prev[2]
+                if new_turb and not turbulent:      # third variable becomes C_tau
+                    stt = eq.station(prev[0], prev[1], 1.0, prev[3], reynolds, True, cs=cs)
+                    c_fb = float(np.real(cs.ctau_transition(stt.hk, stt.ctau_eq)))
+                state = (prev[0] * fac, prev[1] * fac, c_fb, ue_inv[i])
+        if new_turb and not turbulent:
+            xtr = xtr_i if xtr_i is not None else float(xi[i])
+        turbulent = new_turb
+        th[i], ds[i], third[i], out_ue[i] = (float(np.real(v)) for v in state)
         turb[i] = turbulent
     h = ds / th
     ret = reynolds * out_ue * th
