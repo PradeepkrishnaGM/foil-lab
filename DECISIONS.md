@@ -1450,6 +1450,30 @@ exact-solution test, any pre-existing test that fails, and anything that changes
   It is in the open-trailing-edge group of the report, where the accuracy targets are judged;
   `BENCHMARK.sections` gains this entry, as the approved M2 plan (point 5) specifies.
 
+### End of M2 (2026-10-09)
+
+Step 6: full suite 340 passed, 0 failed, 4 expected failures (aspect-ratio compressibility, M6;
+Newton low-Re drag on the closed section, M3; two non-strict known limitations of the
+experimental VII solvers); fast suite 47.7 s. `docs/benchmark_m2.md` (tables only, Q11) written
+from `benchmark_output/m2_final/` (not committed); `docs/baseline_v1.3.1.md` unchanged. GUI
+(headless), CLI and `fl.analyze` smoke checks run.
+
+Benchmark after M2, validated range pooled, five open sections (NACA 0012, 2412, 4412, 23012,
+Clark Y): transpiration VII mean |dCl| 0.0446 -> 0.0386 (target 0.03 not met), mean relative
+|dCd| 7.1 % -> 8.0 % (met), mean |dCm| 0.0093 -> 0.0082 (met), not converged 64 -> 61 of 330;
+inviscid / one-way |dCl| 0.0678 -> 0.0738 (now the correct inviscid solution against viscous
+XFOIL). E387 with a 0.25 % gap (new): VII |dCl| 0.0078, |dCd| 11.7 %, |dCm| 0.0018, all
+converged. E387 sharp: VII |dCl| 0.0124 -> 0.0074, |dCd| 23.2 % -> 10.6 %, not converged 4 -> 0.
+
+Decisions made by me under the user's rule (geometry definitions and my own tests that measured
+the wrong thing), each recorded above:
+
+1. Thickness-scaling gap check measured by components (decided by the user, option b; listed for
+   completeness).
+2. Repanelling deviation of Clark Y and E387 against the downloaded polyline accepted (step 5).
+3. `E387_GAP025` built by applying the gap tool after repanelling, so both codes read the same
+   points and the shape ahead of 0.8 c is identical to E387 (step 5).
+
 ---
 
 ## Later
