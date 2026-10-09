@@ -1429,6 +1429,27 @@ my own that measure the wrong thing are decided by me, recorded here with the re
 in the final report. Still stop for any solver or accuracy tolerance, any benchmark or
 exact-solution test, any pre-existing test that fails, and anything that changes SPEC.md.
 
+### Step 5: references for Clark Y, E387 and E387 with a 0.25 % gap (2026-10-09)
+
+- The canonical Clark Y and E387 files change because `repanel_cosine` is now arc-length
+  repanelling (step 4). Their references were regenerated with XFOIL (same settings as M1:
+  PANE 160 and 240, N_crit 9, free transition, Mach 0, ITER 200, one retry per skipped angle):
+  `python -m foil_lab.benchmark references --sections CLARKY,E387,E387_GAP025` (new option; the
+  NACA references are unchanged and were not rerun).
+- Largest distance of the repanelled points to the downloaded polyline (recorded in the
+  provenance): Clark Y 8.11e-4 (M1) -> 2.42e-4; E387 1.64e-4 (M1) -> 6.63e-4, at the leading edge
+  (x/c 0.0025) of a 61-point file. Decision (mine, under the user's rule for geometry choices):
+  accepted. Near a sparsely sampled leading edge the arc-length spline passes between the straight
+  segments of the polyline, so this distance measures the polyline's corner-cutting rather than an
+  error of the new points; the spline does not depend on chord, position or rotation, which the
+  x-based interpolation of v1.3.1 did.
+- `E387_GAP025` (new section kind "gap"): the canonical E387 (160 panels) with
+  `geometry.set_trailing_edge_gap(0.0025)` applied, i.e. thickness added aft of 0.8 c with the
+  trailing-edge midpoint fixed. Decision (mine): the gap is applied after repanelling, so both
+  codes read the same 161 points and the shape ahead of 0.8 c is identical to E387 (test, 1e-12).
+  It is in the open-trailing-edge group of the report, where the accuracy targets are judged;
+  `BENCHMARK.sections` gains this entry, as the approved M2 plan (point 5) specifies.
+
 ---
 
 ## Later
