@@ -1474,6 +1474,42 @@ the wrong thing), each recorded above:
 3. `E387_GAP025` built by applying the gap tool after repanelling, so both codes read the same
    points and the shape ahead of 0.8 c is identical to E387 (step 5).
 
+## M3: Viscous solver at high Reynolds number
+
+Branch `m3-viscous` from `main` (0c55826). Plan in progress; nothing implemented yet.
+
+### Diagnosis (before any rewrite)
+
+NACA 2412 (canonical file), Re 1e6, N_crit 9, against XFOIL's boundary-layer `DUMP` (XFOIL run
+as an external program). Diagnostic committed in `tests/diagnostics/` with the 0 and 5 deg dumps.
+
+- The inviscid side and transpiration are right: our core driven by XFOIL's delta* gives Cl
+  0.2406 / 0.8089 (XFOIL 0.2410 / 0.8101), Cm within 2e-4; XFOIL's wake delta* adds only
+  0.0004 / 0.002 in Cl.
+- XFOIL's dumped Cf is relative to the freestream dynamic pressure, ours to the local edge value;
+  divided by ue^2 the laminar Cf agree (2-8 %). (Report 1 called the laminar Cf "2x low"; that
+  was a normalisation artefact.)
+- Our coupled state at 5 deg is a solution of our own equations on the upper surface (one
+  uncapped march on its edge velocity: trailing-edge delta* within 0.8 %); on the lower surface
+  the laminar model has no solution beyond laminar separation (Thwaites lambda < -0.09 from x/c
+  0.898) and the package forces transition at H = 3.5. At "convergence" the unrelaxed update
+  still differs by 5.1 % of max delta* (the test compares relaxed iterates).
+- Started from XFOIL's 5 deg state, the package iteration reaches our thick trailing-edge state
+  within 20 iterations (Cl 0.758, upper TE H 2.40); without limiters it diverges. The thick state
+  belongs to our model; the edge-velocity-prescribed march is too sensitive near the trailing
+  edge to run without limiters.
+- At 10 and 14 deg our model cannot separate (H cap 2.8 hit; trailing-edge H collapses to about
+  1.2): Cl 1.483 / 1.913 against XFOIL 1.268 / 1.495, Cm -0.086 / -0.090 against -0.037 / -0.012,
+  not converged in 300 iterations.
+
+### Answers (2026-10-09)
+
+- Q1: diagnosis extended to 10 and 14 deg (above).
+- Q2: the wake is not a requirement up front; the formulation keeps room for it and "add the
+  wake" is a named checkpoint, taken if the Cd or Cm targets are not met without it.
+- Q3: diagnostics committed under `tests/diagnostics/` (slow; regeneration in the xfoil group)
+  with the two XFOIL dumps and provenance headers.
+
 ---
 
 ## Later
