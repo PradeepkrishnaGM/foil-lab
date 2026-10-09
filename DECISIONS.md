@@ -1013,6 +1013,22 @@ Reading:
   stagnation point at a sharp trailing edge breaks the v1.3.1 boundary-layer march there.
   Decision needed (VII and the one-way drag are M3).
 
+### Answers Q7-Q11 (2026-10-09; for step 4)
+
+- Q7. Thickness and camber scaling (SPEC 4.4) is done in M2.
+- Q8. API approved with these details:
+  - `fl.analyze` and `fl.polar` accept an `Airfoil` directly as well as a `Configuration`.
+  - `Result` also records alpha, panel count, whether the geometry was repanelled, and the code
+    version.
+  - Drag is `None` for an inviscid result, never 0.
+  - `solve_flow` keeps its current behaviour when called with a Reynolds number until M3, so
+    the GUI, CLI and batch tools do not break. Only the new `fl.analyze` raises
+    `NotImplementedError` for a Reynolds number.
+- Q9. `analyze` repanels to 160 panels by default; `repanel=False` uses the given points unchanged.
+- Q10. Reference chord = the first element's chord; moment reference = its quarter-chord point.
+  Both are overridable on the `Configuration` and both are reported in the `Result`.
+- Q11. `docs/benchmark_m2.md`, tables only; `docs/baseline_v1.3.1.md` stays unchanged.
+
 ---
 
 ## Later
