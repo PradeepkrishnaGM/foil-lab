@@ -663,6 +663,77 @@ Proposed alternatives for the open trailing edge (awaiting decision):
 - (C) Close the gap geometrically for the solver only. Not recommended: the benchmark would no
   longer compare the same geometry with XFOIL.
 
+Decision (2026-10-09): option (A), implemented from Drela (1989) only, with the equations and
+page numbers recorded here; XFOIL source is not opened. If (A) fails its checks, stop before
+trying (B). The plan change (surface speed from the sheet strength; transpiration as equivalent
+sources) is accepted. Blocked until the paper is supplied: the equations are not implemented
+from memory.
+
+Fixed tolerances for the trailing-edge checks (stated before running; NACA 2412, alpha 5 deg;
+gaps made by opening the closed section linearly in x, a test-local construction):
+
+- Gap to zero: at gaps 0.0025 / 0.001 / 0.0003 / 0.0001 c (320 panels) |dCl| and |dCm| to the
+  closed section fall monotonically; at 0.0001 c, |dCl| <= 0.002 and |dCm| <= 0.0005.
+- Flow through the gap: mean normal velocity across the gap <= 0.02 of the freestream (320
+  panels).
+- Trailing-edge Cp: |Cp| on the last panel of each side <= 1.1 at every N from 160 to 1280, and
+  its change from 640 to 1280 panels <= 0.02.
+- Loads: |Cl(N) - Cl(1280)| <= 0.005 at N = 160 and <= 0.002 at N >= 320; |Cm(N) - Cm(1280)|
+  <= 0.001 at N = 160 and <= 0.0005 at N >= 320; successive changes decrease.
+- No sawtooth: no sign alternation of the second difference of the nodal strength in the 5 % of
+  nodes nearest each trailing edge; trailing-edge node strength at 1280 panels <= 1.1 times its
+  value at 160.
+
+Proposed (awaiting approval) for the inviscid XFOIL cross-check in the slow xfoil group (open
+NACA 2412, same canonical file, 0 / 5 / 10 deg, XFOIL without VISC, PANE 160, our core 160
+panels): |dCl| <= 0.01 and |dCm| <= 0.003; XFOIL's own 160-versus-240 spread is reported with it.
+
+### Williams R&M 3717: transcription and exact helper
+
+Transcription (committed as `tests/data/williams/*.csv` with the full citation): Table 1, the
+force table of section 4.1, Table 3 "Exact" rows for flap 10 and 30 deg at alpha 0, and Table
+2(a)/(b) in full (main A 61 rows, flap A 61, main B 62, flap B 61). Read from 300-dpi renders of
+the scanned page images (the PDF has no text layer), every column in close-up; no digit is
+uncertain. Table 2 and Table 1 pages are PDF pages 20-24 (printed 19-23), Table 3 PDF page 25
+(printed 24), the force table PDF page 8 (printed 7).
+
+Checks on the transcription:
+
+- The trailing-edge row of each element has Cp = 1.0000.
+- Second differences of xi and eta along each surface stay within 5 times their median: no
+  outlier rows. Cp second differences are large only at the leading-edge suction peaks and the
+  trailing-edge jump to 1.0, which are features of the distribution.
+- Linear integration of the tabulated Cp around each element against Table 3 (C_N, C_A):
+  main A -8.7e-3 / -2.2e-3, flap A -1.0e-3 / -7.8e-4, main B -2.2e-3 / -1.6e-4, flap B -5.7e-4 /
+  -3.2e-4. The 1e-3 criterion is not met for the main elements. Integrating the same points with
+  a cubic spline in arc length instead gives main A -3.0e-3 / -2.4e-3, flap A +6.6e-4 / +2.4e-4,
+  main B +1.6e-3 / +4.4e-4, flap B +9.7e-5 / +1.4e-5: with about 61 points the integral itself
+  is uncertain by a few 1e-3 at the sharp leading-edge peaks, so this check cannot confirm or
+  rule out the main-element transcription to 1e-3. The flaps agree within 1e-3.
+- Frames: the stagnation points of Table 1(c)/(d) are given in the centre-line frame (both
+  circle centres on the real axis); rotated by the declination of the second centre (-11.888
+  deg) they lie at -beta1 on the first circle and at -(beta2 + flap) on the second, exactly as
+  page 6 states. The first-circle centre is (c1 - a cos beta1, +a sin beta1); the page-6 formula
+  for the second centre has -a sin beta1, which is inconsistent with Table 1 at the 2e-3 level.
+
+Exact helper (option (a)): the image series (eqs. 1-9, Appendix I), the Kutta condition (eqs.
+10-13) and the two Kármán-Trefftz maps (eq. 14) were implemented. Result:
+
+- Stagnation points reproduce Table 1 exactly; circulations are 1/(2 pi) of Table 1 within 2-4 %
+  for the main element and 1-2 % for the flap (Table 1 uses 2 pi times the unit circulation of
+  eq. 8).
+- Geometry does not reproduce Table 2. Section 3.2 does not say how the second transformation's
+  radius and axis are defined for the (no longer circular) image of the second circle. Three
+  readings were tried (c2 = b/k2 with the flap rotation; image of the centre; least-squares circle
+  through the image). Best rms distance of the tabulated main points to the helper curve 2.0e-3
+  (B) to 2.4e-3 (A); the flap shape alone fits to 6.5e-3 at best. The tabulated main aerofoil does
+  not match the first Kármán-Trefftz profile alone either (rms 2.0e-3 for A, 5.0e-3 for B), and
+  the two tabulated mains differ from each other (t/c 0.1538 and 0.1516), so the second
+  transformation reshapes the main aerofoil in a way the report does not specify fully.
+- Cp therefore differs by order 1 near the trailing edges. Per the agreed rule, option (a) is
+  stopped and option (b) is proposed; neither the helper nor the transcription was changed to
+  make them agree. The helper is not committed.
+
 ---
 
 ## Later

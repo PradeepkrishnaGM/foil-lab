@@ -1,0 +1,66 @@
+# Source: B. R. Williams, "An Exact Test Case for the Plane Potential Flow About Two Adjacent
+#   Lifting Aerofoils", Aeronautical Research Council Reports and Memoranda No. 3717, HMSO,
+#   London, 1973 (replaces R.A.E. Technical Report 71197, A.R.C. 33 661).
+# Rows: table, quantity, element, value.
+#   Table 1 (printed page 19, PDF page 20): transformation parameters, circle geometry,
+#     stagnation points and circulations for configurations A (30 deg flap) and B (10 deg flap).
+#   Forces table in section 4.1 (printed page 7, PDF page 8).
+#   Table 3 (printed page 24, PDF page 25): "Exact" rows for flap 10 deg and 30 deg, alpha 0.
+#     CL* is based on integration of pressures; total CL** on the overall circulation.
+# Transcribed from 300-dpi renders of the scanned page images (the PDF has no text layer),
+#   2026-10-09. Uncertain digits: none.
+table,quantity,element,value
+T1a,beta,first,0.001
+T1a,k,first,1.096
+T1a,tau,first,0.17279
+T1a,beta,second,0.08725
+T1a,k,second,1.15
+T1a,tau,second,0.17279
+T1b,centre_x,first,0.0
+T1b,centre_y,first,0.0
+T1b,radius,first,1.096
+T1b,centre_x,second,1.9
+T1b,centre_y,second,-0.4
+T1b,radius,second,0.5
+T1c_A,stagnation_x,first,1.0727
+T1c_A,stagnation_y,first,0.2247
+T1c_A,circulation,first,5.169
+T1c_A,stagnation_x,second,2.4015
+T1c_A,stagnation_y,second,-0.1963
+T1c_A,circulation,second,1.778
+T1d_B,stagnation_x,first,1.0727
+T1d_B,stagnation_y,first,0.2247
+T1d_B,circulation,first,3.154
+T1d_B,stagnation_x,second,2.4409
+T1d_B,stagnation_y,second,-0.0271
+T1d_B,circulation,second,0.655
+p7_A,CL,main,2.9065
+p7_A,CD,main,-0.3839
+p7_A,Gamma,main,1.3909
+p7_A,CL,flap,0.8302
+p7_A,CD,flap,0.3838
+p7_A,Gamma,flap,0.4784
+p7_B,CL,main,1.6915
+p7_B,CD,main,-0.0898
+p7_B,Gamma,main,0.8400
+p7_B,CL,flap,0.3366
+p7_B,CD,flap,0.0897
+p7_B,Gamma,flap,0.1745
+T3_flap10,CN,main,1.6915
+T3_flap10,CA,main,-0.08979
+T3_flap10,CL,main,1.6915
+T3_flap10,Gamma,main,0.8400
+T3_flap10,CN,flap,0.3366
+T3_flap10,CA,flap,0.08965
+T3_flap10,CL,flap,0.3366
+T3_flap10,Gamma,flap,0.1745
+T3_flap10,CL_total,total,2.0290
+T3_flap30,CN,main,2.9065
+T3_flap30,CA,main,-0.3839
+T3_flap30,CL,main,2.9065
+T3_flap30,Gamma,main,1.3909
+T3_flap30,CN,flap,0.8302
+T3_flap30,CA,flap,0.3838
+T3_flap30,CL,flap,0.8302
+T3_flap30,Gamma,flap,0.4784
+T3_flap30,CL_total,total,3.7386
