@@ -88,7 +88,7 @@ def _oneway(coords: np.ndarray, alpha: float, reynolds: float) -> dict:
         stag = int(np.argmin(np.abs(vt[guard:n - guard]))) + guard
         ia, ib = np.arange(stag, -1, -1), np.arange(stag, n)
         xt, xb = _branch_xtr(mid_x, mid_y, [(ia, calls["tidx"][-2]), (ib, calls["tidx"][-1])])
-    ok = all(math.isfinite(v) for v in (s.cl, s.cd_total, s.cm_qc))
+    ok = all(math.isfinite(v) for v in (s.cl, s.cd_total, s.cm_qc)) and 0.0 <= s.cd_total <= 1.0
     return dict(converged="n/a" if ok else "0", cl=s.cl, cd=s.cd_total, cm=s.cm_qc,
                 xtr_top=xt, xtr_bot=xb)
 

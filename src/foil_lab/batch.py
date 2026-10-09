@@ -35,7 +35,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import numpy as np
 
-from .solver import solve_flow
+from .solver import drag_is_plausible, solve_flow
 
 
 # Module-level registry so worker processes can resolve airfoil coordinates by
@@ -111,7 +111,9 @@ def _solve_one(case: Case) -> Dict[str, Any]:
             trip_x_lower=case.trip_x_lower or np.nan,
             cl=sol.cl, cd_ind=sol.cd_ind, cd_visc=sol.cd_visc,
             cd_total=sol.cd_total, cm_qc=sol.cm_qc, cm_le=sol.cm_le,
-            converged=True,
+            # one-way path has no iteration; a viscous row with absurd drag is not converged
+            converged=bool(np.isfinite(sol.cl)
+                           and (case.reynolds <= 0 or drag_is_plausible(sol.cd_total))),
         )
     except Exception as exc:  # never let one bad case kill the batch
         row = dict(

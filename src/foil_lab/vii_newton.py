@@ -130,7 +130,7 @@ def solve_vii_newton(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
         stacklevel=2,
     )
     from .corrections import karman_tsien_correction
-    from .solver import SolutionData, geom_to_coords_list, loads_from_cp
+    from .solver import SolutionData, drag_is_plausible, geom_to_coords_list, loads_from_cp
 
     alpha_rad = np.deg2rad(alpha_deg)
     geom = core.PanelSet.from_bodies(coords)
@@ -224,6 +224,7 @@ def solve_vii_newton(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
         sources=np.asarray(v_n, dtype=float).copy(),
         gamma=_inviscid_with_transpiration(geom, alpha_rad, v_n, v_inf, asm)[0],
         coords_list=geom_to_coords_list(coords), panels=geom)
+    converged = bool(converged and drag_is_plausible(cd_wake))
     return VIIResult(solution=sol, converged=converged, iterations=it,
                      residual=float(res_norm), cd_wake=float(cd_wake),
                      delta_star=delta_star, transpiration=v_n)

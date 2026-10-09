@@ -24,6 +24,17 @@ gradient-based optimizer (SLSQP), with bounds and geometry constraints
 For purely inviscid objectives (target Cl, match Cp) the JAX core is used. For
 L/D, which needs viscous drag, the NumPy viscous path (``solve_flow``) is used.
 
+Trailing edge
+-------------
+Within one optimisation the trailing-edge type is fixed (``trailing_edge``). A closed section
+(gap ``dy_te`` = 0) stays closed: the gap is held at zero and is not a design variable. An open
+section has the gap as a design variable with the positive lower bound
+``params.DESIGN.min_te_gap``. Reason: the inviscid core treats a closed edge with Drela's eq. (9)
+and an open edge with a trailing-edge panel; at zero gap the two differ by a discretisation
+amount (PARSEC start section at 5 deg: Cl jump 1.1e-3 at 100 panels, 1.4e-4 at 800; NACA 2412:
+5e-5 at 100, 1.6e-6 at 640; DECISIONS.md M2). A finite-difference step across zero gap would see
+that jump as a gradient of order 1e5.
+
 Honesty
 -------
 * PARSEC spans a broad but not universal airfoil family; some exotic targets are
@@ -42,6 +53,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from .generators import generate_parsec
+from .params import DESIGN
 from .solver import solve_flow
 
 
@@ -90,6 +102,39 @@ def _bounds_list(bounds: Dict[str, Tuple[float, float]]):
     return [bounds[k] for k in PARSEC_KEYS]
 
 
+@dataclass(frozen=True)
+class _DesignSpace:
+    """Design variables of one optimisation, with the trailing-edge type fixed."""
+
+    keys: Tuple[str, ...]
+    fixed: Dict[str, float]
+
+    def params(self, x: np.ndarray) -> Dict[str, float]:
+        p = dict(self.fixed)
+        p.update({k: float(v) for k, v in zip(self.keys, x)})
+        return {k: p[k] for k in PARSEC_KEYS}
+
+
+def _design_space(start: Dict[str, float], bounds: Dict[str, Tuple[float, float]],
+                  trailing_edge: Optional[str]):
+    """(space, x0, bounds list). ``trailing_edge``: None (closed if the start gap is zero, else
+    open), ``"closed"`` (gap held at 0) or ``"open"`` (gap >= ``DESIGN.min_te_gap``)."""
+    if trailing_edge is None:
+        trailing_edge = "closed" if start["dy_te"] == 0.0 else "open"
+    if trailing_edge == "closed":
+        space = _DesignSpace(tuple(k for k in PARSEC_KEYS if k != "dy_te"), {"dy_te": 0.0})
+        b = dict(bounds)
+    elif trailing_edge == "open":
+        space = _DesignSpace(tuple(PARSEC_KEYS), {})
+        lo, hi = bounds["dy_te"]
+        b = dict(bounds, dy_te=(max(lo, DESIGN.min_te_gap), max(hi, DESIGN.min_te_gap)))
+        start = dict(start, dy_te=max(start["dy_te"], b["dy_te"][0]))
+    else:
+        raise ValueError(f"trailing_edge must be None, 'closed' or 'open', got {trailing_edge!r}")
+    x0 = np.array([start[k] for k in space.keys], dtype=float)
+    return space, x0, [b[k] for k in space.keys]
+
+
 def _make_jax_cl(num_panels: int):
     """Return a function coords->(cl,cm) using the pre-compiled JAX core.
 
@@ -121,39 +166,38 @@ def design_for_cl(target_cl: float, alpha_deg: float = 5.0,
                   max_thickness: float = 0.18,
                   start: Optional[Dict[str, float]] = None,
                   bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-                  max_iter: int = 60) -> DesignResult:
-    """Find a PARSEC airfoil giving ``target_cl`` at ``alpha_deg`` (inviscid)."""
+                  max_iter: int = 60, trailing_edge: Optional[str] = None) -> DesignResult:
+    """Find a PARSEC airfoil giving ``target_cl`` at ``alpha_deg`` (inviscid).
+
+    ``trailing_edge``: see the module docstring (default: keep the start's type).
+    """
     start = start or default_start()
     bounds = bounds or DEFAULT_BOUNDS
+    space, x0, blist = _design_space(start, bounds, trailing_edge)
     solve = _make_jax_cl(num_panels)
     history: List[float] = []
     n_eval = [0]
 
     def objective(x):
         n_eval[0] += 1
-        coords = generate_parsec(_vec_to_params(x), num_panels)
+        coords = generate_parsec(space.params(x), num_panels)
         cl, _ = solve(coords, alpha_deg)
         obj = (cl - target_cl) ** 2
         history.append(obj)
         return obj
 
-    def thickness_con(x):
-        coords = generate_parsec(_vec_to_params(x), num_panels)
-        t = _thickness(coords)
-        return t  # >= min handled via two constraints below
-
     cons = [
         {"type": "ineq", "fun": lambda x: _thickness(
-            generate_parsec(_vec_to_params(x), num_panels)) - min_thickness},
+            generate_parsec(space.params(x), num_panels)) - min_thickness},
         {"type": "ineq", "fun": lambda x: max_thickness - _thickness(
-            generate_parsec(_vec_to_params(x), num_panels))},
+            generate_parsec(space.params(x), num_panels))},
     ]
 
-    res = minimize(objective, _params_to_vec(start), method="SLSQP",
-                   bounds=_bounds_list(bounds), constraints=cons,
+    res = minimize(objective, x0, method="SLSQP",
+                   bounds=blist, constraints=cons,
                    options={"maxiter": max_iter, "ftol": 1e-8})
 
-    params = _vec_to_params(res.x)
+    params = space.params(res.x)
     coords = generate_parsec(params, num_panels)
     final_cl, _ = solve(coords, alpha_deg)
     return DesignResult(
@@ -172,7 +216,7 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
                 use_vii: bool = True,
                 start: Optional[Dict[str, float]] = None,
                 bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-                max_iter: int = 30) -> DesignResult:
+                max_iter: int = 30, trailing_edge: Optional[str] = None) -> DesignResult:
     """Maximize lift-to-drag ratio at fixed alpha and Reynolds.
 
     Drag source
@@ -188,9 +232,12 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
     If ``target_cl`` is given, lift is constrained to it (within 0.03) so the
     optimizer improves L/D by reducing drag at fixed lift, rather than just
     piling on camber. Strongly recommended for a meaningful result.
+
+    ``trailing_edge``: see the module docstring (default: keep the start's type).
     """
     start = start or default_start()
     bounds = bounds or DEFAULT_BOUNDS
+    space, x0, blist = _design_space(start, bounds, trailing_edge)
     history: List[float] = []
     n_eval = [0]
 
@@ -205,7 +252,7 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
 
     def neg_ld(x):
         n_eval[0] += 1
-        coords = generate_parsec(_vec_to_params(x), num_panels)
+        coords = generate_parsec(space.params(x), num_panels)
         cl, cd, conv = _solve(coords)
         # Guard against the optimizer exploiting non-converged VII cases (where
         # cd can collapse to a meaningless tiny value, faking a huge L/D) and
@@ -219,19 +266,19 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
 
     cons = [
         {"type": "ineq", "fun": lambda x: _thickness(
-            generate_parsec(_vec_to_params(x), num_panels)) - min_thickness},
+            generate_parsec(space.params(x), num_panels)) - min_thickness},
         {"type": "ineq", "fun": lambda x: max_thickness - _thickness(
-            generate_parsec(_vec_to_params(x), num_panels))},
+            generate_parsec(space.params(x), num_panels))},
     ]
     if target_cl is not None:
         cons.append({"type": "ineq", "fun": lambda x: 0.03 - abs(
-            _solve(generate_parsec(_vec_to_params(x), num_panels))[0] - target_cl)})
+            _solve(generate_parsec(space.params(x), num_panels))[0] - target_cl)})
 
-    res = minimize(neg_ld, _params_to_vec(start), method="SLSQP",
-                   bounds=_bounds_list(bounds), constraints=cons,
+    res = minimize(neg_ld, x0, method="SLSQP",
+                   bounds=blist, constraints=cons,
                    options={"maxiter": max_iter, "ftol": 1e-4})
 
-    params = _vec_to_params(res.x)
+    params = space.params(res.x)
     coords = generate_parsec(params, num_panels)
     cl, cd, conv = _solve(coords)
     return DesignResult(
@@ -250,19 +297,21 @@ def match_cp(target_coords: np.ndarray, alpha_deg: float = 5.0,
              start: Optional[Dict[str, float]] = None,
              bounds: Optional[Dict[str, Tuple[float, float]]] = None,
              regularization: float = 1e-3,
-             max_iter: int = 80) -> DesignResult:
+             max_iter: int = 80, trailing_edge: Optional[str] = None) -> DesignResult:
     """Recover a PARSEC airfoil whose Cp matches that of ``target_coords``.
 
     The target Cp is computed once from the supplied target airfoil at the same
     alpha. We then minimize the mean-squared Cp difference (sampled at matching
     x/c) over PARSEC parameters, with light Tikhonov regularization toward the
     start to keep the ill-posed inverse problem well-behaved.
+
+    ``trailing_edge``: see the module docstring (default: keep the start's type).
     """
     start = start or default_start()
     bounds = bounds or DEFAULT_BOUNDS
+    space, x0, blist = _design_space(start, bounds, trailing_edge)
     history: List[float] = []
     n_eval = [0]
-    x0 = _params_to_vec(start)
 
     # Target Cp sampled vs x on each surface, from the NumPy solver.
     tgt = solve_flow(target_coords, alpha_deg)
@@ -289,7 +338,7 @@ def match_cp(target_coords: np.ndarray, alpha_deg: float = 5.0,
 
     def objective(x):
         n_eval[0] += 1
-        coords = generate_parsec(_vec_to_params(x), num_panels)
+        coords = generate_parsec(space.params(x), num_panels)
         s = solve_flow(coords, alpha_deg)
         cu, cl_ = sample_cp(coords, s.cp_dist)
         err = np.mean((cu - tgt_cu) ** 2) + np.mean((cl_ - tgt_cl) ** 2)
@@ -299,10 +348,10 @@ def match_cp(target_coords: np.ndarray, alpha_deg: float = 5.0,
         return val
 
     res = minimize(objective, x0, method="SLSQP",
-                   bounds=_bounds_list(bounds),
+                   bounds=blist,
                    options={"maxiter": max_iter, "ftol": 1e-9})
 
-    params = _vec_to_params(res.x)
+    params = space.params(res.x)
     coords = generate_parsec(params, num_panels)
     return DesignResult(
         params=params, coords=coords, success=res.success,

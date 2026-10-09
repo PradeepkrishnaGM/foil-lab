@@ -56,3 +56,13 @@ def test_match_cp_reduces_error():
     r = match_cp(target, alpha_deg=4.0, num_panels=120, max_iter=60)
     # history[0] is the starting error, history[-1] the final.
     assert r.history[-1] < r.history[0]
+
+
+def test_trailing_edge_type_fixed_within_one_optimisation():
+    """A closed start stays closed (gap held at 0); an open design keeps the gap >= the bound."""
+    from foil_lab.params import DESIGN
+    closed = design_for_cl(target_cl=0.8, alpha_deg=5.0, num_panels=80, max_iter=15)
+    assert closed.params["dy_te"] == 0.0
+    opened = design_for_cl(target_cl=0.8, alpha_deg=5.0, num_panels=80, max_iter=15,
+                           trailing_edge="open")
+    assert opened.params["dy_te"] >= DESIGN.min_te_gap

@@ -252,7 +252,7 @@ def solve_vii_qs(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
                       geom_to_coords_list)
     from . import inviscid as core
     from .corrections import karman_tsien_correction
-    from .solver import SolutionData, loads_from_cp
+    from .solver import SolutionData, drag_is_plausible, loads_from_cp
 
     alpha_rad = np.deg2rad(alpha_deg)
     geom = core.PanelSet.from_bodies(coords)
@@ -351,6 +351,7 @@ def solve_vii_qs(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
         cm_le=cm_le, cm_qc=cm_qc,
         sources=v_n_solved, gamma=strengths,
         coords_list=geom_to_coords_list(coords), panels=geom)
+    converged = bool(converged and drag_is_plausible(cd_wake))
     return VIIResult(solution=sol, converged=converged, iterations=it,
                      residual=float(residual), cd_wake=float(cd_wake),
                      delta_star=delta_star, transpiration=v_n)

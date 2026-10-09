@@ -44,7 +44,7 @@ import numpy as np
 from . import inviscid as core
 from .bl_integral import march_boundary_layer
 from .corrections import karman_tsien_correction
-from .solver import SolutionData, geom_to_coords_list, loads_from_cp
+from .solver import SolutionData, drag_is_plausible, geom_to_coords_list, loads_from_cp
 
 
 @dataclass
@@ -210,6 +210,7 @@ def solve_vii(coords, alpha_deg, reynolds, v_inf=1.0, mach=0.0,
         sources=v_n_solved, gamma=strengths,
         coords_list=geom_to_coords_list(coords), panels=geom,
     )
+    converged = bool(converged and drag_is_plausible(cd_wake))
     return VIIResult(solution=sol, converged=converged, iterations=it,
                      residual=float(residual), cd_wake=float(cd_wake),
                      delta_star=delta_star, transpiration=v_n)

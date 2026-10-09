@@ -105,6 +105,25 @@ class BenchmarkParams:
     workers: int = 6
 
 
+@dataclass(frozen=True)
+class DesignParams:
+    """Shape optimisation (``foil_lab.design``).
+
+    Attributes
+    ----------
+    min_te_gap:
+        Lower bound on the PARSEC trailing-edge gap ``dy_te`` (fraction of chord) when an open
+        trailing edge is designed. The closed (zero gap) and open (trailing-edge panel)
+        treatments differ at zero gap by a discretisation amount, so the optimiser must never
+        reach zero gap from the open side (DECISIONS.md, M2). 0.001 c keeps the gap far from the
+        switch and from finite-difference steps (about 1.5e-8). Proposed default, awaiting
+        approval.
+    """
+
+    min_te_gap: float = 0.001
+
+
 XFOIL = XfoilParams()
 SWEEP = SweepParams()
 BENCHMARK = BenchmarkParams()
+DESIGN = DesignParams()

@@ -62,6 +62,12 @@ def geom_to_coords_list(coords_input: CoordsLike) -> List[np.ndarray]:
     return list(coords_input)
 
 
+def drag_is_plausible(cd: float) -> bool:
+    """False for non-finite drag, Cd < 0 or Cd > 1: such a viscous result is never reported as
+    converged (DECISIONS.md, M2 check 3)."""
+    return bool(np.isfinite(cd) and 0.0 <= cd <= 1.0)
+
+
 def loads_from_cp(ps: core.PanelSet, cp: np.ndarray, alpha_deg: float, body=None):
     """(cl, cm about the leading edge (0, 0), cm about the quarter chord (0.25, 0))."""
     cl, _, cm_le = core.pressure_loads(ps, cp, alpha_deg, body, ref_point=(0.0, 0.0))

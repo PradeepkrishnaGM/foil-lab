@@ -1148,6 +1148,48 @@ Already in the v1.3.1 code, not added or checked by me: Thwaites (`boundary_laye
 (`transition.py`), Squire-Young (`vii.py`), Kármán-Tsien (`corrections.py`), Busemann
 (`gui/main_window.py`).
 
+### Decisions after the P3 report (2026-10-09)
+
+P3 accepted as implemented.
+
+Decision 1: `test_vii_newton.py::test_newton_low_re_drag_right_order_of_magnitude` is marked
+`xfail(strict=True, raises=AssertionError)`, fixed in M3, reason "Newton VII convergence at Re
+5e4 depends on panel count on both trailing edges". Panel count, tolerance and iteration limit
+unchanged. Newton VII, NACA 2412, Re 5e4, 2 deg, `max_iter=60`, `tol=1e-4`:
+
+| Panels | Closed (P3) | Open (trailing-edge panel) |
+|---|---|---|
+| 100 | converges, 17 iterations; Cl 0.345, Cd 0.0178 | converges, 19; Cl 0.373, Cd 0.0179 |
+| 120 | not converged (residual 2.0e-2); Cl 0.343, Cd 0.0180 | converges, 50; Cl 0.348, Cd 0.0174 |
+| 140 | not converged (residual 2.5e-1); Cl 0.343, Cd 0.0103 | not converged (9.5e-2); Cl 0.359, Cd 0.0180 |
+| 160 | converges, 56; Cl 0.601, Cd 0.0066 | converges, 38; Cl 0.675, Cd 0.0141 |
+
+Decision 2 (option a): within one optimisation the trailing-edge type is fixed. By default a
+section that starts closed stays closed (the PARSEC gap `dy_te` is held at zero and is not a
+design variable); with `trailing_edge="open"` the gap is a design variable with the lower bound
+`params.DESIGN.min_te_gap` (0.001 c; a new default, proposed and awaiting approval), so the
+optimiser never reaches the switch. Applies to `design_for_cl`, `maximize_ld` and `match_cp`.
+`test_design_for_cl_hits_target` is unedited and passes (all three targets); a new test checks
+both cases. Why the optimiser must not cross between the treatments: at zero gap the closed
+treatment (Drela eq. 9) and the open one (trailing-edge panel) differ by a discretisation amount,
+which a finite-difference step of about 1.5e-8 across zero gap sees as a gradient of order 1e5
+(SLSQP then stopped at its start: Cl 0.918 against target 1.1). Cl at 5 deg, closed against a gap
+of 1e-8:
+
+| Section | Panels | Closed | Gap 1e-8 | Jump |
+|---|---|---|---|---|
+| PARSEC start | 100 | 0.917750 | 0.916657 | -1.09e-3 |
+| PARSEC start | 200 | 0.918712 | 0.918176 | -5.36e-4 |
+| PARSEC start | 400 | 0.918953 | 0.918683 | -2.69e-4 |
+| PARSEC start | 800 | 0.919012 | 0.918875 | -1.37e-4 |
+| NACA 2412 | 100 | 0.861065 | 0.861014 | -5.1e-5 |
+| NACA 2412 | 160 | 0.861448 | 0.861428 | -2.0e-5 |
+| NACA 2412 | 320 | 0.861632 | 0.861627 | -4.8e-6 |
+| NACA 2412 | 640 | 0.861677 | 0.861676 | -1.6e-6 |
+
+The jump is first order on the PARSEC start section and falls faster on NACA 2412; both
+treatments converge to the same limit.
+
 ---
 
 ## Later
@@ -1189,3 +1231,10 @@ Already in the v1.3.1 code, not added or checked by me: Thwaites (`boundary_laye
   (1998) section 5.10; Katz & Plotkin (2001) sections 6.7, 10.2, 10.3-10.4, 11.4.2 and chapter
   11; Lighthill (1958); Milne-Thomson (1958) chapter 7; NACA Report 460 (1933) and its -0.1015
   coefficient; Abbott and von Doenhoff. Also the pre-existing v1.3.1 citations listed there.
+- M3: Newton VII at Re 5e4 (NACA 2412, 2 deg) reaches a different solution at 160 panels (Cl
+  0.60 closed, 0.68 open, against about 0.34-0.37 at 100-120 panels); convergence depends on
+  panel count on both trailing edges (table in M2, "Decisions after the P3 report").
+- After v2.0: a closed (sharp) trailing-edge treatment that matches the open (trailing-edge
+  panel) limit more closely at zero gap. The jump is first order on the PARSEC start section
+  (1.1e-3 at 100 panels, 1.4e-4 at 800) and falls faster on NACA 2412 (5e-5 at 100, 1.6e-6 at
+  640).
