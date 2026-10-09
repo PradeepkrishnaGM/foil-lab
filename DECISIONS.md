@@ -1510,6 +1510,116 @@ as an external program). Diagnostic committed in `tests/diagnostics/` with the 0
 - Q3: diagnostics committed under `tests/diagnostics/` (slow; regeneration in the xfoil group)
   with the two XFOIL dumps and provenance headers.
 
+### Plan approved (2026-10-09) with changes
+
+Sources supplied in `review-gui/`: Drela & Giles 1987 (DG87), Drela 1989 AIAA-89-2200 (BTE89),
+Green et al. R&M 3791, Squire & Young R&M 1838 (SY38); Drela 1989 LNE 54 (LNE89) already at hand.
+All equations were read from page images (the OCR text layers garble formulae).
+Fidkowski's mfoil paper may be used as a secondary published source; it has not been supplied
+and is not used so far. Neither mfoil's nor XFOIL's code is read.
+
+Answers:
+- Q2: Michel's criterion dropped. SPEC.md 4.3 changed (approved): "Transition by the e^n envelope
+  method, with forced trip locations per surface."
+- Q3: `solve_flow` with a Reynolds number moves to the new solver; `enable_post_stall` and
+  `viscous_mods.py` are deleted.
+- Q4: viscous results are Mach 0 only in M3.
+- Q5: benchmark adapter gets one "viscous" method plus inviscid; the two existing benchmark
+  documents stay as the before pictures.
+- Q6: convergence defaults approved as starting values (scaling below). If C2 shows points that
+  stall just above the tolerance, the residual histories are shown before any change.
+
+Changes to the plan (user): Jacobian from JAX automatic differentiation (JAX path) and from
+complex-step of the local station residuals with the chain rule through the edge-velocity
+relation (NumPy path), never hand-derived; a test that the two agree and match finite
+differences of the full residual. C1 also run in the inverse direction (prescribed delta*,
+compare ue). Solver structured for several bodies with two branches each (single body tested in
+M3). Stops after C0+C1, after C2, after C3; C4 (wake) taken without asking if C3 misses Cd or Cm.
+
+### Formulation details fixed before C1, with sources
+
+Equations (Mach 0): momentum DG87 (4) = LNE89 (21); shape parameter DG87 (5) = LNE89 (22);
+amplification DG87 (35) = LNE89 (24); lag LNE89 (23) (decision below). Closures DG87 (10)-(13)
+laminar, (14)-(19) turbulent, (20)-(24) dissipation, slip velocity, delta, C_tau,EQ; DG87
+(29)-(30) and (33)-(35) amplification; wake BTE89 (13)-(18) (checkpoint C4 only); drag SY38 (3),
+(13)-(14).
+
+1. **Initialisation of the Newton iteration.**
+   - A polar point starts from the previous converged angle (DG87 p. 1353: "a good initial guess
+     was available for each point from the previous angle of attack").
+   - A first point is started from a station-by-station march of the same discrete equations on
+     the inviscid edge velocity. At stations where the prescribed-ue march has no solution (near
+     separation), the march switches to prescribing a small increase of H_k and solves for ue.
+   - No published source at hand describes the cold start: this is my own procedure, and its only
+     role is to supply a starting state (the converged answer does not depend on it, which C2
+     checks with two different starts).
+2. **Transition inside the Newton system.**
+   - DG87 pp. 1351-1352 and Fig. 5: the interval containing transition is split into a laminar and
+     a turbulent subinterval.
+   - The onset xi_tr is defined implicitly by the discrete amplification equation reaching N_crit
+     on the laminar subinterval, so it is a smooth function of the neighbouring variables.
+   - The interval's equations are weighted averages of the two subintervals.
+   - C_tau^(1/2) at xi_tr is 0.7 times its equilibrium value.
+   - Forced transition: xi_tr set to the trip location (DG87 p. 1352).
+   - Mine: the weights are the subinterval length fractions (xi_tr - xi_1)/(xi_2 - xi_1) and its
+     complement; the amplification rate on the laminar subinterval is the trapezoidal average of
+     the end values; which interval holds transition is re-identified after each Newton update.
+3. **Stagnation point.**
+   - On the surface ue = +-gamma (LNE89 eq. 30).
+   - The stagnation point is where the nodal sheet strength changes sign on a body, located by
+     linear interpolation between the two nodes; xi on each branch is measured from it.
+   - It is re-located after each Newton update. A node that changes branch keeps its variables
+     (they are small and nearly symmetric there); this is mine.
+   - The first station of each branch uses the Falkner-Skan stagnation (Hiemenz) similarity
+     relations of DG87: m(H_k) = 1 in eq. (34) gives H_k, and eq. (33) gives
+     theta^2 = l(H_k) xi / (Re ue) (DG87 eqs. 33-34).
+4. **States outside a closure's valid range.**
+   - The DG87 closures contain (H_k - 1) and l(H_k) = (6.54 H_k - 14.07)/H_k^2 (positive only for
+     H_k > 2.151) and log10 Re_theta.
+   - Mine: amplification is zero where Re_theta < Re_theta0 (DG87 eq. 36 integrates from that
+     point) or l(H_k) <= 0.
+   - A Newton update is scaled down so that H_k stays above `ViscousParams.hk_min` (laminar and
+     turbulent) and Re_theta above `ViscousParams.re_theta_min`; every such scaling is counted in
+     the result.
+   - A solution that ends on a bound is reported `converged=False` with the reason. No closure is
+     clipped silently.
+
+Other decisions (mine, recorded):
+
+- **Stations at the panel nodes**, where the sheet strength is the surface speed (LNE89 eq. 30),
+  so the source of each panel is sigma = dm/dxi between its two nodes (LNE89 eq. 32).
+  Unknowns per station: theta, m = ue delta*, and n or C_tau^(1/2) (LNE89 eq. 34). ue is
+  eliminated by ue = ue_inv + D m (LNE89 eq. 33), with D built exactly from our core.
+- **Lag equation:** LNE89 eq. (23), the later form Drela describes as giving better lift and drag
+  near stall. DG87 eq. (22) and BTE89 eq. (3) print the original 4.2 form.
+- **DG87 eq. (18)** is printed with "H_k" on the left; the text says it is the relation between
+  H*, H_k and Re_theta, so it is read as H* = ....
+- **Its "log"** has no base. DG87 writes log10 explicitly in eqs. (14) and (30), so plain "log" is
+  read as the natural logarithm. (BTE89 Fig. 4's H*-H_k curve is closer to the natural-log
+  version.) To verify in M9.
+- **Discretisation:** two-point central (trapezoidal) differences (DG87 p. 1351), written in
+  logarithmic form for theta, H* and C_tau, so each residual is dimensionless. DG87's downstream
+  bias of the shape equation at high Re is a parameter (`shape_eq_bias`, 0.5 = central),
+  changed only if C1/C2 show the stiffness DG87 describes.
+- **Squire-Young** (before the wake checkpoint): theta_1 = theta_upper + theta_lower (SY38 p. 4),
+  H_1 = (delta*_upper + delta*_lower)/theta_1, U_1 = theta-weighted mean of the two trailing-edge
+  edge speeds; C_D = 2 theta_1 (U_1)^((H_1 + 5)/2) (SY38 eqs. 3, 13-14, U_0 = 1). Friction drag
+  = SY38 eq. (4); pressure drag = total - friction.
+
+Residual scaling (Q6), exact form at every station interval (i-1, i) of each branch:
+
+- momentum: R1 = ln(theta_i/theta_{i-1}) + (2 + H_avg) ln(ue_i/ue_{i-1}) - (xi_i - xi_{i-1})
+  (Cf/2)_avg / theta_avg
+- shape: R2 = ln(H*_i/H*_{i-1}) + (2H**/H* + 1 - H)_avg ln(ue_i/ue_{i-1}) - (xi_i - xi_{i-1})
+  (2C_D/H* - Cf/2)_avg / theta_avg
+- lag: R3 = ln(C_tau,i/C_tau,i-1) - (xi_i - xi_{i-1}) [rate of LNE89 eq. 23]_avg
+- amplification: R3 = n_i - n_{i-1} - (xi_i - xi_{i-1}) (dn/dxi)_avg
+- edge velocity: R4 = ue_i - ue_inv,i - sum_j D_ij m_j, in units of the freestream speed.
+
+All residuals are dimensionless and O(1) per interval. Converged: max |R| <= 1e-8 over all
+residuals and the last Newton update <= 1e-6 relative on theta and m, within 50 iterations
+(`ViscousParams`).
+
 ---
 
 ## Later
@@ -1564,3 +1674,7 @@ as an external program). Diagnostic committed in `tests/diagnostics/` with the 0
 - M7: the farthest-point leading edge gives a generated NACA 2412 a chord of 1.00008, so its
   coefficients differ from the nominal unit chord by about 8e-5. Decide then whether generated
   sections keep their nominal chord.
+
+- M9: the README states that the viscous model follows the published formulation of Drela (1989)
+  and Drela & Giles (1987).
+- M9: verify the reading of DG87 eq. (18) (left side H*, natural logarithm) against the source.

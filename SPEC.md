@@ -127,7 +127,7 @@ The benchmark always reports the measured numbers, whether or not a target is me
   do not converge are removed from the public interface.
 - Every result carries a `converged` flag that is true only if the stated residual criteria
   were met. There are no silent fallbacks: if a fallback is used, the result says which.
-- Transition by e^n (default) or Michel, with forced trip locations per surface.
+- Transition by the e^n envelope method, with forced trip locations per surface.
 - All tunable numbers live in one parameters module with documented defaults.
 
 ### 4.4 Geometry
