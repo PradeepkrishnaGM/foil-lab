@@ -1651,6 +1651,32 @@ XFOIL's states gives XFOIL's transition (0.657 vs 0.657; 0.312 vs 0.293). LNE89 
 XFOIL's formulation is that of ISES [DG87] and gives no other laminar closure. So the installed
 XFOIL 6.99 uses a laminar Cf that is not in the supplied sources. Stopped for the user's decision.
 
+### Laminar closure choice on physics (2026-10-09): option B, Fidkowski paper
+
+User's decision: option B with the Fidkowski paper (FID; paper only, never mfoil's or XFOIL's
+code); choose on physics: adopt a FID laminar closure only where it is at least as close to the
+exact Falkner-Skan relations as DG87 over H 2.2-4.0, otherwise stop. C1 targets unchanged.
+FID transcribed from the page images (appendix pp. 17-19; equations pp. 5-8).
+
+Exact reference: `tests/diagnostics/falkner_skan.py` (Hartree form, shooting; reproduces Blasius
+f''(0) 0.4696, H 2.591 and Hiemenz 1.2326, 2.216; tested). Comparison:
+`tests/diagnostics/laminar_closure_compare.py`. Max |error| against Falkner-Skan:
+
+| quantity | closure | H 2.2-2.6 | 2.6-3.0 | 3.0-3.5 | 3.5-4.0 (absolute) |
+|---|---|---|---|---|---|
+| Re_theta Cf/2 | DG87 eq. 11 | 0.0106 (2.9 %) | 0.0022 (1.7 %) | 0.0060 (12 %) | 0.0072 |
+| | FID eq. 56 | 0.0062 (2.8 %) | 0.0145 (11 %) | 0.0177 (36 %) | 0.0171 |
+| | XFOIL dump | 0.0067 (3.1 %) | 0.0150 (12 %) | 0.0178 (31 %) | 0.0169 |
+| H* | DG87 eq. 10 | 0.1 % | 0.05 % | 0.03 % | 0.03 % |
+| | FID eq. 47 | 0.2 % | 0.4 % | 0.7 % | 0.9 % |
+| | XFOIL dump | 0.2 % | 0.5 % | 0.7 % | 0.9 % |
+| Re_theta 2C_D/H* | DG87 eq. 12 = FID eq. 61 (identical for H < 4) | 0.1 % | 0.3 % | 0.5 % | 0.4 % |
+
+Result: FID's laminar Cf and H* are further from Falkner-Skan than DG87 above H 2.6 (FID's Cf
+crosses zero at H 3.83, DG87's at 4.14, Falkner-Skan at 4.03); XFOIL's dumped values follow FID. By the rule, no
+FID laminar closure is adopted; DG87 eqs. (10)-(12) stay. Stopped for the user before items 4-6
+(item 6, the M9 README note, is added under Later).
+
 ---
 
 ## Later
@@ -1709,3 +1735,6 @@ XFOIL 6.99 uses a laminar Cf that is not in the supplied sources. Stopped for th
 - M9: the README states that the viscous model follows the published formulation of Drela (1989)
   and Drela & Giles (1987).
 - M9: verify the reading of DG87 eq. (18) (left side H*, natural logarithm) against the source.
+- M9: the README names both viscous sources, Drela (1989) / Drela & Giles (1987) and Fidkowski
+  ("A Coupled Inviscid-Viscous Airfoil Analysis Solver, Revisited"), and says which closures, if
+  any, follow the later published forms of the Fidkowski paper.

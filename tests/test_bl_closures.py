@@ -129,3 +129,17 @@ def test_turbulent_flat_plate_cf_new_bl():
     it = int(np.argmax(r.turbulent))
     assert 1.3 < np.mean(r.h[it:]) < 1.5
     assert abs(r.xi_transition - 0.1) <= 1e-12
+
+
+# --------------------------------------------------------------------------------------- #
+# Falkner-Skan reference used to judge the laminar closures
+# --------------------------------------------------------------------------------------- #
+def test_falkner_skan_reference_solver():
+    """Shooting solver reproduces the classical values: Blasius f''(0) = 0.4696, H = 2.591;
+    Hiemenz f''(0) = 1.2326, H = 2.216 (Hartree form)."""
+    from tests.diagnostics.falkner_skan import solve
+    b = solve(0.0)
+    assert abs(b["fpp0"] - 0.4696) < 1e-4 and abs(b["h"] - 2.591) < 1e-3
+    assert abs(b["ret_cf2"] - 0.664 * 0.332) < 1e-3
+    s = solve(1.0)
+    assert abs(s["fpp0"] - 1.2326) < 1e-4 and abs(s["h"] - 2.216) < 1e-3
