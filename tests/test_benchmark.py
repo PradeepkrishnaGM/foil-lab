@@ -50,7 +50,7 @@ def test_downloaded_section_skips_cleanly_without_cache_or_network(tmp_path, mon
         sections.fetch(spec, timeout_s=2.0)
 
 
-@pytest.mark.parametrize("name", ["CLARKY", "E387"])
+@pytest.mark.parametrize("name", ["CLARKY", "E387", "E387_GAP025"])
 def test_downloaded_sections_canonical(name):
     try:
         sec = sections.canonical(name)
@@ -128,3 +128,14 @@ def test_report_command_never_writes_the_baseline_document(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     assert main(["report", "--output", str(tmp_path / "out")]) == 0
     assert not (tmp_path / "docs").exists()
+
+
+def test_e387_gap_variant():
+    """E387_GAP025: the canonical E387 with a 0.25 % chord trailing-edge gap (1e-12)."""
+    try:
+        base, var = sections.canonical("E387"), sections.canonical("E387_GAP025")
+    except sections.SectionUnavailable as exc:
+        pytest.skip(str(exc))
+    assert abs(var.trailing_edge_gap - 0.0025) <= 1e-12
+    ahead = base.coords[:, 0] < 0.79
+    assert np.max(np.abs(var.coords[ahead] - base.coords[ahead])) <= 1e-12

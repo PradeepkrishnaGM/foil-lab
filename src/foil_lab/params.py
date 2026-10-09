@@ -89,7 +89,7 @@ class BenchmarkParams:
     """
 
     sections: tuple[str, ...] = ("NACA0012", "NACA2412", "NACA4412", "NACA23012",
-                                 "CLARKY", "E387")
+                                 "CLARKY", "E387", "E387_GAP025")
     reynolds_validated: tuple[float, ...] = (5e5, 1e6, 3e6, 6e6)
     reynolds_low: tuple[float, ...] = (5e4, 1e5, 2e5)
     pane_nodes: tuple[int, int] = (160, 240)

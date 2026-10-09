@@ -235,7 +235,8 @@ def build_markdown(cases: list[CaseResult], bench: BenchmarkParams, plots: bool)
         f"{PROVISIONAL['cm']}.",
         "",
     ]
-    for group, sharp in (("open trailing edge (NACA 0012, 2412, 4412, 23012, Clark Y)", False),
+    for group, sharp in (("open trailing edge (NACA 0012, 2412, 4412, 23012, Clark Y, "
+                          "E387 with a 0.25 % gap)", False),
                          ("sharp trailing edge (E387)", True)):
         lines += [f"## Summary by Reynolds number: {group}", ""]
         rows = []

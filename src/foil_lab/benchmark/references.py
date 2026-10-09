@@ -61,8 +61,9 @@ def _one(sec: CanonicalSection, reynolds: float, pane_nodes: int, out_dir: str,
 def generate_references(bench: BenchmarkParams = BENCHMARK,
                         out_dir: Path = SOURCE_REFERENCE_DIR,
                         output_root: Path = Path("benchmark_output"),
-                        workers: int | None = None) -> list[str]:
-    """Regenerate every reference polar of the benchmark matrix.
+                        workers: int | None = None,
+                        only: tuple[str, ...] | None = None) -> list[str]:
+    """Regenerate the reference polars of the benchmark matrix (``only``: these sections).
 
     Writes the reference CSVs to ``out_dir``, the canonical coordinate files to
     ``output_root/coords`` and every XFOIL console log to ``output_root/xfoil_logs``.
@@ -73,6 +74,8 @@ def generate_references(bench: BenchmarkParams = BENCHMARK,
     log_dir = output_root / "xfoil_logs"
     sections = []
     for name in bench.sections:
+        if only is not None and name not in only:
+            continue
         try:
             sec = canonical(name, bench.num_panels)
         except SectionUnavailable as exc:

@@ -25,11 +25,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("command", choices=["references", "run", "report", "all", "baseline-doc"])
     p.add_argument("--output", default="benchmark_output", help="output folder (default: %(default)s)")
     p.add_argument("--workers", type=int, default=None, help="parallel processes")
+    p.add_argument("--sections", default=None,
+                   help="comma-separated section names for 'references' (default: all)")
     args = p.parse_args(argv)
     out = Path(args.output)
     if args.command in ("references", "all"):
         from .references import generate_references
-        generate_references(output_root=out, workers=args.workers)
+        only = tuple(args.sections.split(",")) if args.sections else None
+        generate_references(output_root=out, workers=args.workers, only=only)
     if args.command in ("run", "all"):
         from .baseline_v131 import run_baseline
         run_baseline(output_root=out, workers=args.workers)

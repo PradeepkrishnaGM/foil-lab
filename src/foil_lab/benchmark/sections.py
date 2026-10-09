@@ -34,10 +34,12 @@ class SectionSpec:
     """Where a benchmark section comes from."""
 
     name: str
-    kind: str                 # "naca4", "naca5" or "uiuc"
+    kind: str                 # "naca4", "naca5", "uiuc" or "gap" (a variant of another section)
     code: str = ""            # NACA digits
     url: str = ""             # download URL (UIUC sections)
     sha256: str = ""          # SHA-256 of the downloaded file, as first retrieved 2026-10-08
+    base: str = ""            # "gap": the section the variant is made from
+    te_gap: float = 0.0       # "gap": trailing-edge gap set with geometry.set_trailing_edge_gap
 
 
 SECTIONS: dict[str, SectionSpec] = {
@@ -51,6 +53,8 @@ SECTIONS: dict[str, SectionSpec] = {
     "E387": SectionSpec(
         "E387", "uiuc", url="https://m-selig.ae.illinois.edu/ads/coord/e387.dat",
         sha256="98aa8a4076edbfd1c52e3a2d0cf17b1ef1cbc51ae5da3ab8e5361047b89ee523"),
+    # E387 with a 0.25 % chord trailing-edge gap (M2 plan point 5; DECISIONS.md M2 step 5)
+    "E387_GAP025": SectionSpec("E387_GAP025", "gap", base="E387", te_gap=0.0025),
 }
 
 
@@ -175,6 +179,15 @@ def canonical(name: str, num_panels: int = BENCHMARK.num_panels) -> CanonicalSec
         For a UIUC section that is not cached and cannot be downloaded.
     """
     spec = SECTIONS[name]
+    if spec.kind == "gap":
+        from ..geometry import set_trailing_edge_gap
+        base = canonical(spec.base, num_panels)
+        coords = set_trailing_edge_gap(base.coords, spec.te_gap)
+        gap = float(np.hypot(*(coords[0] - coords[-1])))
+        src = (f"canonical {spec.base} ({base.source}), then "
+               f"geometry.set_trailing_edge_gap({spec.te_gap:g})")
+        return CanonicalSection(name, np.asarray(coords, dtype=float), src, gap,
+                                base.repanel_deviation, base.removed_duplicates)
     if spec.kind == "naca4":
         coords = generate_naca4(spec.code, num_panels, trailing_edge="open")
         src, dev, dups = (f"foil_lab.generators.generate_naca4('{spec.code}', {num_panels}, "
@@ -189,6 +202,6 @@ def canonical(name: str, num_panels: int = BENCHMARK.num_panels) -> CanonicalSec
         coords = repanel_cosine(norm, num_panels=num_panels)
         dev = float(np.max(_polyline_distance(coords, norm)))
         src = (f"{spec.url} (sha256 {spec.sha256[:16]}...), Selig order, "
-               f"normalize_airfoil + repanel_cosine({num_panels})")
+               f"normalize_airfoil + repanel_cosine({num_panels}) (arc-length, M2)")
     gap = float(np.hypot(*(coords[0] - coords[-1])))
     return CanonicalSection(name, np.asarray(coords, dtype=float), src, gap, dev, dups)
