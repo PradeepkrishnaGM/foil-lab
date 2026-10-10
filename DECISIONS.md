@@ -2379,6 +2379,29 @@ Final-solve iterations of the converged points (open trailing edges, validated R
 XFOIL converged): median / max 8 / 37 (Re 5e5), 9 / 49 (1e6), 9 / 40 (3e6), 10 / 43 (6e6). Every
 Reynolds number converges at 95 % or more, so no residual histories were required.
 
+### Track A, step 6: merged into m3-viscous; C3 and the SPEC.md 4.1 table
+
+`m3-te-tie-wip` merged into `m3-viscous` after the full suite passed (404 passed, 3 xfailed, 1 xpassed;
+the xpass is the non-strict xfail of the old VII tests, as in report 8). C3 = `c3_failures
+--write-benchmark` (= `viscous_run.run_case`), run on 168343b, whose `src/` and diagnostics equal the
+merged commit; repeated on the merged commit as a check (below). SPEC.md 4.1 table ("fidkowski2022",
+open trailing edges, attached-flow filter, validated Re; reference-reliability rule of SPEC.md 4.1
+applied; Cd at the end of the wake):
+
+| Re | converged | mean / max dCl | mean / max rel dCd | (Cd TE) | mean / max dCm | met |
+|---|---|---|---|---|---|---|
+| 5e5 | 83/83 = 100 % | 0.0017 / 0.0119 | 1.6 % / 5.7 % | 2.8 % / 7.3 % | 0.0004 / 0.0022 | all |
+| 1e6 | 91/91 = 100 % | 0.0020 / 0.0161 | 1.7 % / 7.3 % | 2.7 % / 12.2 % | 0.0004 / 0.0032 | all |
+| 3e6 | 100/102 = 98.0 % | 0.0026 / 0.0242 | 1.5 % / 6.1 % | 2.7 % / 16.0 % | 0.0005 / 0.0045 | all |
+| 6e6 | 106/110 = 96.4 % | 0.0026 / 0.0240 | 1.6 % / 6.0 % | 2.7 % / 16.9 % | 0.0005 / 0.0045 | all |
+
+The rule excludes 2 points from the Cd metrics (E387 with the 0.25 % gap, Re 5e5, -3 and -4 deg; XFOIL
+Cd 0.00447 / 0.00714 at 160 PANE nodes, 0.00616 / 0.01611 at 240). Without the rule, Re 5e5 misses max
+rel dCd (150.8 %, those two points; mean 4.6 %); everything else is the same. Sharp E387 (no targets):
+converged 13/13, 13/13, 14/14, 15/16 at Re 5e5-6e6; every result carries the wake-drag warning.
+Final-solve iterations: step 5. Report text: the reliability paragraph now cites SPEC.md 4.1 (it said
+"proposed ... not yet edited"). Stopped before C5 (user).
+
 ---
 
 ## Later

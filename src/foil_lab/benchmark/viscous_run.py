@@ -196,7 +196,7 @@ def reached_by_restart(path: str) -> bool:
 
 
 def unreliable_quantities(x160, x240) -> frozenset:
-    """Reference reliability (proposed SPEC.md 4.1 addition, applied in the report; DECISIONS.md M3):
+    """Reference reliability (SPEC.md 4.1; DECISIONS.md M3, decision 4 after report 8):
     the quantities for which XFOIL's own result at 240 PANE nodes differs from that at 160 by more
     than the target, read as the per-point (max) target: |dCl| > 0.10, |dCd|/Cd > 30 %, |dCm| > 0.03.
     No 240-node result at that angle: nothing is excluded."""
@@ -331,11 +331,11 @@ def build_markdown(cases: list[ViscousCase], bench: BenchmarkParams = BENCHMARK)
              "(✓ met, ✗ not met). Cd: Squire-Young at the end of the wake; 'Cd TE' rows use the "
              "Squire-Young value at the trailing edge (cross-check). Iterations are those of the final "
              "solve.", ""]
-    lines += ["Reference reliability (proposed SPEC.md 4.1 addition, applied here; SPEC.md not yet edited): "
-              "a reference point where XFOIL's own result at 240 PANE nodes differs from 160 nodes by more "
-              "than the target for a quantity is reported but not counted towards that quantity's targets; "
-              "the per-point (max) targets are used (|dCl| > 0.10, |dCd|/Cd > 30 %, |dCm| > 0.03); the "
-              "convergence count is not affected. Rows 'rule: yes' apply it, 'rule: no' do not. The "
+    lines += ["Reference reliability (SPEC.md 4.1): a reference point where XFOIL's own result at 240 PANE "
+              "nodes differs from 160 nodes by more than the per-point (maximum) target for a quantity is "
+              "reported but not counted towards that quantity's targets (|dCl| > 0.10, |dCd|/Cd > 30 %, "
+              "|dCm| > 0.03); the convergence count is not affected. Rows 'rule: yes' apply it (the SPEC.md "
+              "4.1 measure), 'rule: no' do not. The "
               "number of such points per case is in the per-case table.", ""]
     for group, sharp in (("open trailing edge (NACA 0012, 2412, 4412, 23012, Clark Y, E387 with a 0.25 % "
                           "gap)", False), ("sharp trailing edge (E387), no targets", True)):
