@@ -1844,6 +1844,97 @@ delta* is within 2 % at x/c 0.5 and 4 % at 0.9 but 34-39 % high at the trailing 
 "drela1987" (no targets): C1 as in the two-sets section; C2 converged -4 to 5 deg, not from 6 deg;
 at 0-5 deg dCl -0.014 to -0.070, Cd +1 to +13 %.
 
+### C4: the wake (2026-10-10), decisions and results
+
+**Why the wake is required (user's decision after report 5).** Not for its direct share of lift
+(0.002 at 5 deg, 0.006 at 10 deg with XFOIL's delta*) but for its effect on the edge velocity near
+the trailing edge: with the same delta*, the wake raises the upper-surface ue by 0.015 at x/c 0.95
+and 0.04-0.08 at 0.995 (5-14 deg). Without it the trailing-edge deceleration thickened the coupled
+layer over the last 10 % of chord (TE delta* +34-39 % at 0 deg, upper-surface separation at 10 deg).
+With the wake the C2 trailing-edge delta* is +7-9 % at 0 deg, +5 % at 5 and 10 deg (upper surface).
+
+**Formulation, with sources** (`foil_lab/wake.py`, `foil_lab/viscous.py`, `foil_lab/bl/march.py`):
+
+- Wake line, node count, offset, length and source distribution: FID p. 3 (Fig. 1, eq. 2), p. 7;
+  LNE89 pp. 7-8. Edge velocity over airfoil and wake stations: FID eqs. 23-27, rebuilt per angle.
+- First wake station: FID eq. 14 (BTE89 eqs. 16-18 / LNE89 eqs. 28-29 for "drela1987"); a laminar
+  trailing edge enters with the set's C_tau at transition (FID p. 7). Dead-air thickness: FID eq. 15
+  (dt/dxi clipped to +-3/f_w) and BTE89 eqs. 20-22 (no clip); closures of delta* - h_w, integral
+  equations with the full delta* (FID p. 7; BTE89 p. 62). Wake closures in each set's module.
+- Starting march along the wake: FID p. 9 (direct; inverse with eq. 22; extrapolation).
+- Drag: Squire-Young at the last wake station (FID p. 12); the trailing-edge Squire-Young value is
+  kept as `cd_te` and reported as a cross-check.
+
+Our choices (not stated in the sources):
+
+1. The first wake half-panel starts at the trailing-edge midpoint (FID Fig. 1 draws the sheet from
+   the trailing edge), not at the first wake node eps_w c downstream: starting it at the node puts
+   a logarithmic singularity of the tangential velocity there (with XFOIL's delta* at 5 deg: ue 0.82
+   at the first wake node against XFOIL's 0.91; with the midpoint start 0.93; downstream nodes
+   unchanged and within 0.001 of XFOIL's from x/c 1.05).
+2. First wake spacing = mean length of the two trailing-edge panels (0.0004 c on the canonical
+   160-panel files). FID gives the node count and total length only. **Open, see below.**
+3. Eq. 14 written as ratios minus one (dimensionless residuals, as the rest of the system); the
+   C_tau residual as (C_tau,w/C_tau,start)^1/2 - 1 for both sets.
+4. In the wake xi continues the upper surface (FID p. 3: the wake extends the upper surface):
+   xi = xi_TE,upper + distance along the wake; it enters only the ln xi source terms (FID eqs. 9-10).
+5. Starting march in the wake: inverse mode above `init_hk_max_turb` (FID gives no wake value); the
+   extrapolation fallback applied to delta* - h_w.
+6. The velocity of one body's wake sources at another body's wake is not included (one body in M3;
+   to add in M5).
+
+Changes forced by C4 failures:
+
+- **H_k and C_tau clipped after the update, as FID p. 11 does** (delta* raised so that H_k >=
+  `hk_min`, in the wake the closures' H_k; negative C_tau^1/2 set to 0.1 max C_tau^1/2), replacing
+  the step halving for these two of C2 item 4. With halving, cold starts with the wake stalled at
+  step factors of 1e-15 (2 deg drela1987, 4 deg fidkowski2022: the Newton direction is right but its
+  full length drives H_k below the bound at the trailing-edge stations). Halving remains for theta,
+  delta* > 0 and Re_theta >= `re_theta_min`. Every clip is counted in `step_limits`.
+- **Polar continuation from the last converged state** after a failed point (FID VIII.C: "a solution
+  ... initializes ...", "different starting angles of attack and fixed or adaptive increments"),
+  instead of a new starting march. Cold starts fail more often with the wake (fidkowski2022 cold:
+  converged at -4, -3, -1..6, 10 deg; not at -2, 7-9, 11, 12 deg) because the march on the inviscid
+  edge velocity meets the blunt-base deceleration at the finely panelled trailing edge (inviscid ue
+  0.86 -> 0.74 over the last 0.6 % of chord). A segregated re-march was tried and rejected (it
+  converged -2 and 4 deg but broke 0 deg).
+
+**Approved ViscousParams defaults (user, after report 5), with sources:**
+
+| parameter | default | source |
+|---|---|---|
+| `hk_min` | 1.02 | FID p. 11: H_k,min 1.02 in the wake (1.00005 on the airfoil) after the update; one value everywhere is our choice |
+| `re_theta_min` | 20 | FID eq. 59 (log10 Re_theta limited to 1.303 in the turbulent Cf); applying it as a bound on the Newton step is our choice |
+| `init_hk_max_lam` | 3.8 | FID p. 9 |
+| `init_hk_max_turb` | 2.5 | FID p. 9 (also used in the wake: our choice) |
+| `jacobian` | "complex_step" | our choice (0.08 s per Jacobian against 7.9 s for eager JAX at 161 stations; both tested) |
+
+**Iterations (user's decision):** a point is judged by the Newton iterations of its final solve; the
+total including failed attempts and intermediate continuation solves is always reported
+(`ViscousResult.iterations`, `iterations_total`).
+
+**C2 rerun with the wake ("fidkowski2022"): passed, targets unchanged.** Converged at every
+attached angle (-4..11 deg), at most 16 iterations per final solve (totals up to 286 with
+continuation); abs(dCl) max 0.0133 at 0-10 deg; Cl_max 1.502 vs 1.525 at 16 deg; abs(dCm) max
+0.0068 (0.0030 attached); Cd -9.9..+9.6 % (Cd TE -11.8..-0.2 %). The 2-5 deg lower-surface
+transition now matches XFOIL (0.963 / 0.990 / laminar / laminar against 0.966 / 0.994 / 1.000 /
+1.000) and dCl there is -0.004..+0.012 (was -0.023..-0.047). Tables in the M3 report 6.
+
+**Open decisions (stopped for the user):**
+
+1. *First wake spacing and the wake-end drag.* The wake-end Cd depends on the first wake spacing: at
+   0 deg, +12.0 / +9.5 / +3.4 / -5.5 / -25 % against XFOIL for 0.0001 / 0.0004 / 0.002 / 0.005 /
+   0.01 c, and on panel refinement of the same section (+9.5 / +10.8 / +11.4 % at 160 / 240 / 320
+   panels), while `cd_te` stays within -0.5..-2.6 % of XFOIL's Cd throughout. Cause: our edge speed
+   at the first wake node differs from that at the trailing-edge nodes (0.899 against 0.874 at 0
+   deg); FID eq. 14 carries theta across that jump without a momentum term, and the following
+   deceleration adds about 9 % to the far-wake theta. Our wake equations on XFOIL's own wake edge
+   speed reproduce XFOIL's wake theta to 0.6 %, and XFOIL's own wake-end Cd exceeds its trailing-edge
+   Squire-Young value by only 0.5 / 2.6 / 4 % (0 / 5 / 10 deg).
+2. *drela1987 in the wake.* With the DG87 closures the far wake (x > 1.45 c) wants H_k < 1.02 and
+   ends on the approved `hk_min` clip; no point of that set converges with the wake (every other
+   residual is ~0).
+
 ---
 
 ## Later
