@@ -2402,6 +2402,55 @@ converged 13/13, 13/13, 14/14, 15/16 at Re 5e5-6e6; every result carries the wak
 Final-solve iterations: step 5. Report text: the reliability paragraph now cites SPEC.md 4.1 (it said
 "proposed ... not yet edited"). Stopped before C5 (user).
 
+### Track B: sharp trailing edge, diagnosis only (no package code changed); stopped for the user
+
+Closed NACA 2412 (`generate_naca4('2412', 160, 'closed')`), Re 1e6, 0 and 5 deg. XFOIL's boundary-layer
+dumps of report 9 (PANE 160) plus an inviscid DUMP and the PANE nodes (SAVE) of the same file, run here
+(external program; job scratch, not committed). Our relation ue = ue_inv + D (ue delta*) (the solver's
+own, `make_structure`) driven by XFOIL's delta* on airfoil and wake. Scripts: job scratch
+`tmp/e1/trackb.py`, `eq9_check.py`.
+
+1. **Edge velocity driven by XFOIL's delta*** (our 160 panels, rule spacing): within about 0.003 of
+   XFOIL's from x/c 0.95 to 0.99 (one odd-even pair of -0.02 / -0.036 at x/c 0.990, where XFOIL's
+   coarser delta* is interpolated onto our nodes) and from 0.007 c behind the edge on. Over the last
+   0.6 % of chord ours rises to 0.951 / 1.203 at the trailing-edge node (XFOIL 0.835 / 0.899, 0 / 5
+   deg); on the first 0.007 c of the wake ours is 0.06-0.29 high.
+2. **Parts** (on XFOIL's own PANE nodes, so that geometry and node spacing are identical and the rule
+   gives XFOIL's first wake spacing, 0.0083 c):
+   - inviscid surface speed at the trailing-edge nodes (eq. 9 extrapolation): ours 0.835 / 0.829,
+     XFOIL 0.757 / 0.752 (+0.078); one node upstream they agree to 0.002-0.008. XFOIL 6.99's dump does
+     not satisfy LNE89 eq. 9 as printed (residual -0.135 at both angles with the Kutta condition met
+     exactly); eq. 9 applied to XFOIL's own neighbouring nodes gives 0.825 / 0.819;
+   - source contribution on the surface: at the trailing-edge node ours -0.031 / -0.024, XFOIL
+     (viscous minus inviscid) +0.078 / +0.147; upstream ours is 0.01-0.06 below XFOIL's from x/c 0.97;
+   - inviscid wake-line velocity: 0.59 at 1e-5 c, 0.851 / 0.846 at 0.0083 c, the same on our panels
+     and on XFOIL's nodes. It follows the exact local corner flow behind a sharp edge with the Kutta
+     condition, |u| ~ r^k, k = tau/(2 pi - tau): tau = 16.5 deg from the NACA thickness slope gives k =
+     0.048; our values give 0.050 (1e-5 to 4e-4 c) and 0.048 (4e-4 to 9e-4 c). XFOIL dumps no
+     inviscid wake;
+   - source contribution on the wake line: +0.035 / +0.087 at 0.0083 c (total 0.887 / 0.933 against
+     XFOIL 0.867 / 0.896); at the first wake station (on the edge) XFOIL carries the trailing-edge
+     speed, ours the wake-line value 0.74 / 0.88.
+   On our own 160 panels (trailing-edge panels 0.0004 c, 20 times shorter than XFOIL's) the source
+   contribution at the trailing-edge node is +0.249 / +0.506, half from airfoil and half from wake
+   sources, growing by a nearly constant step each time the distance to the edge halves: a
+   logarithmic spike from the jump between the airfoil sources (delta* growing) and the near-wake
+   sinks (delta* falling) at the edge, regularised only over the first wake half-panel. Both
+   trailing-edge parts therefore depend on the panel size at a sharp edge (eq. 9 node value 0.70 on
+   our panels, 0.835 on XFOIL's).
+3. **First wake spacing 0.001 c and 0.008 c** (second wake station at that distance; first station at
+   eps_w c as always): trailing-edge node 0.932 / 1.165 and 0.832 / 0.966 (rule 0.951 / 1.203; XFOIL
+   0.835 / 0.899); first wake station 0.837 / 1.062 and 0.728 / 0.844. With every spacing the wake-line
+   disagreement is confined to the first ~0.008 c behind the edge; from 0.011 c on ours is within 0.003
+   (0.0004 and 0.001 c spacing) and 0.008 / 0.015 (0.008 c) of XFOIL's.
+4. **Published sources:** LNE89 gives eq. 9 (inviscid node extrapolation), eqs. 28-29 (wake initial
+   state) and two-piece linear wake sources against the log singularity at wake nodes (pp. 7-8); FID
+   p. 3 gives the first-wake-node source strength (sum of the first and last airfoil panel sources, "to
+   avoid a velocity spike at the trailing edge") and eq. 9; BTE89 treats the blunt edge (dead air,
+   zero for a sharp edge); DG87 nothing on this. None says how the edge velocity is defined at and just
+   behind a sharp, finite-angle trailing edge in the coupled problem, and the installed XFOIL departs
+   from the printed eq. 9. Options for the user (report 10); none implemented.
+
 ---
 
 ## Later
