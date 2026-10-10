@@ -1935,10 +1935,72 @@ transition now matches XFOIL (0.963 / 0.990 / laminar / laminar against 0.966 / 
    ends on the approved `hk_min` clip; no point of that set converges with the wake (every other
    residual is ~0).
 
+### C3: full benchmark with the wake (2026-10-10), results; stopped
+
+`python -m foil_lab.benchmark viscous` (`foil_lab/benchmark/viscous_run.py`; one "viscous" method per
+closure set, Q5); tables with `viscous-report` in `benchmark_output/m3_viscous/report.md`. Sweeps as
+the XFOIL reference (0 deg up to 20, 0 deg down to -4, each angle from the last converged one with
+continuation), same canonical files, metrics and attached-flow filter as the baseline report; both
+the wake-end Cd and the trailing-edge Squire-Young value are compared.
+
+Change made during C3 (a failure of the formulation, not a tolerance):
+
+- **Stagnation point on a node** (FID p. 7, "in the unlikely case that the stagnation point
+  coincides, to machine precision, with a panel node, the stagnation equations apply to that node").
+  A symmetric section at 0 deg puts the stagnation point on the leading-edge node to round-off; ue = 0
+  there, the starting march raised "similarity start failed" and the log-form interval from that
+  node is singular. Now (our reading of FID p. 7): when a branch's first node has a sheet strength
+  below 1e-9 of the next node's (`STAG_NODE_TOL`), the stagnation equations apply at the next node
+  (state extrapolated to xi = 0 as before) and the node on the stagnation point carries that node's
+  theta and delta* (Hiemenz flow) with n = 0. NACA 0012 at 0 deg now converges at every Reynolds
+  number but 5e5 (8-10 iterations, Cl = 0 exactly, symmetric layers; test added).
+
+Results ("fidkowski2022", the set the targets are judged with; open trailing edges, attached-flow
+filter, per Reynolds number; targets: converged >= 95 %, mean |dCl| <= 0.03 / max <= 0.10, mean rel
+|dCd| <= 10 % / max <= 30 %, mean |dCm| <= 0.01 / max <= 0.03):
+
+| Re | converged | mean / max dCl | mean / max rel dCd (wake end) | (TE value) | mean / max dCm |
+|---|---|---|---|---|---|
+| 5e5 | 69/83 = 83.1 % (missed) | 0.0040 / 0.0188 | 4.7 % / 9.6 % | 2.4 % / 5.9 % | 0.0008 / 0.0028 |
+| 1e6 | 78/91 = 85.7 % (missed) | 0.0054 / 0.0196 | 5.8 % / 10.5 % | 1.8 % / 9.7 % | 0.0011 / 0.0032 |
+| 3e6 | 74/102 = 72.5 % (missed) | 0.0068 / 0.0312 | 7.2 % / 12.4 % | 1.4 % / 12.7 % | 0.0013 / 0.0051 |
+| 6e6 | 41/110 = 37.3 % (missed) | 0.0040 / 0.0144 | 8.9 % / 14.2 % | 1.5 % / 6.5 % | 0.0008 / 0.0031 |
+
+All accuracy targets are met on the converged points at every validated Reynolds number; the
+convergence target is missed at all four. Where it fails (diagnosed cases): the transition location
+moves far between neighbouring angles (XFOIL's too: NACA 4412 lower surface 0.40 / 0.67 / 0.98 at
+2 / 3 / 4 deg, Re 6e6; 0.80 / 0.35 at 0 / -1 deg, Re 5e5), and the transition re-identification
+inside the Newton iteration does not survive it even with continuation down to 0.125 deg; the
+iterate ends with a clipped station (H_k = hk_min, a local ue spike) or oscillates. At Re 3e6-6e6
+mid-to-high angles also fail where transition is near the leading edge (NACA 0012 Re 3e6 from 10
+deg: the turbulent station after a laminar-separated transition station is clipped at H_k 1.02 at
+every update; FID's airfoil value 1.00005 does not change this).
+
+E387 (sharp trailing edge, no targets): converged 9/13, 7/13, 4/14, 1/16 at Re 5e5-6e6. At Re 1e6,
+-4 and -3 deg are reported converged (residual criteria met) on a non-physical solution (Cl 0.19 and
+0.18 against XFOIL -0.063 and 0.046; wake-end Cd 0.20 with a trailing-edge value of 0.0001), reached
+by a down sweep whose 0 to -2 deg points failed. The flag is truthful by its definition; the
+solution is not.
+
+"drela1987" (no targets): converged 2/83, 1/91, 1/102, 0/110 at Re 5e5-6e6 (open trailing edges).
+With the DG87/BTE89 closures the far wake drives H_k to 1 within one chord behind the trailing
+edge; with `hk_min` 1.02 the last wake stations end on the clip; with 1.00005 (tried, not adopted)
+only the last station does. Its numbers are not usable until the user decides how this set treats
+the far wake.
+
+Stopped here for the user (C3 instruction): the convergence target is missed for "fidkowski2022"
+at every validated Reynolds number, with every accuracy target met on the converged points; open
+decisions in C4 and above.
+
 ---
 
 ## Later
 
+- M3: transition re-identification inside the Newton iteration fails where the transition location
+  moves 0.3-0.45 c per degree (C3); main cause of the missed convergence target.
+- M5: the velocity of one body's wake sources at another body's wake (not included in M3).
+- M3: E387 (sharp trailing edge) can converge on a non-physical solution (Re 1e6, -4 and -3 deg
+  in C3).
 - `requires-python = ">=3.10"` is declared but only Python 3.14 is available and tested here.
   Decide the supported versions and test them in M7.
 - `examples/basic_alpha_sweep.py` opens `naca2412.dat` relative to the current directory, so it
