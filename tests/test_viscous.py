@@ -166,3 +166,76 @@ def test_restart_reaches_the_cold_start_solution():
     assert "restart" in r1.path and r1.iterations_total > r1.iterations
     for k in ("cl", "cd", "cm", "xtr_upper", "xtr_lower"):
         assert getattr(r1, k) == pytest.approx(getattr(cold, k), abs=1e-6)
+
+
+def test_edge_velocity_tie_only_on_an_open_trailing_edge():
+    """The first wake station takes the trailing-edge speed (``tie``) on a body with an open
+    trailing edge; a closed (sharp) edge keeps the wake-line velocity there (DECISIONS.md M3,
+    decisions after report 9, interim state)."""
+    from foil_lab.generators import generate_naca4
+    for coords, is_open in ((canonical("NACA2412").coords, True),
+                            (generate_naca4("2412", 160, trailing_edge="closed"), False)):
+        geo = V.build_geometry(coords)
+        assert geo.ps.open_te == (is_open,)
+        cpl = V.build_coupling(geo, 5.0)
+        st = V.make_structure(geo, cpl, cpl.gamma_inv)
+        w0 = cpl.wake_nodes[0][0]
+        m = geo.ps.num_nodes
+        if is_open:
+            assert st.tie[w0, 0] == st.tie[w0, m - 1] == 0.5 and np.count_nonzero(st.tie) == 2
+            assert st.ue_inv[w0] == 0.0 and not st.dmat[w0].any()
+        else:
+            assert not st.tie.any()
+            assert st.ue_inv[w0] == pytest.approx(cpl.ue_inv_wake[0]) and st.dmat[w0].any()
+
+
+@pytest.mark.slow
+def test_closed_trailing_edge_result_warns_about_wake_drag():
+    """A viscous result on a closed trailing edge carries the wake-drag warning; ``cd`` is still the
+    wake-end Squire-Young value (no substitution). An open edge carries no warning."""
+    from foil_lab.generators import generate_naca4
+    closed = generate_naca4("2412", 160, trailing_edge="closed")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rc = V.solve_viscous(closed, 5.0, 1e6)
+        ro = V.solve_viscous(canonical("NACA2412").coords, 5.0, 1e6)
+    assert rc.converged and ro.converged
+    assert rc.warnings == [V.WARN_CLOSED_TE_DRAG] and ro.warnings == []
+    w = rc.surface["wake"]
+    assert rc.cd == 2.0 * w["theta"][-1] * w["ue"][-1] ** ((w["h"][-1] + 5.0) / 2.0)
+    assert rc.cd != rc.cd_te
+
+
+def test_reach_from_nearest_walks_from_the_nearest_converged_angle(monkeypatch):
+    """Walking logic of ``reach_from_nearest`` (DECISIONS.md M3, decision 3 after report 8), with a
+    stand-in for ``solve_point`` that converges from a start except at the angles in ``bad``: cold
+    points are reached from the nearest converged angle one sweep angle at a time, the walk stops at
+    the first failure, a point that failed from a warm start is not walked to, and the path and the
+    total iterations record how each point was reached."""
+    calls, bad = [], {7.0}
+
+    def fake(coords, alpha, reynolds, params=None, trips=None, start=None, alpha_start=None,
+             geometry=None):
+        calls.append((alpha, alpha_start))
+        ok = start is not None and alpha not in bad
+        return V.ViscousResult(alpha=alpha, reynolds=reynolds, converged=ok, iterations=5,
+                               iterations_total=7, reason="converged" if ok else "max_iter",
+                               state=("x", alpha) if ok else None, path="warm start")
+
+    monkeypatch.setattr(V, "solve_point", fake)
+    alphas = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    conv = {2.0, 3.0, 5.0}
+    res = [V.ViscousResult(alpha=a, reynolds=1e6, converged=a in conv, iterations=4, iterations_total=10,
+                           reason="", state=("x", a), path="march") for a in alphas]
+    cold = [a in (0.0, 1.0, 2.0, 8.0) for a in alphas]       # 4 and 6-7 failed from a warm start
+    seen = []
+    V.reach_from_nearest(None, alphas, res, cold, 1e6, geometry=object(),
+                         on_result=lambda k, r, s: seen.append((k, r.converged)))
+    # 0 deg: nearest converged is 2 deg -> walk 1, 0; 8 deg: nearest converged 5 deg -> 6 ok, 7 fails
+    assert calls == [(1.0, 2.0), (0.0, 1.0), (6.0, 5.0), (7.0, 6.0)]
+    assert seen == [(1, True), (0, True), (6, True), (7, False)]
+    assert [r.converged for r in res] == [True, True, True, True, False, True, True, False, False]
+    assert res[0].path == res[1].path == "from 2 deg: warm start"
+    assert res[6].path == "from 5 deg: warm start"
+    assert res[1].iterations == 5 and res[1].iterations_total == 7 + 10
+    assert res[4].path == "march" and res[8].path == "march"   # not walked to / walk stopped before

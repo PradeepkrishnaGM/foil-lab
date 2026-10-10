@@ -21,13 +21,16 @@ FID = Fidkowski; DECISIONS.md M3):
   states (FID eq. 14; BTE89 eqs. 16-18), written as ratios so that the residuals are
   dimensionless: theta_w/(theta_l + theta_u) - 1, delta*_w/(delta*_l + delta*_u + h_TE) - 1,
   (C_tau,w/C_tau,start)^1/2 - 1 with C_tau,start from the set (FID eq. 14 or BTE89 eq. 18); a
-  laminar trailing-edge state enters with the set's C_tau at transition (FID p. 7). The edge
-  velocity is continuous across the trailing edge (our choice; DECISIONS.md M3, decision 1 after
-  report 8): the first wake station (FID's first wake point, eps_w c behind the trailing-edge
-  midpoint) takes ue = (ue_TE,lower + ue_TE,upper)/2, which replaces its edge-velocity relation, so
-  eq. 14 holds at equal edge velocity and the change of ue down the wake is crossed by ordinary
-  wake intervals with their momentum term. Its m = ue delta* still enters the first wake panel's
-  source (sigma = dm/ds). Wake intervals:
+  laminar trailing-edge state enters with the set's C_tau at transition (FID p. 7). On a body with
+  an open trailing edge the edge velocity is continuous across the trailing edge (our choice;
+  DECISIONS.md M3, decision 1 after report 8): the first wake station (FID's first wake point,
+  eps_w c behind the trailing-edge midpoint) takes ue = (ue_TE,lower + ue_TE,upper)/2, which
+  replaces its edge-velocity relation, so eq. 14 holds at equal edge velocity and the change of ue
+  down the wake is crossed by ordinary wake intervals with their momentum term. Its m = ue delta*
+  still enters the first wake panel's source (sigma = dm/ds). On a closed (sharp) trailing edge the
+  first wake station keeps the wake-line velocity (interim state after report 9: the kinematics
+  just behind a sharp edge do not yet agree with XFOIL's), and its wake-end drag is flagged
+  (``ViscousResult.warnings``). Wake intervals:
   the turbulent equations with the wake closures and the dead-air thickness (FID eq. 15; BTE89 eqs.
   20-33). In the wake xi continues the upper surface's (FID p. 3: the wake extends the upper
   surface): xi = xi_TE,upper + distance along the wake.
@@ -280,11 +283,14 @@ def make_structure(geo: Geometry, cpl: Coupling, gamma: np.ndarray, prev: Struct
             b.p_tr, b.forced_w = b0.p_tr, b0.forced_w
     st.dmat = cpl.dmat(d[:m])
     st.ue_inv = cpl.ue_inv(d[:m])
-    # edge velocity continuous across the trailing edge (our choice; DECISIONS.md M3, decision 1
-    # after report 8): the first wake station takes the mean of the two trailing-edge speeds (equal
-    # by the Kutta condition) instead of the wake-line velocity at its position
+    # edge velocity continuous across an open trailing edge (our choice; DECISIONS.md M3, decision 1
+    # after report 8, interim state after report 9): the first wake station takes the mean of the
+    # two trailing-edge speeds (equal by the Kutta condition) instead of the wake-line velocity at
+    # its position. A closed (sharp) edge keeps the wake-line velocity there.
     st.tie = np.zeros((cpl.m_total, cpl.m_total))
     for k, sn in enumerate(ps.body_nodes):
+        if not ps.open_te[k]:
+            continue
         w0 = cpl.wake_nodes[k][0]
         st.dmat[w0] = 0.0
         st.ue_inv[w0] = 0.0
@@ -459,8 +465,8 @@ def bl_residual(theta, dstar, c, ue, s_stag, st: Structure, reynolds, prm: Visco
 
 def ue_residual(dstar, ue, st: Structure, xp=np):
     """R_u = ue - ue_inv - D (ue delta*) (LNE89 eq. 33, FID eq. 27), in units of the freestream; at
-    the first wake station of each body R_u = ue - (ue_TE,lower + ue_TE,upper)/2 instead (``tie``;
-    its rows of ue_inv and D are zero)."""
+    the first wake station of each body with an open trailing edge R_u = ue - (ue_TE,lower +
+    ue_TE,upper)/2 instead (``tie``; its rows of ue_inv and D are zero)."""
     return ue - xp.asarray(st.tie) @ ue - xp.asarray(st.ue_inv) - xp.asarray(st.dmat) @ (ue * dstar)
 
 
@@ -688,6 +694,14 @@ def relocate(x, geo, st: Structure, trips) -> tuple[Structure, bool]:
 # --------------------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------------------- #
+#: carried by every result on a body with a closed (sharp) trailing edge (DECISIONS.md M3, decisions
+#: after report 9): the edge velocity just behind a sharp edge does not yet agree with XFOIL's, so the
+#: wake-end drag ``cd`` is unreliable there. ``cd`` stays the wake-end value; nothing is substituted.
+WARN_CLOSED_TE_DRAG = ("wake drag unreliable: closed (sharp) trailing edge; the edge velocity just behind "
+                       "a sharp edge does not yet agree with XFOIL (cd is still the wake-end value; cd_te "
+                       "is the trailing-edge Squire-Young cross-check)")
+
+
 @dataclass
 class ViscousResult:
     alpha: float
@@ -712,6 +726,7 @@ class ViscousResult:
     surface: dict = field(default_factory=dict, repr=False)
     closure_set: str = ""
     path: str = ""                                    # how the result was reached (:func:`solve_point`)
+    warnings: list = field(default_factory=list)      # e.g. :data:`WARN_CLOSED_TE_DRAG`
 
 
 def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
@@ -747,7 +762,8 @@ def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
         (tu, du, cu), (tl, dl, cl) = te[(k, True)], te[(k, False)]
         start = (tu + tl, du + dl + cpl.wakes[k].h_te, float(cs.ctau_wake_start(tu, cu, tl, cl)))
         ue_w = np.maximum(ue_inv[wn], 1e-6)
-        ue_w[0] = st.tie[wn[0]] @ x[:, 3]           # the trailing-edge speed (``tie``)
+        if st.tie[wn[0]].any():
+            ue_w[0] = st.tie[wn[0]] @ x[:, 3]       # the trailing-edge speed (``tie``)
         r = march_wake(xi[wn], ue_w, cpl.hw[wn], cpl.dead_frac[wn], start,
                        reynolds, prm.closure_set, prm.init_hk_max_turb)
         x[wn, 0], x[wn, 1], x[wn, 2], x[wn, 3] = r.theta, r.dstar, r.third, r.ue
@@ -879,7 +895,8 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
     h1 = (du + dl) / th1
     u1 = (tu * uu + tl * ul) / th1
     cd_te = 2.0 * th1 * u1 ** ((h1 + 5.0) / 2.0)
-    out.update(cd=float(cd), cd_te=float(cd_te), cdf=cdf, cdp=float(cd - cdf), surface=surface)
+    out.update(cd=float(cd), cd_te=float(cd_te), cdf=cdf, cdp=float(cd - cdf), surface=surface,
+               warnings=[] if all(ps.open_te) else [WARN_CLOSED_TE_DRAG])
     return out
 
 

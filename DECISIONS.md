@@ -2292,10 +2292,65 @@ trailing-edge speed rises and the wake-line speed just behind the sharp edge fal
 wake panel becomes a sink behind the sharp edge that lowers the speed there further. Per decision 1,
 stopped and shown; nothing tuned.
 
+### Decisions after report 9 (user, 2026-10-10)
+
+Track A (open trailing edges), then Track B (sharp trailing edge, diagnosis only):
+
+1. **Continuity rule on open trailing edges only: interim state.** The rule of decision 1 after report
+   8 is adopted for bodies with an open trailing edge. Bodies with a closed (sharp) edge keep the
+   report 8 treatment (the first wake station on the wake-line velocity) for now. Reason: on the sharp
+   edge our edge velocity is 0.90 at the trailing edge and 0.77 just behind it, where XFOIL has 0.835
+   rising to 0.867; the kinematics at a sharp edge are wrong, and the rule cannot be applied there until
+   that is fixed (Track B).
+2. **Warning, no substitution.** Until Track B is resolved, a viscous result on a closed trailing edge
+   carries a warning that its wake drag is unreliable. No other drag value is substituted.
+3. **Decision 3 after report 8** (`reach_from_nearest`): proceed, with tests, under the same "how
+   reached" rules; the three "other" failures at Re 6e6 are looked at.
+4. **Tests of the side branch:** the change of `test_converges_quadratically_at_5deg` is accepted as
+   described in report 9. `test_restart_reaches_the_cold_start_solution` gets another case in which a
+   restart is actually exercised, with the same assertion; the change is recorded.
+5. **Iterations:** "under 20" was a plan expectation, not a requirement. C3 reports the median and
+   maximum final-solve iterations per Reynolds number. If a Reynolds number converges below 95 %,
+   residual histories of two failing points are shown before anything changes.
+6. Merge into `m3-viscous` when the full suite passes, rerun C3, write the SPEC.md 4.1 table; stop
+   before C5.
+
+### Track A, steps 1-2: the rule on open trailing edges; closed-edge drag warning
+
+- `viscous.make_structure`: the first wake station's tie to the trailing-edge speed (and the zeroed
+  rows of ue_inv and D) only where the core treats the body's trailing edge as open
+  (`PanelSet.open_te`, the same switch as the inviscid trailing-edge panel: gap above
+  `inviscid.CLOSED_GAP_FRACTION` of the body size). A closed body keeps R_u = ue - ue_inv - D (ue
+  delta*) at that station. The starting march uses the trailing-edge speed there only where the tie
+  applies.
+- `ViscousResult.warnings`: a result on a body with a closed trailing edge carries
+  `viscous.WARN_CLOSED_TE_DRAG` ("wake drag unreliable: closed (sharp) trailing edge; ..."); `cd` stays
+  the wake-end Squire-Young value and `cd_te` the trailing-edge cross-check. The benchmark CSV has a
+  `warning` column.
+- Check (NACA 2412, Re 1e6; the report 9 variants: 0..10 deg at 160 panels, 0 / 5 / 10 deg for first
+  wake spacings 0.0001-0.002 c and 240 / 320 panels): every closed point equals report 8 (c773602) and
+  every open point equals report 9 (the rule everywhere) bit for bit in Cl, Cd, Cd TE, Cm and
+  transition, with the same converged flags.
+- Tests: `test_edge_velocity_tie_only_on_an_open_trailing_edge`,
+  `test_closed_trailing_edge_result_warns_about_wake_drag` (slow).
+
 ---
 
 ## Later
 
+- End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver
+  converges on essentially every point at Re 1e5 and 2e5 with mean |dCl| 0.010 and 0.005 and drag
+  within 5 to 6 %. Propose targets for Re 1e5 and 2e5 and report Re 5e4 as it is. This moves
+  low-Reynolds validation from v2.2 into v2.0 and needs a SPEC.md change (for the user's approval).
+- After M3 (candidate for M7; user, 2026-10-10): solver speed. Reuse the coupling between angles, a
+  faster starting march, a compiled JAX path. Golden values recorded first; results must not change.
+  Time per point reported before and after; the target is set from measurements.
+- M3 cleanup (C5; user, 2026-10-10): confirm that `design.maximize_ld` and the batch example use the
+  new viscous solver, and rerun the design example to show that its lift-to-drag values are now
+  realistic.
+- v2.1 (user, 2026-10-10): multi-point optimisation and CST or Bezier shapes, as in SPEC.md. Also
+  evaluate whether a target-velocity (inverse) design mode is worth adding on top of the optimiser,
+  or whether Cp matching covers it.
 - M3 (after report 8): convergence at Re 1e6 and 6e6 is 94.5 % (target 95 %); 8 of the 11
   non-converged attached points are cold starts at 0 or 1 deg, the first angles of an up sweep
   started from the march (the H_k clip after a laminar-separated transition, report 7's main
