@@ -4,7 +4,9 @@ One "viscous" method per benchmarked closure set (``CLOSURE_SETS``; DECISIONS.md
 sets" and the parking of "drela1987"), run like the
 XFOIL reference: per section and Reynolds number two sweeps from 0 deg (up to ``alpha_max``, down to
 ``alpha_min``), each angle started from the last converged one with angle-of-attack continuation
-(``viscous.polar``; the down sweep starts from the converged 0 deg state). Both codes read the same
+(``viscous.polar``; the down sweep starts from the converged 0 deg state); a point whose start from
+the starting march failed is then reached from the nearest converged angle of its sweep
+(``viscous.reach_from_nearest``; the ``path`` column says so). Both codes read the same
 canonical coordinate file. Drag is Squire-Young at the end of the wake; the trailing-edge value
 (``cd_te``) is reported next to it as a cross-check.
 
@@ -41,7 +43,7 @@ TARGETS = {"converged": 0.95, "cl_mean": 0.03, "cl_max": 0.10, "cd_mean": 0.10, 
 #: its laminar Falkner-Skan comparison and its tests are kept (DECISIONS.md M3, report 6 decisions)
 CLOSURE_SETS = ("fidkowski2022",)
 COLUMNS = ("method", "alpha", "converged", "cl", "cd", "cd_te", "cm", "xtr_top", "xtr_bot",
-           "iterations", "iterations_total", "continuation", "runtime_s", "reason", "path", "error")
+           "iterations", "iterations_total", "continuation", "runtime_s", "reason", "path", "warning", "error")
 
 
 def method_name(closure_set: str) -> str:
@@ -65,11 +67,12 @@ def _row(r, closure_set: str, runtime: float, error: str = "") -> dict:
         return dict(method=method_name(closure_set), alpha=math.nan, converged="0", cl=math.nan, cd=math.nan,
                     cd_te=math.nan, cm=math.nan, xtr_top=math.nan, xtr_bot=math.nan, iterations=0,
                     iterations_total=0, continuation=0, runtime_s=runtime, reason="exception", path="",
-                    error=error)
+                    warning="", error=error)
     return dict(method=method_name(closure_set), alpha=r.alpha, converged="1" if r.converged else "0",
                 cl=r.cl, cd=r.cd, cd_te=r.cd_te, cm=r.cm, xtr_top=r.xtr_upper, xtr_bot=r.xtr_lower,
                 iterations=r.iterations, iterations_total=r.iterations_total, continuation=r.continuation,
-                runtime_s=runtime, reason=r.reason, path=r.path, error=error)
+                runtime_s=runtime, reason=r.reason, path=r.path, warning="; ".join(r.warnings),
+                error=error)
 
 
 def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, float, list[dict]]:
@@ -83,8 +86,11 @@ def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, floa
     rows, state0 = [], None
     for sweep in (up, down):
         start, a_prev = (state0, 0.0) if (sweep is down and state0 is not None) else (None, None)
+        first = len(rows)
+        res, cold = [], []
         for a in sweep:
             t0 = time.perf_counter()
+            cold.append(start is None)
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
@@ -95,10 +101,28 @@ def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, floa
                 row = _row(None, closure_set, time.perf_counter() - t0, f"{type(exc).__name__}: {exc}")
                 row["alpha"] = a
             rows.append(row)
-            if r is not None and r.converged:
+            if r is None:                      # never walked to (DECISIONS.md M3, decision 3, report 8)
+                r = V.ViscousResult(alpha=a, reynolds=reynolds, converged=False, iterations=0, reason="exception")
+                cold[-1] = False
+            res.append(r)
+            if r.converged:
                 start, a_prev = r.state, a
-                if a == 0.0:
-                    state0 = r.state
+
+        def walked(k, r, seconds):
+            old = rows[first + k]
+            if r.converged:
+                rows[first + k] = _row(r, closure_set, old["runtime_s"] + seconds)
+            else:
+                old["runtime_s"] += seconds
+                old["iterations_total"] += r.iterations_total
+
+        # a point whose start from the march failed: reached from the nearest converged angle of
+        # the sweep (DECISIONS.md M3, decision 3 after report 8)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            V.reach_from_nearest(coords, sweep, res, cold, reynolds, prm, geometry=geo, on_result=walked)
+        if sweep is up and 0.0 in sweep and res[sweep.index(0.0)].converged:
+            state0 = res[sweep.index(0.0)].state
     return section, reynolds, rows
 
 
@@ -159,14 +183,16 @@ def run_matrix(output_root: Path = Path("benchmark_output"), bench: BenchmarkPar
 # Comparison and tables
 # --------------------------------------------------------------------------------------- #
 #: subsets of the converged points by how they were reached (``ViscousResult.path``): "direct" = warm
-#: start, continuation or starting march; "restart" = repair or march restart (DECISIONS.md M3, 3c)
+#: start, continuation or starting march; "restart" = repair or march restart (DECISIONS.md M3, 3c), or
+#: reached afterwards from the nearest converged angle (path "from <angle> deg: ..."; decision 3 after
+#: report 8)
 SUBSETS = ("all", "direct", "restart")
 #: quantities the reference-reliability rule is applied to, with the target it is compared with
 RELIABILITY = {"cl": "cl_max", "cd": "cd_max", "cm": "cm_max"}
 
 
 def reached_by_restart(path: str) -> bool:
-    return "restart" in (path or "")
+    return "restart" in (path or "") or (path or "").startswith("from ")
 
 
 def unreliable_quantities(x160, x240) -> frozenset:
@@ -329,7 +355,8 @@ def build_markdown(cases: list[ViscousCase], bench: BenchmarkParams = BENCHMARK)
         lines += [_md(["Re", "closure set", "rule"] + HEAD, rows), ""]
     lines += ["## Points reached directly and by a restart (open trailing edge, rule: no)", "",
               "Direct: warm start, continuation or starting march; restart: repair restart or restart from "
-              "the starting march (`path` column; DECISIONS.md M3, 3c). Converged points only.", ""]
+              "the starting march (`path` column; DECISIONS.md M3, 3c), or reached afterwards from the nearest "
+              "converged angle of the sweep (`path` 'from <angle> deg: ...'). Converged points only.", ""]
     rows = []
     for re in sorted({c.reynolds for c in cases}):
         sub = [c for c in cases if c.reynolds == re and not c.sharp]

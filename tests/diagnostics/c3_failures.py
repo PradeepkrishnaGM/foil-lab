@@ -185,8 +185,14 @@ def work(section: str, reynolds: float) -> tuple:
     pts = []
     for row in rows:
         r = _RESULTS.get(row["alpha"])
-        p = dict(alpha=row["alpha"], converged=row["converged"] == "1", error=row["error"])
-        if r is not None:
+        p = dict(alpha=row["alpha"], converged=row["converged"] == "1", error=row["error"], path=row["path"])
+        if p["converged"] and (r is None or not r.converged):
+            # reached afterwards from the nearest converged angle (``viscous.reach_from_nearest``)
+            p.update({k: float(row[q]) for k, q in (("cl", "cl"), ("cd", "cd"), ("cd_te", "cd_te"), ("cm", "cm"),
+                                                    ("xtr_upper", "xtr_top"), ("xtr_lower", "xtr_bot"))})
+            p.update(iterations=int(row["iterations"]), iterations_total=int(row["iterations_total"]),
+                     continuation=int(row["continuation"]))
+        elif r is not None:
             p.update(cl=r.cl, cd=r.cd, cd_te=r.cd_te, cm=r.cm, xtr_upper=r.xtr_upper, xtr_lower=r.xtr_lower,
                      iterations=r.iterations, iterations_total=r.iterations_total,
                      continuation=r.continuation)

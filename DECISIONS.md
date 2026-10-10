@@ -2292,10 +2292,110 @@ trailing-edge speed rises and the wake-line speed just behind the sharp edge fal
 wake panel becomes a sink behind the sharp edge that lowers the speed there further. Per decision 1,
 stopped and shown; nothing tuned.
 
+### Decisions after report 9 (user, 2026-10-10)
+
+Track A (open trailing edges), then Track B (sharp trailing edge, diagnosis only):
+
+1. **Continuity rule on open trailing edges only: interim state.** The rule of decision 1 after report
+   8 is adopted for bodies with an open trailing edge. Bodies with a closed (sharp) edge keep the
+   report 8 treatment (the first wake station on the wake-line velocity) for now. Reason: on the sharp
+   edge our edge velocity is 0.90 at the trailing edge and 0.77 just behind it, where XFOIL has 0.835
+   rising to 0.867; the kinematics at a sharp edge are wrong, and the rule cannot be applied there until
+   that is fixed (Track B).
+2. **Warning, no substitution.** Until Track B is resolved, a viscous result on a closed trailing edge
+   carries a warning that its wake drag is unreliable. No other drag value is substituted.
+3. **Decision 3 after report 8** (`reach_from_nearest`): proceed, with tests, under the same "how
+   reached" rules; the three "other" failures at Re 6e6 are looked at.
+4. **Tests of the side branch:** the change of `test_converges_quadratically_at_5deg` is accepted as
+   described in report 9. `test_restart_reaches_the_cold_start_solution` gets another case in which a
+   restart is actually exercised, with the same assertion; the change is recorded.
+5. **Iterations:** "under 20" was a plan expectation, not a requirement. C3 reports the median and
+   maximum final-solve iterations per Reynolds number. If a Reynolds number converges below 95 %,
+   residual histories of two failing points are shown before anything changes.
+6. Merge into `m3-viscous` when the full suite passes, rerun C3, write the SPEC.md 4.1 table; stop
+   before C5.
+
+### Track A, steps 1-2: the rule on open trailing edges; closed-edge drag warning
+
+- `viscous.make_structure`: the first wake station's tie to the trailing-edge speed (and the zeroed
+  rows of ue_inv and D) only where the core treats the body's trailing edge as open
+  (`PanelSet.open_te`, the same switch as the inviscid trailing-edge panel: gap above
+  `inviscid.CLOSED_GAP_FRACTION` of the body size). A closed body keeps R_u = ue - ue_inv - D (ue
+  delta*) at that station. The starting march uses the trailing-edge speed there only where the tie
+  applies.
+- `ViscousResult.warnings`: a result on a body with a closed trailing edge carries
+  `viscous.WARN_CLOSED_TE_DRAG` ("wake drag unreliable: closed (sharp) trailing edge; ..."); `cd` stays
+  the wake-end Squire-Young value and `cd_te` the trailing-edge cross-check. The benchmark CSV has a
+  `warning` column.
+- Check (NACA 2412, Re 1e6; the report 9 variants: 0..10 deg at 160 panels, 0 / 5 / 10 deg for first
+  wake spacings 0.0001-0.002 c and 240 / 320 panels): every closed point equals report 8 (c773602) and
+  every open point equals report 9 (the rule everywhere) bit for bit in Cl, Cd, Cd TE, Cm and
+  transition, with the same converged flags.
+- Tests: `test_edge_velocity_tie_only_on_an_open_trailing_edge`,
+  `test_closed_trailing_edge_result_warns_about_wake_drag` (slow).
+
+### Track A, step 3: reaching failed cold starts from the nearest converged angle
+
+- `viscous.reach_from_nearest` (our choice; decision 3 after report 8; FID section VIII.C), called by
+  `viscous_run.run_case` after each sweep: a point whose start from the starting march failed is
+  reached from the nearest converged angle of the same sweep, one sweep angle at a time, each angle a
+  polar point (`solve_point`) started from the last one reached; the walk stops at the first angle
+  that fails. Equations, tolerances and the definition of converged are unchanged. A point reached
+  this way has `path` "from <angle> deg: <path>" and its `iterations_total` includes the failed
+  attempts; the benchmark report counts it with the restarts ("restart" subset). The C3 diagnostic
+  (`c3_failures`) takes such points from the benchmark row.
+- Test: `test_reach_from_nearest_walks_from_the_nearest_converged_angle` (walking order, stop at the
+  first failure, points that failed from a warm start are not walked to, path and totals).
+- In the C3 run on the Track A code it reached no point: it was tried at the three cold-start failures
+  at Re 6e6 (Clark Y 0 deg from 1 deg; E387 0.25 % gap 1 deg from 2 deg, which also stops the walk to
+  0 deg) and failed there. "Of its sweep" is read literally: E387 gap 0 deg (up sweep) is not reached
+  from -1 deg, which converged in the down sweep.
+- The three "other" failures at Re 6e6 of report 8, on the Track A code: E387 0.25 % gap at 4 and 5 deg
+  now converge directly from the warm start (10 and 12 iterations; the continuity rule changed the
+  solution path). NACA 2412 at 1 deg still fails from the warm start (0 deg) and from a cold start:
+  the largest residual is the lag equation of one lower-surface station at x/c 0.48, the first
+  station behind the transition interval, held on the H_k clip (H = 1.020); the residual falls
+  monotonically but slowly (2.0 after 50 iterations, about 10 % per iteration), i.e. a clipped
+  station behind transition, not an oscillation. Classified "transition relocation" in this run.
+
+### Track A, step 4: the two side-branch tests
+
+- `test_converges_quadratically_at_5deg`: accepted as described in report 9 (the step into the
+  residual tolerance is judged; bounds unchanged).
+- `test_restart_reaches_the_cold_start_solution`: case changed, assertion unchanged (restart in
+  `path`, `iterations_total > iterations`, Cl, Cd, Cm and transition equal to the cold start within
+  1e-6). Old case NACA 4412, Re 5e5, -1 deg from 0 deg: with the continuity rule it converges without
+  a restart and its cold start no longer converges. New case E387 with the 0.25 % gap, Re 1e6, -1 deg
+  from 0 deg (found in the C3 run): the warm start fails, a repair restart converges (5 iterations, 205
+  in total), and the cold start at -1 deg converges independently (27 iterations); they agree to
+  1e-15. Candidates checked and not taken: Clark Y Re 6e6 6 and 9 deg (also agree to 1e-15, but need a
+  7-10 point polar); NACA 23012 Re 5e5 -3 deg, Re 6e6 -1 deg and E387 gap Re 6e6 -1 deg (their cold
+  starts do not converge). The test skips when the UIUC E387 file is not cached and cannot be
+  downloaded, as the benchmark tests do.
+
+### Track A, step 5: iterations (C3 on the Track A code)
+
+Final-solve iterations of the converged points (open trailing edges, validated Re, attached filter,
+XFOIL converged): median / max 8 / 37 (Re 5e5), 9 / 49 (1e6), 9 / 40 (3e6), 10 / 43 (6e6). Every
+Reynolds number converges at 95 % or more, so no residual histories were required.
+
 ---
 
 ## Later
 
+- End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver
+  converges on essentially every point at Re 1e5 and 2e5 with mean |dCl| 0.010 and 0.005 and drag
+  within 5 to 6 %. Propose targets for Re 1e5 and 2e5 and report Re 5e4 as it is. This moves
+  low-Reynolds validation from v2.2 into v2.0 and needs a SPEC.md change (for the user's approval).
+- After M3 (candidate for M7; user, 2026-10-10): solver speed. Reuse the coupling between angles, a
+  faster starting march, a compiled JAX path. Golden values recorded first; results must not change.
+  Time per point reported before and after; the target is set from measurements.
+- M3 cleanup (C5; user, 2026-10-10): confirm that `design.maximize_ld` and the batch example use the
+  new viscous solver, and rerun the design example to show that its lift-to-drag values are now
+  realistic.
+- v2.1 (user, 2026-10-10): multi-point optimisation and CST or Bezier shapes, as in SPEC.md. Also
+  evaluate whether a target-velocity (inverse) design mode is worth adding on top of the optimiser,
+  or whether Cp matching covers it.
 - M3 (after report 8): convergence at Re 1e6 and 6e6 is 94.5 % (target 95 %); 8 of the 11
   non-converged attached points are cold starts at 0 or 1 deg, the first angles of an up sweep
   started from the march (the H_k clip after a laminar-separated transition, report 7's main
