@@ -2233,6 +2233,65 @@ confirm with the SPEC.md wording); no 240-node result at that angle: nothing exc
 convergence count is unaffected. The report shows every table with and without the rule, the
 number of such points per case and quantity, and the direct/restart split (decision 3).
 
+### Decisions after report 8 (user, 2026-10-10)
+
+1. **Wake drag.** The dead-air explanation of decision 1 after report 7 was wrong (the user's
+   statement; test (a) showed the closed edge more sensitive, not less). Accepted finding: the
+   wake-end drag error follows the edge-velocity jump between the trailing edge and the first wake
+   station, across which FID eq. 14 carries the trailing-edge state without a momentum term. Rule
+   to implement on open and closed edges, recorded as our choice: the edge velocity is continuous
+   across the trailing edge; the first wake station is at the trailing edge with the trailing-edge
+   edge velocity; eq. 14 applies there at equal edge velocity; the change of edge velocity down the
+   wake is crossed by ordinary wake intervals (with their momentum term). Acceptance (NACA 2412, Re
+   1e6, 0 / 5 / 10 deg, open and closed): wake-end Cd varies by at most 2 % of its value over 160 /
+   240 / 320 panels and first wake spacings 0.0001-0.002 c; wake-end Cd, the trailing-edge
+   Squire-Young value and their ratio against XFOIL's reported before and after; closed section
+   |dCl| <= 0.02 and |dCm| <= 0.01 at 0-10 deg; C1 and C2 still met on the open section. Otherwise
+   stop and show; the spacing is never tuned to XFOIL.
+2. **C2 drag expectation** ("Cd within 15 %") is judged over the attached range, as in SPEC.md 4.1;
+   beyond it, reported only.
+3. **"How reached" measure:** a point whose start from the march fails is reached from the nearest
+   converged angle of its sweep, under the rules of decision 3 after report 6; recorded in `path`.
+   The three "other" failures at Re 6e6 are to be looked at.
+4. **Reference reliability confirmed** with the per-point (maximum) reading. SPEC.md 4.1 edited
+   (approved wording): "A reference point where XFOIL's own result at 240 nodes differs from 160
+   nodes by more than the per-point (maximum) target for a quantity is reported but not counted
+   towards that quantity's targets. The number of such points is shown per case."
+
+Then C3; C5 only if every SPEC.md 4.1 target is met at every Reynolds number.
+
+### Continuous edge velocity across the trailing edge (decision 1 after report 8); stopped
+
+Implemented (not committed to `m3-viscous`; kept on branch `m3-te-tie-wip`):
+
+- The first wake station stays FID's first wake point, eps_w c = 1e-5 c behind the trailing-edge
+  midpoint (at the trailing edge to 1e-5 c; no geometry change).
+- Its edge-velocity relation R_u = ue - ue_inv - D (ue delta*) is replaced by R_u = ue_w1 -
+  (ue_TE,lower + ue_TE,upper)/2 (the two trailing-edge speeds are equal by the Kutta condition of the
+  core, so this is either of them; the mean keeps the row symmetric). Its rows of ue_inv and D are
+  zero; the wake-line velocity at that point is no longer used. The Jacobian (complex step: R_u rows
+  exact; JAX: automatic) carries the tie; the Jacobian tests pass.
+- Eq. 14 (theta, delta* + h_TE, C_tau) is unchanged and now holds at equal edge velocity; the change
+  of ue to the second wake station is crossed by the first ordinary wake interval.
+- Wake source strengths: still sigma = d(ue delta*)/ds per wake panel from the station values, so the
+  first wake panel's source now uses m_w1 = ue_TE (delta*_u + delta*_l + h_TE) and carries the mass
+  flow change from the trailing-edge speed to the second station's speed; the first-node strength
+  rule (FID p. 3, sum of the first and last airfoil panel sources) is unchanged.
+- The starting march starts the wake at the trailing-edge speed.
+
+Results (scripts and logs in the job scratch `tmp/d3/`): see report 9. In short, open edge: wake-end
+Cd within 0.4 / 0.3 / 0.8 % (0 / 5 / 10 deg) over 160-320 panels and spacings 0.0001-0.002 c (before:
+spread 2.4-15 points); ratio wake-end / TE value 1.00 / 1.013 / 1.025 against XFOIL's 1.009 / 1.027 /
+1.040 (dumps). C2: accuracy met with margin (Cd -4.4..+0.6 % over all angles), but the iteration
+target (< 20 per final solve) is missed at 0 deg (49, cold start reached by a repair restart) and 4 deg
+(40, warm start). Closed edge: not one point converges at 0 / 5 / 10 deg with any panel count or
+spacing. Continuation in the weight of the tie (diagnostic only), from report 8's converged closed
+solutions: the solution is lost at weight 0.55 / 0.65 / 0.85 (0 / 5 / 10 deg); along the way the
+trailing-edge speed rises and the wake-line speed just behind the sharp edge falls (implied 0.58 at
+0 deg, weight 0.5), i.e. with the trailing-edge mass flow carried to the first wake station, the first
+wake panel becomes a sink behind the sharp edge that lowers the speed there further. Per decision 1,
+stopped and shown; nothing tuned.
+
 ---
 
 ## Later

@@ -98,6 +98,9 @@ The benchmark always reports the measured numbers, whether or not a target is me
   filter, met at every Reynolds number separately: at least 95 % of the points where XFOIL
   converged are converged; mean |ΔCl| ≤ 0.03 and max ≤ 0.10; mean relative |ΔCd| ≤ 10 % and
   max ≤ 30 %; mean |ΔCm| ≤ 0.01 and max ≤ 0.03.
+- A reference point where XFOIL's own result at 240 nodes differs from 160 nodes by more than the
+  per-point (maximum) target for a quantity is reported but not counted towards that quantity's
+  targets. The number of such points is shown per case.
 - Sections with a sharp trailing edge are reported separately without targets; for them the
   paneling sensitivity is a lower bound, because XFOIL's result keeps changing with the number of
   `PANE` nodes.
