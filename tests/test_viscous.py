@@ -129,3 +129,35 @@ def test_stagnation_point_on_a_node():
         xm[k] -= h
         fd = (V.residual(xp_, st, 1e6, VISCOUS) - V.residual(xm, st, 1e6, VISCOUS)) / (2 * h)
         assert np.max(np.abs(fd - j[:, k])) <= 1e-5 * max(np.max(np.abs(fd)), 1e-12), k
+
+
+def test_isolated_clips_finds_one_station_spikes():
+    """A turbulent station on the H_k clip between two turbulent neighbours above it is found;
+    a clipped station next to another clipped or a laminar station is not."""
+    from types import SimpleNamespace
+    prm = VISCOUS
+    th = np.full(8, 1e-3)
+    ds = 1.4 * th
+    ds[3] = prm.hk_min * th[3]                       # isolated spike
+    ds[6] = ds[7] = prm.hk_min * th[6]               # two adjacent clipped stations
+    turb = np.array([False, True, True, True, True, False, True, True])
+    st = SimpleNamespace(branches=[SimpleNamespace(nodes=np.arange(8))], turbulent=turb)
+    x = np.stack([th, ds, np.zeros(8), np.ones(8)], axis=1)
+    assert V.isolated_clips(x, st, prm).tolist() == [3]
+
+
+@pytest.mark.slow
+def test_restart_reaches_the_cold_start_solution():
+    """NACA 4412, Re 5e5: -1 deg from the converged 0 deg stalls with one turbulent station on the
+    H_k clip (C3); the restarts of solve_point reach the solution of a cold start at -1 deg, and the
+    result says how (DECISIONS.md M3, decision 3c after report 6)."""
+    coords = canonical("NACA4412").coords
+    geo = V.build_geometry(coords)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        r0, r1 = V.polar(coords, [0.0, -1.0], 5e5, geometry=geo)
+        cold = V.solve_viscous(coords, -1.0, 5e5, geometry=geo)
+    assert r0.converged and r1.converged and cold.converged
+    assert "restart" in r1.path and r1.iterations_total > r1.iterations
+    for k in ("cl", "cd", "cm", "xtr_upper", "xtr_lower"):
+        assert getattr(r1, k) == pytest.approx(getattr(cold, k), abs=1e-6)

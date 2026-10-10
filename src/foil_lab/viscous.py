@@ -693,6 +693,7 @@ class ViscousResult:
     state: Any = field(default=None, repr=False)      # (x, structure) for a warm start
     surface: dict = field(default_factory=dict, repr=False)
     closure_set: str = ""
+    path: str = ""                                    # how the result was reached (:func:`solve_point`)
 
 
 def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
@@ -792,7 +793,8 @@ def solve_viscous(coords, alpha: float, reynolds: float, params: ViscousParams =
     return ViscousResult(alpha=alpha, reynolds=reynolds, converged=converged, iterations=it,
                          iterations_total=it, reason=reason, residual_history=hist,
                          scaled_steps=scaled, step_limits=limits, state=(x.copy(), st),
-                         closure_set=prm.closure_set, **res)
+                         closure_set=prm.closure_set, path="march" if start is None else "warm start",
+                         **res)
 
 
 def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
@@ -882,9 +884,97 @@ def solve_continued(coords, alpha: float, reynolds: float, params: ViscousParams
     r2.iterations_total += r.iterations_total + rm.iterations_total
     r2.continuation += 1
     if r2.converged:
+        r2.path = "continuation"
         return r2
     r.iterations_total = r2.iterations_total
     return r
+
+
+def isolated_clips(x, st: Structure, prm: ViscousParams) -> np.ndarray:
+    """Turbulent airfoil stations held on the H_k clip (H_k = ``hk_min``) whose two neighbours on
+    the branch are turbulent and above the clip: the one-station spikes at which a failed Newton
+    iteration can stall (the step drives the station below ``hk_min`` and the clip puts it back;
+    DECISIONS.md M3, convergence work after report 6)."""
+    th, ds = x[:, 0], x[:, 1]
+    on = np.abs(ds - prm.hk_min * th) <= 1e-9 * ds
+    out = []
+    for b in st.branches:
+        nd = b.nodes
+        for p in range(1, nd.size - 1):
+            j, jm, jp = nd[p], nd[p - 1], nd[p + 1]
+            if on[j] and st.turbulent[j] and st.turbulent[jm] and st.turbulent[jp] and not on[jm] \
+                    and not on[jp]:
+                out.append(j)
+    return np.array(out, dtype=int)
+
+
+def _repair_restart(coords, alpha, reynolds, prm, trips, failed: ViscousResult, geo):
+    """Restart from a failed iterate with every isolated clipped station replaced by the mean of its
+    two neighbours (theta, delta*, C_tau; ue kept). None if there is no such station."""
+    x, st = failed.state
+    js = isolated_clips(x, st, prm)
+    if not js.size:
+        return None
+    x = np.array(x, dtype=float)
+    for j in js:
+        b = next(b for b in st.branches if j in b.nodes)
+        p = int(np.flatnonzero(b.nodes == j)[0])
+        x[j, :3] = 0.5 * (x[b.nodes[p - 1], :3] + x[b.nodes[p + 1], :3])
+    return solve_viscous(coords, alpha, reynolds, prm, trips, (x, st), geo)
+
+
+def solve_point(coords, alpha: float, reynolds: float, params: ViscousParams = VISCOUS, trips=None,
+                start=None, alpha_start: float | None = None, geometry: Geometry | None = None,
+                repairs: int = 2) -> ViscousResult:
+    """One polar point. Only the way the solution is reached differs between the attempts; the
+    equations, tolerances and the definition of converged are those of :func:`solve_viscous`
+    (DECISIONS.md M3, decision 3c after report 6). In order, until one converges:
+
+    1. :func:`solve_continued` (warm start from ``start`` with angle-of-attack continuation, or the
+       starting march when there is no ``start``);
+    2. repair restart (our choice): from the failed iterate, with every isolated station held on the
+       H_k clip (:func:`isolated_clips`) replaced by the mean of its neighbours, at most ``repairs``
+       times in a row;
+    3. after a failed warm start: the starting march at ``alpha`` (restart from the march), then
+       repair restarts of it.
+
+    ``path`` records the attempt that converged ("warm start", "continuation", "march", "repair
+    restart", "march restart", with "+ repair restart"); ``iterations`` that attempt's Newton
+    iterations; ``iterations_total`` all of them. A point that still fails returns the first attempt
+    (the direct solve) with the total iterations."""
+    geo = geometry or build_geometry(coords)
+    first = solve_continued(coords, alpha, reynolds, params, trips, start, alpha_start, geo)
+    if first.converged:
+        return first
+    total = first.iterations_total
+
+    def repaired(r, label):
+        nonlocal total
+        for _ in range(repairs):
+            q = _repair_restart(coords, alpha, reynolds, params, trips, r, geo)
+            if q is None:
+                return None
+            total += q.iterations_total
+            if q.converged:
+                q.path = label + "repair restart"
+                return q
+            r = q
+        return None
+
+    q = repaired(first, "")
+    if q is None and start is not None:
+        m = solve_viscous(coords, alpha, reynolds, params, trips, None, geo)
+        total += m.iterations_total
+        if m.converged:
+            m.path, q = "march restart", m
+        else:
+            q = repaired(m, "march restart + ")
+    if q is not None:
+        q.iterations_total = total
+        q.continuation = first.continuation
+        return q
+    first.iterations_total = total
+    return first
 
 
 def polar(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trips=None,
@@ -894,11 +984,13 @@ def polar(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trip
     FID section VIII.C: a converged solution initialises the next, "using different starting
     angles of attack and fixed or adaptive increments"). After a point that still fails, the next
     angle again continues from the last converged state; only the first angle of a sweep without
-    ``start`` is started from the march (DECISIONS.md M3, C4)."""
+    ``start`` is started from the march (DECISIONS.md M3, C4). Each point is solved by
+    :func:`solve_point` (repair and march restarts after a failure; ``path`` says how it was
+    reached)."""
     geo = geometry or build_geometry(coords)
     out, a_prev = [], alpha_start
     for a in alphas:
-        r = solve_continued(coords, a, reynolds, params, trips, start, a_prev, geo)
+        r = solve_point(coords, a, reynolds, params, trips, start, a_prev, geo)
         out.append(r)
         if r.converged:
             start, a_prev = r.state, a

@@ -21,7 +21,7 @@ def _rows(section, re, dcl=0.0, cd_fac=1.0, dcm=0.0, unconverged=()):
         rows.append(dict(method=vr.method_name("fidkowski2022"), alpha=a, converged="1" if conv else "0",
                          cl=x.cl + dcl, cd=x.cd * cd_fac, cd_te=x.cd, cm=x.cm + dcm, xtr_top=x.xtr_top,
                          xtr_bot=x.xtr_bot, iterations=7, iterations_total=7, continuation=0,
-                         runtime_s=1.0, reason="converged" if conv else "max_iter", error=""))
+                         runtime_s=1.0, reason="converged" if conv else "max_iter", path="", error=""))
     return ref, rows
 
 

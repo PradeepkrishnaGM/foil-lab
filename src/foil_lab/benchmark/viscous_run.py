@@ -41,7 +41,7 @@ TARGETS = {"converged": 0.95, "cl_mean": 0.03, "cl_max": 0.10, "cd_mean": 0.10, 
 #: its laminar Falkner-Skan comparison and its tests are kept (DECISIONS.md M3, report 6 decisions)
 CLOSURE_SETS = ("fidkowski2022",)
 COLUMNS = ("method", "alpha", "converged", "cl", "cd", "cd_te", "cm", "xtr_top", "xtr_bot",
-           "iterations", "iterations_total", "continuation", "runtime_s", "reason", "error")
+           "iterations", "iterations_total", "continuation", "runtime_s", "reason", "path", "error")
 
 
 def method_name(closure_set: str) -> str:
@@ -64,11 +64,12 @@ def _row(r, closure_set: str, runtime: float, error: str = "") -> dict:
     if r is None:
         return dict(method=method_name(closure_set), alpha=math.nan, converged="0", cl=math.nan, cd=math.nan,
                     cd_te=math.nan, cm=math.nan, xtr_top=math.nan, xtr_bot=math.nan, iterations=0,
-                    iterations_total=0, continuation=0, runtime_s=runtime, reason="exception", error=error)
+                    iterations_total=0, continuation=0, runtime_s=runtime, reason="exception", path="",
+                    error=error)
     return dict(method=method_name(closure_set), alpha=r.alpha, converged="1" if r.converged else "0",
                 cl=r.cl, cd=r.cd, cd_te=r.cd_te, cm=r.cm, xtr_top=r.xtr_upper, xtr_bot=r.xtr_lower,
                 iterations=r.iterations, iterations_total=r.iterations_total, continuation=r.continuation,
-                runtime_s=runtime, reason=r.reason, error=error)
+                runtime_s=runtime, reason=r.reason, path=r.path, error=error)
 
 
 def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, float, list[dict]]:
@@ -108,7 +109,8 @@ def _write(path: Path, rows: list[dict]) -> None:
         w = csv.DictWriter(f, fieldnames=COLUMNS, lineterminator="\n")
         w.writeheader()
         for r in rows:
-            w.writerow({k: (f"{r[k]:.6g}" if isinstance(r[k], float) else r[k]) for k in COLUMNS})
+            w.writerow({k: (format(v, ".17g") if isinstance(v, float) else v)
+                        for k in COLUMNS for v in [r.get(k, "")]})
 
 
 def read_case(path: Path) -> list[dict]:

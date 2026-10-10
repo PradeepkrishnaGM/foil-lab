@@ -2062,12 +2062,84 @@ TE delta* ratio upper / lower 1.087 / 1.074, 1.051 / 1.274, 1.056 / 1.035; theta
 Cd TE stays within -0.5..-4.9 % in all of these. The sensitivity remains: stopped for the user (the
 drag definition and the spacing rule are unchanged).
 
+### Convergence of "fidkowski2022" (decision 3 after report 6)
+
+**3a. Classification** (`tests/diagnostics/c3_failures.py`: replays C3 exactly through
+`viscous_run.run_case`, observing, not changing, the clip and transition steps after every Newton
+update; classes judged on the last 15 iterations of the failed direct attempt; thresholds are the
+diagnostic's own). The first pass reproduced C3's 14 / 13 / 28 / 69 failures at Re 5e5 / 1e6 / 3e6
+/ 6e6 exactly. Its "other" class (39 of 124) turned out to be mostly one mechanism, added as a
+class: an **isolated H_k clip in the turbulent layer** (one turbulent airfoil station, 6-27
+stations behind transition, held at H_k = 1.02 between neighbours at H 1.38-1.48; the iterate is a
+fixed point, unchanged to 1e-10 between iterations: the Newton step drives that station below the
+clip and the clip puts it back). Counts: report 7.
+
+**3b. Comparison with XFOIL**, NACA 4412, Re 5e5, -1 deg (dump in `tests/diagnostics/data`,
+`transition_compare.py`): the failed iterate equals XFOIL's state within about 1 % from the leading
+edge to x/c 0.80 (transition 0.356 against 0.354; H 1.465 against 1.466 at x/c 0.60) except one
+station at x/c 0.85 (H_k 1.02 against 1.471, theta 4.48e-3 against 2.07e-3, ue 0.693 against 0.933,
+ue overshoots to 0.99 on both sides). x/c 0.85 is where the warm start (0 deg) was finishing its
+transition (0.796); XFOIL's transition also jumps from 0.80 to 0.35 between 0 and -1 deg. The
+defect is a remnant of the previous solution held by the clip, not another physical state.
+NACA 0012, Re 3e6, 10 deg (the class "H_k clip after laminar-separated transition"): the laminar
+separation bubble is reproduced (H 4.68 against 4.60 at x/c 0.014); our onset falls at a node
+(0.0187, node 0.01877), so the whole reattachment from H 4.6 lies in one fully turbulent interval
+whose downstream station is clipped at every iteration (XFOIL: H 3.03 and 1.80 on its first two
+turbulent stations); transition does not move. Changing this touches the discretisation or the
+clip (decision 3d): not done, for the user.
+
+**3c. Measures (only how the solution is reached; `viscous.solve_point`, used by `polar`):** after
+the existing warm start with continuation fails,
+
+1. *repair restart* (our choice): restart Newton from the failed iterate with every isolated
+   station on the H_k clip (`isolated_clips`: turbulent, both neighbours turbulent and above the
+   clip) replaced by the mean of its two neighbours (theta, delta*, C_tau; ue kept), at most twice
+   in a row;
+2. *restart from the starting march* (user's list; FID section V.A for the march), followed by
+   repair restarts of it.
+
+The equations, `hk_min` and the clip, the tolerances and the definition of converged are
+unchanged. `ViscousResult.path` records how a point was reached ("warm start", "continuation",
+"march", "repair restart", "march restart", "march restart + repair restart"); `iterations` are
+the converged attempt's, `iterations_total` all of them; the benchmark CSV has a `path` column and
+full-precision floats. Experiments before adopting them (from the stuck iterates): smoothing the
+clipped station converged in 4-5 iterations at E387 gap Re 5e5 7 deg, NACA 23012 Re 1e6 -3 deg and
+NACA 4412 Re 5e5 -1 deg, to the cold-march solution where that converges (equal Cl, Cd,
+transition); NACA 0012 Re 6e6 3 deg did not (a period-2 oscillation of the lag residual of the
+transition interval, no clip involved). Tests: `test_isolated_clips_finds_one_station_spikes`,
+`test_restart_reaches_the_cold_start_solution` (slow; to 1e-6).
+
+**C3 rerun with the measures** (`c3_failures --write-benchmark`, i.e. `run_case` itself; 49 cases,
+about 58 min on 6 workers, 5.04 h summed over the cases against 5.83 h before): all 868 points that
+converged before converge again, to the same Cl, Cd, Cm and transition within 2.4e-11 (condition:
+1e-6); 162 points converge that did not. SPEC.md 4.1 table (open trailing edges, attached filter):
+
+| Re | converged | mean / max dCl | mean / max rel dCd (wake end) | (Cd TE) | mean / max dCm |
+|---|---|---|---|---|---|
+| 5e5 | 81/83 = 97.6 % (met) | 0.0037 / 0.0188 | 7.6 % / 147.7 % (max missed) | 5.2 % / 152.0 % | 0.0008 / 0.0028 |
+| 1e6 | 87/91 = 95.6 % (met) | 0.0051 / 0.0196 | 5.9 % / 11.9 % | 2.0 % / 9.7 % | 0.0010 / 0.0032 |
+| 3e6 | 90/102 = 88.2 % (missed) | 0.0071 / 0.0312 | 7.2 % / 14.3 % | 1.5 % / 12.7 % | 0.0014 / 0.0051 |
+| 6e6 | 84/110 = 76.4 % (missed) | 0.0074 / 0.0240 | 8.2 % / 14.6 % | 2.0 % / 10.8 % | 0.0014 / 0.0041 |
+
+The max Cd miss at 5e5 comes from two points that converge for the first time, E387 with the
+0.25 % gap at -3 and -4 deg (Cd 0.01107 / 0.01313 against XFOIL 0.00447 / 0.00714; Cl within
+0.0035), reached by a plain warm start from -2 deg (now converged by a repair restart). XFOIL's Cd
+there depends strongly on its paneling (0.00447 / 0.00714 at 160 PANE nodes, 0.00616 / 0.01611 at
+240; -2 deg 0.00965 / 0.00961). Reported as measured; nothing excluded.
+
+Failures after, by class (Re 5e5 / 1e6 / 3e6 / 6e6): cold start 2 / 3 / 2 / 2; H_k clip after
+laminar-separated transition 0 / 1 / 10 / 16; transition relocation 0 / 0 / 0 / 1; isolated clip
+0 / 0 / 0 / 4; other 0 / 0 / 0 / 3. The remaining main class (27 of 44) is the one 3b showed needs
+a discretisation or clip change (3d): for the user.
+
 ---
 
 ## Later
 
-- M3: transition re-identification inside the Newton iteration fails where the transition location
-  moves 0.3-0.45 c per degree (C3); main cause of the missed convergence target.
+- M3: convergence at Re 3e6-6e6 (after the restarts of report 7): the main remaining cause is the
+  H_k clip after a laminar-separated transition station (27 of 44 failures); a remedy changes the
+  discretisation or the clip and needs the user's decision. (Transition relocation, the main cause
+  in C3, now accounts for 1 failure.)
 - M5: the velocity of one body's wake sources at another body's wake (not included in M3).
 - M3 (end of M3, after the convergence work; user's decision after report 6): E387 sharp at Re 1e6,
   -4 and -3 deg converges to a non-physical solution (Cl 0.19 against XFOIL -0.063).
