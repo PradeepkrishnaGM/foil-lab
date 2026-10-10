@@ -2015,6 +2015,53 @@ decisions in C4 and above.
 4. E387 (sharp trailing edge) at Re 1e6, -4 and -3 deg converges to a non-physical solution (Cl
    0.19 against XFOIL -0.063): looked at at the end of M3, after the convergence work (Later).
 
+### Airfoil/wake source interface against FID (decision 1 after report 6; open)
+
+What FID specifies (page images, pp. 3, 7, 16): (a) the source strength at the first wake node is
+the sum of the first and last airfoil panel sources, "in order to avoid a velocity spike at the
+trailing edge" (p. 3); the strength is linear over each wake half-panel (eq. 2), i.e. from
+sigma_1 + sigma_N-1 at the first wake node to sigma_1^w at the first panel's midpoint (Fig. 1); (b)
+the wake nodes, the first eps_w c = 1e-5 c behind the trailing-edge midpoint, are the panel ends,
+so the first half-panel starts at the first wake node (p. 7, Fig. 1); (c) when an evaluation point
+lies on a panel endpoint, the ln r of that endpoint is set to zero (appendix p. 16; stated for the
+streamfunction, and the velocity follows the same paragraph); (d) the wake edge speed sums the
+freestream and all vortex and source sheets (eq. 24). The paper says nothing more about the
+interface.
+
+What we do (`wake.py`): (a) and (d) as FID. (b) and (c) differ: the first half-panel starts at the
+trailing-edge midpoint (C4 our choice 1), so the first wake node lies 1e-5 c inside the sheet, and
+velocities are evaluated 1e-9 off the sheet (never on an endpoint).
+
+FID read literally ((b) and (c)) was implemented in a diagnostic (`tmp`, not committed) and is
+worse: with XFOIL's own delta* the first-node speed is 1.014 / 1.071 / 1.152 (0 / 5 / 10 deg; ours
+0.936 / 0.939 / 0.947; XFOIL 0.887 / 0.907 / 0.936); coupled (NACA 2412, Re 1e6) it does not
+converge at 0 and 10 deg and gives Cd -41 % at 5 deg with TE ue 0.944 against 0.907. It fails C2,
+so it was not adopted, and ours stays until the user decides.
+
+Cause of the jump at the first wake node, from a decomposition on XFOIL's delta*: the dead-air
+closure (FID eq. 15) enters the wake mass flow, so the first wake half-panel carries a sink of
+about ue dh_w/dxi ~ -0.25 while the first-node strength (rule (a)) holds only the airfoil
+boundary-layer sources; the strength ramps over one half-panel, which raises ue near its start
+(+0.05 over the trailing-edge value on XFOIL's delta*), and the finer the first spacing, the more
+of that ramp the first nodes see. XFOIL's own dump shows the first wake point (1e-4 c behind the
+trailing edge) with exactly the trailing-edge speed and its next point 0.0083 c downstream.
+
+Coupled, ours (NACA 2412, Re 1e6, 1 deg steps; trailing-edge ue / first wake node, XFOIL equal at
+both): 0.874 / 0.899 (XFOIL 0.887), 0.904 / 0.917 (0.907), 0.935 / 0.938 (0.936) at 0 / 5 / 10 deg;
+TE delta* ratio upper / lower 1.087 / 1.074, 1.051 / 1.274, 1.056 / 1.035; theta ratio 1.057 /
+1.053, 1.030 / 1.003, 1.016 / 1.014. Wake-end Cd against XFOIL at 0 / 5 / 10 deg:
+
+| first wake spacing | 0.0001 c | 0.0004 c (rule) | 0.002 c | 0.005 c | 0.01 c |
+|---|---|---|---|---|---|
+| Cd | +12.0 / +8.8 / +3.5 % | +9.5 / +5.3 / +0.4 % | +3.4 / -1.7 / -5.8 % | -5.5 / -9.8 / -12.6 % | -25.4 / -25.9 / -24.6 % |
+
+| panels (generated, open TE) | 160 | 240 | 320 |
+|---|---|---|---|
+| Cd | +9.5 / +5.3 / +0.4 % | +10.8 / +7.4 / +2.8 % | +11.4 / +8.7 / +4.2 % |
+
+Cd TE stays within -0.5..-4.9 % in all of these. The sensitivity remains: stopped for the user (the
+drag definition and the spacing rule are unchanged).
+
 ---
 
 ## Later
