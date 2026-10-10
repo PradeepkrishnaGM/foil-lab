@@ -1920,7 +1920,7 @@ continuation); abs(dCl) max 0.0133 at 0-10 deg; Cl_max 1.502 vs 1.525 at 16 deg;
 transition now matches XFOIL (0.963 / 0.990 / laminar / laminar against 0.966 / 0.994 / 1.000 /
 1.000) and dCl there is -0.004..+0.012 (was -0.023..-0.047). Tables in the M3 report 6.
 
-**Open decisions (stopped for the user):**
+**Open decisions (for the user; C3 is run with the current choices and reports both drag values):**
 
 1. *First wake spacing and the wake-end drag.* The wake-end Cd depends on the first wake spacing: at
    0 deg, +12.0 / +9.5 / +3.4 / -5.5 / -25 % against XFOIL for 0.0001 / 0.0004 / 0.002 / 0.005 /

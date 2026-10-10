@@ -61,6 +61,9 @@ from .bl.march import march_init, march_wake
 from .params import VISCOUS, ViscousParams
 
 NV = 4      # unknowns and residuals per station: theta, delta*, n or C_tau, ue
+#: a branch's first node lies on the stagnation point "to machine precision" (FID p. 7) when its
+#: sheet strength is below this fraction of the next node's
+STAG_NODE_TOL = 1e-9
 
 
 # --------------------------------------------------------------------------------------- #
@@ -204,6 +207,7 @@ class Branch:
     forced_w: float | None = None     # onset fraction if the transition is a forced trip
     s_trip: float | None = None       # arc length of the forced trip, if any
     trip_xi: float | None = None      # its xi for the current stagnation point
+    k0: int = 0                       # 1 if the first node lies on the stagnation point
 
 
 @dataclass
@@ -257,7 +261,9 @@ def make_structure(geo: Geometry, cpl: Coupling, gamma: np.ndarray, prev: Struct
                     j = int(j[0]) + 1
                     f = (xt - xs[j - 1]) / (xs[j] - xs[j - 1])
                     s_trip = float(ss[j - 1] + f * (ss[j] - ss[j - 1]))
-            branches.append(Branch(k, up, nodes, s_trip=s_trip))
+            g_b = np.asarray(gamma)[nodes]
+            k0 = int(abs(g_b[0]) <= STAG_NODE_TOL * abs(g_b[1]))
+            branches.append(Branch(k, up, nodes, s_trip=s_trip, k0=k0))
     turb = np.zeros(cpl.m_total, dtype=bool)
     turb[m:] = True
     st = Structure(cpl, np.array(ks), d, branches, turb)
@@ -293,13 +299,16 @@ def finalize(st: Structure) -> Structure:
     """Static index arrays of the residual groups, the row permutation and the colouring."""
     cpl = st.cpl
     mt = cpl.m_total
-    g = {"first": [], "lam": [], "turb": [], "trans": [], "forced": [], "wake_first": [], "wake": []}
+    g = {"first": [], "lam": [], "turb": [], "trans": [], "forced": [], "wake_first": [], "wake": [],
+         "stag_node": []}
     for b in st.branches:
         nd = b.nodes
-        if nd.size < 3:
+        if nd.size < 3 + b.k0:
             raise RuntimeError("a branch has fewer than three stations")
-        g["first"].append((nd[0], nd[1]))
-        for p in range(1, nd.size):
+        if b.k0:
+            g["stag_node"].append((nd[0], nd[1]))
+        g["first"].append((nd[b.k0], nd[b.k0 + 1]))
+        for p in range(1 + b.k0, nd.size):
             if b.p_tr is None or p < b.p_tr:
                 g["lam"].append((nd[p - 1], nd[p]))
             elif p == b.p_tr:
@@ -315,7 +324,7 @@ def finalize(st: Structure) -> Structure:
         for p in range(1, wn.size):
             g["wake"].append((wn[p - 1], wn[p]))
     groups, target, dep = {}, [], []
-    for key in ("first", "lam", "turb", "trans", "forced", "wake_first", "wake"):
+    for key in ("first", "lam", "turb", "trans", "forced", "wake_first", "stag_node", "wake"):  # bl_residual order
         rows = g[key]
         if not rows:
             groups[key] = None
@@ -329,7 +338,7 @@ def finalize(st: Structure) -> Structure:
                            np.array([r[3] for r in rows], dtype=int))
         else:
             groups[key] = (a, bb)
-        if key == "first":
+        if key in ("first", "stag_node"):
             row_node, dd_ = a, np.stack([a, bb, bb], axis=1)
         elif key == "wake_first":
             row_node = groups[key][2]
@@ -416,6 +425,13 @@ def bl_residual(theta, dstar, c, ue, s_stag, st: Structure, reynolds, prm: Visco
         blocks += [theta[w0] / (theta[lo] + theta[up]) - 1.0,
                    dstar[w0] / (dstar[lo] + dstar[up] + h_te) - 1.0,
                    xp.sqrt(c[w0] / c_start) - 1.0]
+    if G["stag_node"] is not None:
+        # a node on the stagnation point to round-off (ue = 0 there, so no interval can start from
+        # it): the stagnation equations apply at the branch's next node (group "first"), and this
+        # node carries that node's theta and delta* (Hiemenz flow) with n = 0 (FID p. 7;
+        # DECISIONS.md M3, C3)
+        a, b = G["stag_node"]
+        blocks += [theta[a] / theta[b] - 1.0, dstar[a] / dstar[b] - 1.0, c[a]]
     if G["wake"] is not None:
         a, b = G["wake"]
         s1 = _wake_station(theta[a], dstar[a], c[a], ue[a], a, cpl, reynolds, xp, cs)
@@ -500,8 +516,8 @@ def _march_amplification(x, xi, b: Branch, reynolds, prm, cs):
     hk = cs.hk(ds / th)
     ret = reynolds * ue * th
     xib = xi[nd]
-    r_prev = cs.dn_dxi(hk[0], th[0], ret[0], 0.0, prm.n_crit)
-    for p in range(1, nd.size):
+    r_prev = cs.dn_dxi(hk[b.k0], th[b.k0], ret[b.k0], 0.0, prm.n_crit)
+    for p in range(1 + b.k0, nd.size):
         dxi = xib[p] - xib[p - 1]
         if b.trip_xi is not None and xib[p - 1] < b.trip_xi <= xib[p]:
             return n, p, (b.trip_xi - xib[p - 1]) / dxi
@@ -693,10 +709,15 @@ def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
     for b in st.branches:
         nd = b.nodes
         trip_xi = None if b.s_trip is None else float(st.d[nd[0]] * (b.s_trip - ss[b.body]))
-        r = march_init(xi[nd], np.maximum(ue_inv[nd], 1e-6), reynolds, prm.n_crit, trip_xi,
+        mn = nd[b.k0:]
+        r = march_init(xi[mn], np.maximum(ue_inv[mn], 1e-6), reynolds, prm.n_crit, trip_xi,
                        prm.shape_eq_bias, prm.closure_set, prm.init_hk_max_lam, prm.init_hk_max_turb)
-        x[nd, 0], x[nd, 1], x[nd, 2], x[nd, 3] = r.theta, r.dstar, r.third, r.ue
-        st.turbulent[nd] = r.turbulent
+        x[mn, 0], x[mn, 1], x[mn, 2], x[mn, 3] = r.theta, r.dstar, r.third, r.ue
+        st.turbulent[mn] = r.turbulent
+        if b.k0:                                   # the node on the stagnation point
+            x[nd[0], :3] = x[nd[1], 0], x[nd[1], 1], 0.0
+            x[nd[0], 3] = ue_inv[nd[0]]
+            st.turbulent[nd[0]] = False
         j = nd[-1]
         c = x[j, 2]
         if not r.turbulent[-1]:

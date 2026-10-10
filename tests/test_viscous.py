@@ -94,3 +94,38 @@ def test_solution_does_not_depend_on_the_start(naca2412):
     assert cold.converged and warm.converged
     for q in ("cl", "cd", "cd_te", "cm", "xtr_upper"):
         assert abs(getattr(cold, q) - getattr(warm, q)) <= 1e-7, q
+
+
+@pytest.mark.slow
+def test_stagnation_point_on_a_node():
+    """NACA 0012 at 0 deg: the stagnation point lies on the leading-edge node to round-off (FID
+    p. 7). The solution converges, is symmetric (Cl = 0, equal layers on both surfaces), and the
+    complex-step Jacobian there matches finite differences, including the node's rows."""
+    coords = canonical("NACA0012").coords
+    geo = V.build_geometry(coords)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        r = V.solve_viscous(coords, 0.0, 1e6, geometry=geo)
+    assert r.converged and abs(r.cl) < 1e-10
+    up, lo = r.surface["upper"], r.surface["lower"]
+    n = min(up["theta"].size, lo["theta"].size) - 1
+    assert np.allclose(up["theta"][-n:], lo["theta"][-n:], rtol=1e-8)
+    assert r.xtr_upper == pytest.approx(r.xtr_lower, abs=1e-8)
+    x, st = r.state
+    assert sum(b.k0 for b in st.branches) == 1
+    V.finalize(st)
+    x = x * (1.0 + 1e-3 * np.random.default_rng(2).standard_normal(x.shape))
+    j = V.jacobian_complex_step(x, st, 1e6, VISCOUS)
+    m = geo.ps.num_nodes
+    le = [b.nodes[0] for b in st.branches] + [b.nodes[1] for b in st.branches]
+    xf = x.ravel()
+    for k in np.concatenate([4 * s + np.arange(4) for s in le + [0, m - 1, m, m + 1, m + 5]]):
+        # ue at the node on the stagnation point is ~1e-15: a step relative to it would move s_stag
+        # below round-off, so ue columns are stepped relative to 0.1 (the residual is smooth in ue
+        # through zero there; the node's own rows do not use its xi)
+        h = 1e-6 * max(abs(xf[k]), 0.1 if k % 4 == 3 else 1e-8)
+        xp_, xm = xf.copy(), xf.copy()
+        xp_[k] += h
+        xm[k] -= h
+        fd = (V.residual(xp_, st, 1e6, VISCOUS) - V.residual(xm, st, 1e6, VISCOUS)) / (2 * h)
+        assert np.max(np.abs(fd - j[:, k])) <= 1e-5 * max(np.max(np.abs(fd)), 1e-12), k
