@@ -157,6 +157,12 @@ def wake_operators(ps: inviscid.PanelSet, wk: Wake, alpha_deg: float) -> WakeOpe
     xm, ym = 0.5 * (wk.x[:-1] + wk.x[1:]), 0.5 * (wk.y[:-1] + wk.y[1:])
     x1 = np.concatenate([wk.x[:-1], xm, [wk.x[-1]]])
     y1 = np.concatenate([wk.y[:-1], ym, [wk.y[-1]]])
+    # the sheet starts at the trailing-edge midpoint with the first node's strength (FID Fig. 1);
+    # starting it at the first node, eps_w c downstream, puts a logarithmic velocity singularity at
+    # that node (DECISIONS.md M3, C4)
+    sn = ps.body_nodes[wk.body]
+    x1[0] = 0.5 * (ps.node_x[sn.start] + ps.node_x[sn.stop - 1])
+    y1[0] = 0.5 * (ps.node_y[sn.start] + ps.node_y[sn.stop - 1])
     lx, ly = wk.x[-1] - xm[-1], wk.y[-1] - ym[-1]          # extension past the last node
     x2 = np.concatenate([xm, wk.x[1:], [wk.x[-1] + lx]])
     y2 = np.concatenate([ym, wk.y[1:], [wk.y[-1] + ly]])

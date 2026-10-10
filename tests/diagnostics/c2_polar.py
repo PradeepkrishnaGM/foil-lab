@@ -26,6 +26,8 @@ DOWN = [float(a) for a in range(-1, -5, -1)]
 
 
 def run(cs: str = "fidkowski2022", up=UP, down=DOWN) -> dict:
+    """Two sweeps from 0 deg, as the XFOIL reference (``viscous.polar``: each angle from the last
+    converged one, with continuation)."""
     prm = dataclasses.replace(VISCOUS, closure_set=cs)
     coords = canonical(SECTION).coords
     geo = V.build_geometry(coords)
@@ -38,11 +40,13 @@ def run(cs: str = "fidkowski2022", up=UP, down=DOWN) -> dict:
                 start, a_prev = out[0.0].state, 0.0
             for a in sweep:
                 t0 = time.perf_counter()
-                r = V.solve_continued(coords, a, RE, prm, start=start, alpha_start=a_prev, geometry=geo)
+                r = V.polar(coords, [a], RE, prm, geometry=geo, start=start, alpha_start=a_prev)[0]
                 r.runtime = time.perf_counter() - t0
                 out[a] = r
-                start, a_prev = (r.state, a) if r.converged else (None, None)
+                if r.converged:
+                    start, a_prev = r.state, a
     return out
+
 
 
 def table(res: dict) -> list[dict]:
@@ -51,53 +55,65 @@ def table(res: dict) -> list[dict]:
     for a in sorted(res):
         r = res[a]
         x = ref.rows.get(a)
-        rows.append(dict(alpha=a, converged=r.converged, iterations=r.iterations, cl=r.cl, cd=r.cd, cm=r.cm,
+        rows.append(dict(alpha=a, converged=r.converged, iterations=r.iterations, total=r.iterations_total,
+                         cl=r.cl, cd=r.cd, cd_te=r.cd_te, cm=r.cm,
                          xtr_u=r.xtr_upper, xtr_l=r.xtr_lower, runtime=getattr(r, "runtime", np.nan),
-                         scaled=r.scaled_steps, reason=r.reason, cont=getattr(r, "continuation", 0),
+                         scaled=r.scaled_steps, reason=r.reason, cont=r.continuation,
                          cl_x=x.cl if x else np.nan, cd_x=x.cd if x else np.nan, cm_x=x.cm if x else np.nan,
                          xtr_u_x=x.xtr_top if x else np.nan, xtr_l_x=x.xtr_bot if x else np.nan))
     return rows
 
 
 def main(cs: str = "fidkowski2022") -> None:
-    rows = table(run(cs))
-    print(f"closure set {cs}; NACA 2412, Re 1e6; XFOIL reference PANE 160")
-    print(" alpha conv it  | Cl      XFOIL   dCl     | Cd       XFOIL    rel dCd | Cm      XFOIL   dCm     | xtr u  XF     xtr l  XF    | s")
+    res = run(cs)
+    rows = table(res)
+    print(f"closure set {cs}; NACA 2412, Re 1e6; XFOIL reference PANE 160; Cd = Squire-Young at the wake end,"
+          " Cd TE = Squire-Young at the trailing edge (cross-check)")
+    print(" alpha conv it (total) | Cl      XFOIL   dCl     | Cd       XFOIL    rel dCd  Cd TE   rel  | "
+          "Cm      XFOIL   dCm     | xtr u  XF     xtr l  XF    | s")
     for r in rows:
-        print(f" {r['alpha']:5.1f} {'Y' if r['converged'] else 'n'}  {r['iterations']:3d} | "
+        print(f" {r['alpha']:5.1f} {'Y' if r['converged'] else 'n'}  {r['iterations']:3d} ({r['total']:3d}) | "
               f"{r['cl']:+.4f} {r['cl_x']:+.4f} {r['cl'] - r['cl_x']:+.4f} | "
-              f"{r['cd']:.5f} {r['cd_x']:.5f} {100 * (r['cd'] / r['cd_x'] - 1):+6.1f} % | "
+              f"{r['cd']:.5f} {r['cd_x']:.5f} {100 * (r['cd'] / r['cd_x'] - 1):+6.1f} % "
+              f"{r['cd_te']:.5f} {100 * (r['cd_te'] / r['cd_x'] - 1):+5.1f} % | "
               f"{r['cm']:+.4f} {r['cm_x']:+.4f} {r['cm'] - r['cm_x']:+.4f} | "
               f"{r['xtr_u']:.3f} {r['xtr_u_x']:.3f}  {r['xtr_l']:.3f} {r['xtr_l_x']:.3f} | {r['runtime']:.1f}"
               + (f"  (continuation x{r['cont']})" if r["cont"] else "")
               + ("" if r["converged"] else f"  ({r['reason']})"))
+    bl_vs_dump(res, cs)
+
+
+def bl_vs_dump(res: dict, cs: str = "fidkowski2022") -> None:
+    """Coupled trailing-edge states against XFOIL's committed dumps (0, 5, 10 deg): delta*, theta,
+    H and ue at the trailing edge per surface, transition, delta* at x/c 0.5 and 0.9; ue and theta at
+    the first and last wake station."""
+    from tests.diagnostics.bl_compare import DATA, dump_name, read_dump
+    from tests.diagnostics.c1_compare import branches
+    ref = load_reference(SECTION, RE, 160)
+    for a in (0.0, 5.0, 10.0):
+        r = res.get(a)
+        if r is None:
+            continue
+        x = ref.rows[a]
+        print(f" alpha {a:g} ({cs}, converged {r.converged}):")
+        for lab, (xi, xs_, ue, ds, th, cf, h) in branches(a).items():
+            s = r.surface[lab]
+            xtr_new = r.xtr_upper if lab == "upper" else r.xtr_lower
+            xtr_xf = x.xtr_top if lab == "upper" else x.xtr_bot
+            cells = []
+            for xs in (0.5, 0.9):
+                i, j = int(np.argmin(np.abs(s["x"] - xs))), int(np.argmin(np.abs(xs_ - xs)))
+                cells.append(f"d* x/c {xs}: {s['dstar'][i] / ds[j]:.3f}")
+            print(f"   {lab}: transition {xtr_new:.3f} (XFOIL {xtr_xf:.3f}); TE delta* {s['dstar'][-1]:.5f} "
+                  f"(XFOIL {ds[-1]:.5f}, ratio {s['dstar'][-1] / ds[-1]:.3f}), theta ratio "
+                  f"{s['theta'][-1] / th[-1]:.3f}, H diff {s['h'][-1] - h[-1]:+.3f}, TE ue {s['ue'][-1]:.4f} "
+                  f"(XFOIL {ue[-1]:.4f}, diff {s['ue'][-1] - ue[-1]:+.4f}); " + ", ".join(cells))
+        _, wake = read_dump(DATA / dump_name(a))
+        w = r.surface["wake"]
+        print(f"   wake: first station ue {w['ue'][0]:.4f} (XFOIL {abs(wake[0, 3]):.4f}), theta ratio "
+              f"{w['theta'][0] / wake[0, 5]:.3f}; last station theta ratio {w['theta'][-1] / wake[-1, 5]:.3f}")
 
 
 if __name__ == "__main__":
     import sys
     main(*sys.argv[1:2])
-    bl_vs_dump(*sys.argv[1:2])
-
-
-def bl_vs_dump(cs: str = "fidkowski2022") -> None:
-    """Coupled boundary layer against XFOIL's committed dumps (0 and 5 deg): TE delta*, theta, H,
-    transition per surface, and delta* at x/c 0.5 and 0.9."""
-    from tests.diagnostics.c1_compare import XFOIL_XTR, branches
-    prm = dataclasses.replace(VISCOUS, closure_set=cs)
-    coords = canonical(SECTION).coords
-    geo = V.build_geometry(coords)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        res = V.polar(coords, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], RE, prm, geometry=geo)
-    for r in (res[0], res[5]):
-        print(f" alpha {r.alpha:g} ({cs}, converged {r.converged}):")
-        for lab, (xi, x, ue, ds, th, cf, h) in branches(r.alpha).items():
-            s = r.surface[lab]
-            xtr_new = r.xtr_upper if lab == "upper" else r.xtr_lower
-            cells = []
-            for xs in (0.5, 0.9):
-                i, j = int(np.argmin(np.abs(s["x"] - xs))), int(np.argmin(np.abs(x - xs)))
-                cells.append(f"d* x/c {xs}: {s['dstar'][i] / ds[j]:.3f}")
-            print(f"   {lab}: transition {xtr_new:.3f} (XFOIL {XFOIL_XTR[r.alpha][lab]:.3f}); TE delta* ratio "
-                  f"{s['dstar'][-1] / ds[-1]:.3f}, theta ratio {s['theta'][-1] / th[-1]:.3f}, H diff "
-                  f"{s['h'][-1] - h[-1]:+.3f}, TE ue {s['ue'][-1]:.4f} (XFOIL {ue[-1]:.4f}); " + ", ".join(cells))

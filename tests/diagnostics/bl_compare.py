@@ -11,7 +11,7 @@ Three comparisons per angle:
 * fed: our boundary-layer marcher on XFOIL's own edge velocity (closures without coupling);
 * inviscid check: our core driven by XFOIL's delta* as transpiration, giving Cl and Cm.
 
-Committed dumps (0 and 5 deg) live in ``tests/diagnostics/data`` with provenance headers, so the
+Committed dumps (0, 5 and 10 deg) live in ``tests/diagnostics/data`` with provenance headers, so the
 comparison runs without XFOIL. Print the tables with ``python -m tests.diagnostics.bl_compare``.
 """
 
@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 DATA = Path(__file__).parent / "data"
-ANGLES = (0.0, 5.0)
+ANGLES = (0.0, 5.0, 10.0)
 RE = 1e6
 STATIONS = (0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99)
 

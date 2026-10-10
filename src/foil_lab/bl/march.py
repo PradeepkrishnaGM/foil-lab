@@ -49,14 +49,15 @@ def _jac(fun, x, h=1e-30):
     return np.real(r0), j
 
 
-def _admissible(x, direct: bool) -> bool:
-    """theta and delta* (direct) or ue (inverse) positive; in direct mode H > 1.02."""
+def _admissible(x, direct: bool, hw: float = 0.0) -> bool:
+    """theta and delta* (direct) or ue (inverse) positive; in direct mode H > 1.02, with H formed
+    from delta* - h_w in the wake (``hw``, the dead-air thickness)."""
     if not np.all(x[:2] > 0):
         return False
-    return bool(x[1] > 1.02 * x[0]) if direct else True
+    return bool(x[1] - hw > 1.02 * x[0]) if direct else True
 
 
-def _newton(fun, x0, direct=True, tol=1e-12, max_iter=40):
+def _newton(fun, x0, direct=True, tol=1e-12, max_iter=40, hw=0.0):
     x = np.array(x0, dtype=float)
     for _ in range(max_iter):
         r, j = _jac(fun, x)
@@ -69,7 +70,7 @@ def _newton(fun, x0, direct=True, tol=1e-12, max_iter=40):
         # step halving keeps the state admissible (DECISIONS.md M3, item 4)
         lam = 1.0
         for _k in range(30):
-            if _admissible(x + lam * dx, direct):
+            if _admissible(x + lam * dx, direct, hw):
                 break
             lam *= 0.5
         x = x + lam * dx
@@ -294,3 +295,56 @@ def march_init(xi, ue_inv, reynolds, n_crit=9.0, xi_trip=None, bias=0.5, cs="fid
     with np.errstate(all="ignore"):
         cf = np.where(turb, cs.cf_turb(hk, np.maximum(ret, 1.0001)), cs.cf_lam(hk, ret))
     return MarchResult(np.asarray(xi), out_ue, th, ds, third, turb, h, cf, xtr, failed, cs.NAME)
+
+
+def wake_hk_inverse(hk1, dhk, iterations=6):
+    """Prescribed H_k at the next wake station in the inverse mode of the starting march (FID
+    eq. 22, as printed): Newton iterations on H_k2 + 0.03 Delta H_k (H_k2 - 1)^3 = H_k1, started
+    from H_k2 = H_k1, six iterations (FID p. 9)."""
+    hk2 = hk1
+    for _ in range(iterations):
+        hk2 = hk2 - (hk2 + 0.03 * dhk * (hk2 - 1.0) ** 3 - hk1) / (1.0 + 0.09 * dhk * (hk2 - 1.0) ** 2)
+    return hk2
+
+
+def march_wake(xi, ue_inv, hw, dead_frac, start, reynolds, bias=0.5, cs="fidkowski2022",
+               hk_max=2.5) -> MarchResult:
+    """Starting state of one wake (FID section V.A, p. 9). ``start`` = (theta, delta*, C_tau) of
+    the first wake station (FID eq. 14); ``hw``, ``dead_frac``: dead-air thickness and h_w/h_TE
+    per station (FID eq. 15, BTE89 eqs. 20-22, 33). Direct march on the inviscid edge velocity;
+    where the direct Newton fails or the closure H_k = (delta* - h_w)/theta exceeds ``hk_max``
+    (the turbulent limit of FID p. 9; FID gives none of its own for the wake), the inverse mode
+    with H_k from FID eq. (22); if that fails too, the extrapolation of FID p. 9, theta2 = theta1,
+    delta*2 = (delta*1 + theta1 r)/(1 + r), r = (xi2 - xi1)/(10 delta*1), applied to delta* - h_w
+    (our reading), with the inviscid ue. ``failed`` lists the stations that needed either."""
+    cs = closure_sets.get(cs)
+    n = len(xi)
+    out_ue = np.array(ue_inv, dtype=float)
+    th = np.zeros(n); ds = np.zeros(n); third = np.zeros(n)
+    th[0], ds[0], third[0] = start
+    failed = []
+    for i in range(1, n):
+        prev = (th[i - 1], ds[i - 1], third[i - 1], out_ue[i - 1])
+
+        def res(t, d, c, u, prev=prev, i=i):
+            s1 = eq.station(*prev, reynolds, True, cs=cs, wake=True, hw=hw[i - 1], dead_frac=dead_frac[i - 1])
+            s2 = eq.station(t, d, c, u, reynolds, True, cs=cs, wake=True, hw=hw[i], dead_frac=dead_frac[i])
+            return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs)
+
+        x, ok = _newton(lambda x: res(x[0], x[1], x[2], ue_inv[i]), np.array(prev[:3]), True, hw=hw[i])
+        if ok and (x[1] - hw[i]) / x[0] <= hk_max:
+            th[i], ds[i], third[i] = (float(np.real(v)) for v in x)
+            continue
+        failed.append(i)
+        hk_t = wake_hk_inverse((prev[1] - hw[i - 1]) / prev[0], (xi[i] - xi[i - 1]) / prev[0])
+        g = np.array([prev[0], prev[3], prev[2]])
+        x, ok = _newton(lambda x: res(x[0], hk_t * x[0] + hw[i], x[2], x[1]), g, False)
+        if ok:
+            th[i], ds[i], third[i], out_ue[i] = (float(np.real(v)) for v in (x[0], hk_t * x[0] + hw[i], x[2], x[1]))
+            continue
+        dcl = prev[1] - hw[i - 1]
+        r = (xi[i] - xi[i - 1]) / (10.0 * dcl)
+        th[i], ds[i], third[i] = prev[0], (dcl + prev[0] * r) / (1.0 + r) + hw[i], prev[2]
+    h = ds / th
+    return MarchResult(np.asarray(xi), out_ue, th, ds, third, np.ones(n, dtype=bool), h, np.zeros(n), None,
+                       failed, cs.NAME)

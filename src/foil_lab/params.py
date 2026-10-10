@@ -167,21 +167,26 @@ class ViscousParams:
     max_iter:
         Newton iterations per operating point (approved starting value).
     hk_min:
-        A Newton step is scaled down so that H_k stays at or above this at every station (counted
-        in the result). New, proposed.
+        After each Newton update delta* is raised where needed so that H_k is at least this at
+        every station (in the wake the H_k of the closures), as FID p. 11 does; each clip is
+        counted in the result. FID p. 11 uses 1.02 in the wake and 1.00005 on the airfoil; one
+        value for both is our choice. Approved (DECISIONS.md M3, C4).
     re_theta_min:
         A Newton step is scaled down so that Re_theta stays at or above this at turbulent stations,
-        where the turbulent Cf contains log10 Re_theta (FID eq. 59 limits it to 1.303, i.e. 20).
-        New, proposed.
+        where the turbulent Cf contains log10 Re_theta (FID eq. 59 limits log10 Re_theta to 1.303,
+        i.e. Re_theta 20; using it as a bound on the step is our choice). Approved.
     shape_eq_bias:
         Weight of the downstream station in the source term of the shape equation; 0.5 = central
         (DG87 p. 1351). Changed only if a checkpoint shows the stiffness DG87 describes.
     init_hk_max_lam, init_hk_max_turb:
-        H_k above which the starting march switches to its inverse mode (FID p. 9: 3.8 and 2.5).
+        H_k above which the starting march switches to its inverse mode (FID p. 9: 3.8 and 2.5;
+        the turbulent value also in the wake, where FID gives none of its own). Approved.
     jacobian:
         ``"complex_step"`` (NumPy: complex step of the local residuals with the chain rule through
         the edge velocity and the stagnation point) or ``"jax"`` (automatic differentiation of the
         full residual; needs JAX). Both are tested against each other and finite differences.
+        Default complex step (our choice: 0.08 s per Jacobian against 7.9 s for eager JAX at 161
+        stations). Approved.
     """
 
     closure_set: str = "fidkowski2022"
