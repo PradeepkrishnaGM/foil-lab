@@ -2334,6 +2334,51 @@ Track A (open trailing edges), then Track B (sharp trailing edge, diagnosis only
 - Tests: `test_edge_velocity_tie_only_on_an_open_trailing_edge`,
   `test_closed_trailing_edge_result_warns_about_wake_drag` (slow).
 
+### Track A, step 3: reaching failed cold starts from the nearest converged angle
+
+- `viscous.reach_from_nearest` (our choice; decision 3 after report 8; FID section VIII.C), called by
+  `viscous_run.run_case` after each sweep: a point whose start from the starting march failed is
+  reached from the nearest converged angle of the same sweep, one sweep angle at a time, each angle a
+  polar point (`solve_point`) started from the last one reached; the walk stops at the first angle
+  that fails. Equations, tolerances and the definition of converged are unchanged. A point reached
+  this way has `path` "from <angle> deg: <path>" and its `iterations_total` includes the failed
+  attempts; the benchmark report counts it with the restarts ("restart" subset). The C3 diagnostic
+  (`c3_failures`) takes such points from the benchmark row.
+- Test: `test_reach_from_nearest_walks_from_the_nearest_converged_angle` (walking order, stop at the
+  first failure, points that failed from a warm start are not walked to, path and totals).
+- In the C3 run on the Track A code it reached no point: it was tried at the three cold-start failures
+  at Re 6e6 (Clark Y 0 deg from 1 deg; E387 0.25 % gap 1 deg from 2 deg, which also stops the walk to
+  0 deg) and failed there. "Of its sweep" is read literally: E387 gap 0 deg (up sweep) is not reached
+  from -1 deg, which converged in the down sweep.
+- The three "other" failures at Re 6e6 of report 8, on the Track A code: E387 0.25 % gap at 4 and 5 deg
+  now converge directly from the warm start (10 and 12 iterations; the continuity rule changed the
+  solution path). NACA 2412 at 1 deg still fails from the warm start (0 deg) and from a cold start:
+  the largest residual is the lag equation of one lower-surface station at x/c 0.48, the first
+  station behind the transition interval, held on the H_k clip (H = 1.020); the residual falls
+  monotonically but slowly (2.0 after 50 iterations, about 10 % per iteration), i.e. a clipped
+  station behind transition, not an oscillation. Classified "transition relocation" in this run.
+
+### Track A, step 4: the two side-branch tests
+
+- `test_converges_quadratically_at_5deg`: accepted as described in report 9 (the step into the
+  residual tolerance is judged; bounds unchanged).
+- `test_restart_reaches_the_cold_start_solution`: case changed, assertion unchanged (restart in
+  `path`, `iterations_total > iterations`, Cl, Cd, Cm and transition equal to the cold start within
+  1e-6). Old case NACA 4412, Re 5e5, -1 deg from 0 deg: with the continuity rule it converges without
+  a restart and its cold start no longer converges. New case E387 with the 0.25 % gap, Re 1e6, -1 deg
+  from 0 deg (found in the C3 run): the warm start fails, a repair restart converges (5 iterations, 205
+  in total), and the cold start at -1 deg converges independently (27 iterations); they agree to
+  1e-15. Candidates checked and not taken: Clark Y Re 6e6 6 and 9 deg (also agree to 1e-15, but need a
+  7-10 point polar); NACA 23012 Re 5e5 -3 deg, Re 6e6 -1 deg and E387 gap Re 6e6 -1 deg (their cold
+  starts do not converge). The test skips when the UIUC E387 file is not cached and cannot be
+  downloaded, as the benchmark tests do.
+
+### Track A, step 5: iterations (C3 on the Track A code)
+
+Final-solve iterations of the converged points (open trailing edges, validated Re, attached filter,
+XFOIL converged): median / max 8 / 37 (Re 5e5), 9 / 49 (1e6), 9 / 40 (3e6), 10 / 43 (6e6). Every
+Reynolds number converges at 95 % or more, so no residual histories were required.
+
 ---
 
 ## Later

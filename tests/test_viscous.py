@@ -153,15 +153,21 @@ def test_isolated_clips_finds_one_station_spikes():
 
 @pytest.mark.slow
 def test_restart_reaches_the_cold_start_solution():
-    """NACA 4412, Re 5e5: -1 deg from the converged 0 deg stalls with one turbulent station on the
-    H_k clip (C3); the restarts of solve_point reach the solution of a cold start at -1 deg, and the
-    result says how (DECISIONS.md M3, decision 3c after report 6)."""
-    coords = canonical("NACA4412").coords
+    """E387 with a 0.25 % trailing-edge gap, Re 1e6: -1 deg from the converged 0 deg fails as a warm
+    start (C3 on the Track A code); the restarts of solve_point reach the solution of a cold start at
+    -1 deg, and the result says how (DECISIONS.md M3, decision 3c after report 6). The case was NACA
+    4412, Re 5e5, -1 deg until the continuity rule of report 9, with which that point converges
+    directly and its cold start no longer converges (decision 4 after report 9)."""
+    from foil_lab.benchmark.sections import SectionUnavailable
+    try:
+        coords = canonical("E387_GAP025").coords      # downloaded section (UIUC, cached)
+    except SectionUnavailable as exc:
+        pytest.skip(str(exc))
     geo = V.build_geometry(coords)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        r0, r1 = V.polar(coords, [0.0, -1.0], 5e5, geometry=geo)
-        cold = V.solve_viscous(coords, -1.0, 5e5, geometry=geo)
+        r0, r1 = V.polar(coords, [0.0, -1.0], 1e6, geometry=geo)
+        cold = V.solve_viscous(coords, -1.0, 1e6, geometry=geo)
     assert r0.converged and r1.converged and cold.converged
     assert "restart" in r1.path and r1.iterations_total > r1.iterations
     for k in ("cl", "cd", "cm", "xtr_upper", "xtr_lower"):
