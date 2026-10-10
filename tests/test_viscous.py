@@ -79,7 +79,10 @@ def test_converges_quadratically_at_5deg(naca2412):
     assert r.converged and r.iterations < 20
     h = r.residual_history
     assert h[-1] <= VISCOUS.residual_tol
-    assert h[-2] <= 1e-4 and h[-1] <= 10 * h[-2] ** 1.8
+    # the step into the residual tolerance is quadratic; a further iteration, taken only for the
+    # update criterion, sits at the round-off floor and is not judged
+    k = next(i for i, v in enumerate(h) if v <= VISCOUS.residual_tol)
+    assert h[k - 1] <= 1e-4 and h[k] <= 10 * h[k - 1] ** 1.8
 
 
 @pytest.mark.slow

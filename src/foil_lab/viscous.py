@@ -21,7 +21,13 @@ FID = Fidkowski; DECISIONS.md M3):
   states (FID eq. 14; BTE89 eqs. 16-18), written as ratios so that the residuals are
   dimensionless: theta_w/(theta_l + theta_u) - 1, delta*_w/(delta*_l + delta*_u + h_TE) - 1,
   (C_tau,w/C_tau,start)^1/2 - 1 with C_tau,start from the set (FID eq. 14 or BTE89 eq. 18); a
-  laminar trailing-edge state enters with the set's C_tau at transition (FID p. 7). Wake intervals:
+  laminar trailing-edge state enters with the set's C_tau at transition (FID p. 7). The edge
+  velocity is continuous across the trailing edge (our choice; DECISIONS.md M3, decision 1 after
+  report 8): the first wake station (FID's first wake point, eps_w c behind the trailing-edge
+  midpoint) takes ue = (ue_TE,lower + ue_TE,upper)/2, which replaces its edge-velocity relation, so
+  eq. 14 holds at equal edge velocity and the change of ue down the wake is crossed by ordinary
+  wake intervals with their momentum term. Its m = ue delta* still enters the first wake panel's
+  source (sigma = dm/ds). Wake intervals:
   the turbulent equations with the wake closures and the dead-air thickness (FID eq. 15; BTE89 eqs.
   20-33). In the wake xi continues the upper surface's (FID p. 3: the wake extends the upper
   surface): xi = xi_TE,upper + distance along the wake.
@@ -221,8 +227,9 @@ class Structure:
     perm: np.ndarray | None = None
     dep: np.ndarray | None = None     # (3 Mt, 3) stations each boundary-layer row depends on
     colour: np.ndarray | None = None  # Jacobian colouring of the stations
-    dmat: np.ndarray | None = None    # ue = ue_inv + dmat @ (ue delta*)
+    dmat: np.ndarray | None = None    # ue = ue_inv + tie @ ue + dmat @ (ue delta*)
     ue_inv: np.ndarray | None = None
+    tie: np.ndarray | None = None     # first wake station: ue = mean of the two trailing-edge ue
 
 
 def _stagnation_panel(gamma_body: np.ndarray, x_body: np.ndarray, prev: int | None) -> int:
@@ -273,6 +280,15 @@ def make_structure(geo: Geometry, cpl: Coupling, gamma: np.ndarray, prev: Struct
             b.p_tr, b.forced_w = b0.p_tr, b0.forced_w
     st.dmat = cpl.dmat(d[:m])
     st.ue_inv = cpl.ue_inv(d[:m])
+    # edge velocity continuous across the trailing edge (our choice; DECISIONS.md M3, decision 1
+    # after report 8): the first wake station takes the mean of the two trailing-edge speeds (equal
+    # by the Kutta condition) instead of the wake-line velocity at its position
+    st.tie = np.zeros((cpl.m_total, cpl.m_total))
+    for k, sn in enumerate(ps.body_nodes):
+        w0 = cpl.wake_nodes[k][0]
+        st.dmat[w0] = 0.0
+        st.ue_inv[w0] = 0.0
+        st.tie[w0, sn.start] = st.tie[w0, sn.stop - 1] = 0.5
     return st
 
 
@@ -442,8 +458,10 @@ def bl_residual(theta, dstar, c, ue, s_stag, st: Structure, reynolds, prm: Visco
 
 
 def ue_residual(dstar, ue, st: Structure, xp=np):
-    """R_u = ue - ue_inv - D (ue delta*) (LNE89 eq. 33, FID eq. 27), in units of the freestream."""
-    return ue - xp.asarray(st.ue_inv) - xp.asarray(st.dmat) @ (ue * dstar)
+    """R_u = ue - ue_inv - D (ue delta*) (LNE89 eq. 33, FID eq. 27), in units of the freestream; at
+    the first wake station of each body R_u = ue - (ue_TE,lower + ue_TE,upper)/2 instead (``tie``;
+    its rows of ue_inv and D are zero)."""
+    return ue - xp.asarray(st.tie) @ ue - xp.asarray(st.ue_inv) - xp.asarray(st.dmat) @ (ue * dstar)
 
 
 def residual(x, st: Structure, reynolds, prm: ViscousParams, xp=np):
@@ -492,7 +510,7 @@ def jacobian_complex_step(x, st: Structure, reynolds, prm, h=1e-30):
         j[np.ix_(bl_rows, np.arange(v, NV * mn, NV))] = loc[v]
     ru_rows = np.arange(3, NV * mn, NV)
     j[np.ix_(ru_rows, np.arange(1, NV * mn, NV))] = -st.dmat * ue[None, :]
-    j[np.ix_(ru_rows, np.arange(3, NV * mn, NV))] = np.eye(mn) - st.dmat * x[:, 1][None, :]
+    j[np.ix_(ru_rows, np.arange(3, NV * mn, NV))] = np.eye(mn) - st.tie - st.dmat * x[:, 1][None, :]
     return j
 
 
@@ -728,7 +746,9 @@ def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
     for k, wn in enumerate(cpl.wake_nodes):
         (tu, du, cu), (tl, dl, cl) = te[(k, True)], te[(k, False)]
         start = (tu + tl, du + dl + cpl.wakes[k].h_te, float(cs.ctau_wake_start(tu, cu, tl, cl)))
-        r = march_wake(xi[wn], np.maximum(ue_inv[wn], 1e-6), cpl.hw[wn], cpl.dead_frac[wn], start,
+        ue_w = np.maximum(ue_inv[wn], 1e-6)
+        ue_w[0] = st.tie[wn[0]] @ x[:, 3]           # the trailing-edge speed (``tie``)
+        r = march_wake(xi[wn], ue_w, cpl.hw[wn], cpl.dead_frac[wn], start,
                        reynolds, prm.closure_set, prm.init_hk_max_turb)
         x[wn, 0], x[wn, 1], x[wn, 2], x[wn, 3] = r.theta, r.dstar, r.third, r.ue
     return x, st
@@ -975,6 +995,43 @@ def solve_point(coords, alpha: float, reynolds: float, params: ViscousParams = V
         return q
     first.iterations_total = total
     return first
+
+
+def reach_from_nearest(coords, alphas, results: list, cold: list, reynolds: float,
+                       params: ViscousParams = VISCOUS, trips=None, geometry: Geometry | None = None,
+                       on_result=None) -> None:
+    """Points of one sweep whose start from the starting march failed (``cold``) are reached from
+    the nearest converged angle of the sweep, walking towards them one angle of the sweep at a time,
+    each angle a polar point (:func:`solve_point`) started from the last one reached; the walk stops
+    at the first angle that fails (our choice; DECISIONS.md M3, decision 3 after report 8; FID
+    section VIII.C). ``results`` is updated in place where a point converges this way; its ``path``
+    starts with "from <angle> deg: " and its ``iterations_total`` includes the failed attempts.
+    ``on_result(i, result, seconds)`` is called for every point the walk solves."""
+    import time
+    geo = geometry or build_geometry(coords)
+    for i in range(len(alphas)):
+        if results[i].converged or not cold[i]:
+            continue
+        conv = [j for j in range(len(alphas)) if results[j].converged]
+        if not conv:
+            return
+        j = min(conv, key=lambda q: (abs(alphas[q] - alphas[i]), abs(q - i)))
+        step = 1 if i > j else -1
+        start, a_prev = results[j].state, alphas[j]
+        for k in range(j + step, i + step, step):
+            if results[k].converged:
+                start, a_prev = results[k].state, alphas[k]
+                continue
+            t0 = time.perf_counter()
+            r = solve_point(coords, alphas[k], reynolds, params, trips, start, a_prev, geo)
+            if on_result is not None:
+                on_result(k, r, time.perf_counter() - t0)
+            if not r.converged:
+                break
+            r.path = f"from {alphas[j]:g} deg: {r.path}"
+            r.iterations_total += results[k].iterations_total
+            results[k] = r
+            start, a_prev = r.state, alphas[k]
 
 
 def polar(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trips=None,

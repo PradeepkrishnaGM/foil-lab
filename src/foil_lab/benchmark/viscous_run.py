@@ -4,7 +4,9 @@ One "viscous" method per benchmarked closure set (``CLOSURE_SETS``; DECISIONS.md
 sets" and the parking of "drela1987"), run like the
 XFOIL reference: per section and Reynolds number two sweeps from 0 deg (up to ``alpha_max``, down to
 ``alpha_min``), each angle started from the last converged one with angle-of-attack continuation
-(``viscous.polar``; the down sweep starts from the converged 0 deg state). Both codes read the same
+(``viscous.polar``; the down sweep starts from the converged 0 deg state); a point whose start from
+the starting march failed is then reached from the nearest converged angle of its sweep
+(``viscous.reach_from_nearest``; the ``path`` column says so). Both codes read the same
 canonical coordinate file. Drag is Squire-Young at the end of the wake; the trailing-edge value
 (``cd_te``) is reported next to it as a cross-check.
 
@@ -83,8 +85,11 @@ def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, floa
     rows, state0 = [], None
     for sweep in (up, down):
         start, a_prev = (state0, 0.0) if (sweep is down and state0 is not None) else (None, None)
+        first = len(rows)
+        res, cold = [], []
         for a in sweep:
             t0 = time.perf_counter()
+            cold.append(start is None)
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
@@ -95,10 +100,28 @@ def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, floa
                 row = _row(None, closure_set, time.perf_counter() - t0, f"{type(exc).__name__}: {exc}")
                 row["alpha"] = a
             rows.append(row)
-            if r is not None and r.converged:
+            if r is None:                      # never walked to (DECISIONS.md M3, decision 3, report 8)
+                r = V.ViscousResult(alpha=a, reynolds=reynolds, converged=False, iterations=0, reason="exception")
+                cold[-1] = False
+            res.append(r)
+            if r.converged:
                 start, a_prev = r.state, a
-                if a == 0.0:
-                    state0 = r.state
+
+        def walked(k, r, seconds):
+            old = rows[first + k]
+            if r.converged:
+                rows[first + k] = _row(r, closure_set, old["runtime_s"] + seconds)
+            else:
+                old["runtime_s"] += seconds
+                old["iterations_total"] += r.iterations_total
+
+        # a point whose start from the march failed: reached from the nearest converged angle of
+        # the sweep (DECISIONS.md M3, decision 3 after report 8)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            V.reach_from_nearest(coords, sweep, res, cold, reynolds, prm, geometry=geo, on_result=walked)
+        if sweep is up and 0.0 in sweep and res[sweep.index(0.0)].converged:
+            state0 = res[sweep.index(0.0)].state
     return section, reynolds, rows
 
 
