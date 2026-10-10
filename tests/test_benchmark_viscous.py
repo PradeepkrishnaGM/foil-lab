@@ -57,3 +57,18 @@ def test_report_writes_tables(tmp_path):
     text = (tmp_path / "m3_viscous" / "report.md").read_text()
     assert "fidkowski2022" in text and "Cd TE" in text and "✓" in text
     assert not any(math.isnan(r["cl"]) for r in vr.read_case(vr.case_file(tmp_path, "NACA0012", 3e6)))
+
+
+def test_drela1987_parked(tmp_path):
+    """"drela1987" is parked: not run by the benchmark and its old rows are not reported; the set
+    itself stays selectable (DECISIONS.md M3, report 6 decisions)."""
+    from foil_lab.bl import closure_sets
+    assert vr.CLOSURE_SETS == ("fidkowski2022",)
+    assert closure_sets.get("drela1987") is not None
+    with pytest.raises(ValueError, match="parked"):
+        vr.run_matrix(tmp_path, closure_sets=("drela1987",))
+    _, rows = _rows("NACA0012", 3e6)
+    rows += [dict(r, method=vr.method_name("drela1987")) for r in rows]
+    vr._write(vr.case_file(tmp_path, "NACA0012", 3e6), rows)
+    c = vr.compare_case("NACA0012", 3e6, tmp_path)
+    assert list(c.stats) == [vr.method_name("fidkowski2022")]

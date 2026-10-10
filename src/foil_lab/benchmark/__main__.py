@@ -31,7 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--sections", default=None,
                    help="comma-separated section names for 'references' and 'viscous' (default: all)")
     p.add_argument("--closure-sets", default=None,
-                   help="comma-separated closure sets for 'viscous' (default: both)")
+                   help="comma-separated closure sets for 'viscous' (default: fidkowski2022; "
+                        "drela1987 is parked and not benchmarked)")
     p.add_argument("--reynolds", default=None, help="comma-separated Reynolds numbers for 'viscous'")
     args = p.parse_args(argv)
     out = Path(args.output)

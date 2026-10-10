@@ -1992,6 +1992,29 @@ Stopped here for the user (C3 instruction): the convergence target is missed for
 at every validated Reynolds number, with every accuracy target met on the converged points; open
 decisions in C4 and above.
 
+### Decisions after report 6 (user, 2026-10-10)
+
+1. **Wake drag.** The drag definition (Squire-Young at the end of the wake) and the first wake
+   spacing rule stay unchanged for now. First the airfoil/wake source interface is checked against
+   FID (below, "Airfoil/wake source interface").
+2. **"drela1987" parked.** "Not converged with the wake" is accepted as this set's current state. The
+   set, its laminar Falkner-Skan comparison and its tests are kept; it is excluded from benchmark
+   runs (`viscous_run.CLOSURE_SETS = ("fidkowski2022",)`; `run_matrix` refuses a parked set and the
+   report ignores old rows of it). Its wake treatment is decided after v2.0 (Later). No more M3 time
+   is spent on it.
+3. **Convergence of "fidkowski2022".** Non-converged attached-flow points are classified by cause;
+   the largest class is compared with XFOIL's boundary-layer dump before anything changes. Measures
+   that only change how a solution is reached (limiting how far transition moves per Newton
+   iteration, finer or adaptive continuation, restarting from the starting march after a failed
+   warm start) may be implemented without asking, provided every point that converged before
+   converges to the same Cl, Cd, Cm and transition within 1e-6, tolerances and the definition of
+   converged are unchanged, each measure is recorded here with its source or "our choice", and the
+   result records how it was reached. Anything that changes a converged solution (closures, clips
+   or limits on H_k or C_tau, the transition formulation, the discretisation) needs the user's
+   approval first.
+4. E387 (sharp trailing edge) at Re 1e6, -4 and -3 deg converges to a non-physical solution (Cl
+   0.19 against XFOIL -0.063): looked at at the end of M3, after the convergence work (Later).
+
 ---
 
 ## Later
@@ -1999,8 +2022,10 @@ decisions in C4 and above.
 - M3: transition re-identification inside the Newton iteration fails where the transition location
   moves 0.3-0.45 c per degree (C3); main cause of the missed convergence target.
 - M5: the velocity of one body's wake sources at another body's wake (not included in M3).
-- M3: E387 (sharp trailing edge) can converge on a non-physical solution (Re 1e6, -4 and -3 deg
-  in C3).
+- M3 (end of M3, after the convergence work; user's decision after report 6): E387 sharp at Re 1e6,
+  -4 and -3 deg converges to a non-physical solution (Cl 0.19 against XFOIL -0.063).
+- After v2.0: decide the wake treatment of the parked closure set "drela1987" (its far wake drives
+  H_k below the 1.02 clip; not converged with the wake; excluded from benchmark runs until then).
 - `requires-python = ">=3.10"` is declared but only Python 3.14 is available and tested here.
   Decide the supported versions and test them in M7.
 - `examples/basic_alpha_sweep.py` opens `naca2412.dat` relative to the current directory, so it
@@ -2060,4 +2085,5 @@ decisions in C4 and above.
   "fidkowski2022" follows the later published forms (close to later XFOIL versions).
 - After v2.0: compare both closure sets ("fidkowski2022", "drela1987") with wind-tunnel data,
   downloaded on demand (not committed).
-- After C3: the user chooses the default closure set, with both benchmark results in front of them.
+- After C3: the user chooses the default closure set, with both benchmark results in front of them
+  ("drela1987" is parked until after v2.0; see above).

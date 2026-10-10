@@ -1,6 +1,7 @@
 """Checkpoint C3 of M3: the coupled viscous solver (``foil_lab.viscous``) on the benchmark matrix.
 
-One "viscous" method per closure set (DECISIONS.md M3, Q5 and "Two closure sets"), run like the
+One "viscous" method per benchmarked closure set (``CLOSURE_SETS``; DECISIONS.md M3, Q5, "Two closure
+sets" and the parking of "drela1987"), run like the
 XFOIL reference: per section and Reynolds number two sweeps from 0 deg (up to ``alpha_max``, down to
 ``alpha_min``), each angle started from the last converged one with angle-of-attack continuation
 (``viscous.polar``; the down sweep starts from the converged 0 deg state). Both codes read the same
@@ -35,7 +36,10 @@ from .report import MethodStats, _f, _max, _md, _mean, _pct, attached_filter
 #: SPEC.md 4.1 targets (open trailing edge, Re 5e5-6e6, attached-flow filter, per Reynolds number)
 TARGETS = {"converged": 0.95, "cl_mean": 0.03, "cl_max": 0.10, "cd_mean": 0.10, "cd_max": 0.30,
            "cm_mean": 0.01, "cm_max": 0.03}
-CLOSURE_SETS = ("fidkowski2022", "drela1987")
+#: closure sets run and reported by the benchmark. "drela1987" is parked: it does not converge with the
+#: wake (its far wake ends on the H_k clip) and its wake treatment is decided after v2.0; the set,
+#: its laminar Falkner-Skan comparison and its tests are kept (DECISIONS.md M3, report 6 decisions)
+CLOSURE_SETS = ("fidkowski2022",)
 COLUMNS = ("method", "alpha", "converged", "cl", "cd", "cd_te", "cm", "xtr_top", "xtr_bot",
            "iterations", "iterations_total", "continuation", "runtime_s", "reason", "error")
 
@@ -124,6 +128,9 @@ def run_matrix(output_root: Path = Path("benchmark_output"), bench: BenchmarkPar
                reynolds=None) -> None:
     """Run every (section, Reynolds number, closure set) of the matrix; one CSV per case (both
     sets in one file). Worker processes are spawned with one BLAS thread each."""
+    parked = [c for c in closure_sets if c not in CLOSURE_SETS]
+    if parked:
+        raise ValueError(f"closure set(s) {parked} not benchmarked (parked); benchmarked: {CLOSURE_SETS}")
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     jobs = [(s, re, cs) for s in (sections or bench.sections)
@@ -167,7 +174,7 @@ def compare_case(section: str, reynolds: float, output_root: Path,
     filt, _ = attached_filter(ref, bench)
     rows = read_case(case_file(output_root, section, reynolds))
     stats, stats_te, iters = {}, {}, {}
-    for m in sorted({r["method"] for r in rows}):
+    for m in sorted({r["method"] for r in rows} & {method_name(c) for c in CLOSURE_SETS}):
         mrows = {r["alpha"]: r for r in rows if r["method"] == m}
         st, stt, it = MethodStats(), MethodStats(), []
         for a in filt:
