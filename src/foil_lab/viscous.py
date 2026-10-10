@@ -379,7 +379,7 @@ def bl_residual(theta, dstar, c, ue, s_stag, st: Structure, reynolds, prm: Visco
     cs = prm.closure_set
     csm = closure_sets.get(cs)
     cpl = st.cpl
-    bias, n_crit = prm.shape_eq_bias, prm.n_crit
+    n_crit = prm.n_crit
     xi = xp.asarray(st.d) * (xp.asarray(cpl.s) - s_stag[xp.asarray(cpl.body_of_node)])
     blocks = []
     G = st.groups
@@ -396,13 +396,13 @@ def bl_residual(theta, dstar, c, ue, s_stag, st: Structure, reynolds, prm: Visco
         a, b = G["lam"]
         s1 = eq.station(theta[a], dstar[a], c[a], ue[a], reynolds, False, xp, cs)
         s2 = eq.station(theta[b], dstar[b], c[b], ue[b], reynolds, False, xp, cs)
-        r = eq.laminar_interval(s1, s2, xi[a], xi[b], xp, bias, cs, n_crit)
+        r = eq.laminar_interval(s1, s2, xi[a], xi[b], xp, cs, n_crit)
         blocks += [r[0], r[1], r[2]]
     if G["turb"] is not None:
         a, b = G["turb"]
         s1 = eq.station(theta[a], dstar[a], c[a], ue[a], reynolds, True, xp, cs)
         s2 = eq.station(theta[b], dstar[b], c[b], ue[b], reynolds, True, xp, cs)
-        r = eq.turbulent_interval(s1, s2, xi[a], xi[b], xp, bias, cs)
+        r = eq.turbulent_interval(s1, s2, xi[a], xi[b], xp, cs)
         blocks += [r[0], r[1], r[2]]
     for key in ("trans", "forced"):
         if G[key] is None:
@@ -410,7 +410,7 @@ def bl_residual(theta, dstar, c, ue, s_stag, st: Structure, reynolds, prm: Visco
         a, b = G[key][:2]
         w = None if key == "trans" else xp.asarray(G[key][2])
         r, _ = eq.transition_interval(theta[a], dstar[a], c[a], ue[a], theta[b], dstar[b], c[b], ue[b],
-                                      xi[a], xi[b], reynolds, n_crit, xp, bias, w, cs)
+                                      xi[a], xi[b], reynolds, n_crit, xp, w, cs)
         blocks += [r[0], r[1], r[2]]
     if G["wake_first"] is not None:
         # first wake station from the two trailing-edge states (FID eq. 14; BTE89 eqs. 16-18)
@@ -436,7 +436,7 @@ def bl_residual(theta, dstar, c, ue, s_stag, st: Structure, reynolds, prm: Visco
         a, b = G["wake"]
         s1 = _wake_station(theta[a], dstar[a], c[a], ue[a], a, cpl, reynolds, xp, cs)
         s2 = _wake_station(theta[b], dstar[b], c[b], ue[b], b, cpl, reynolds, xp, cs)
-        r = eq.turbulent_interval(s1, s2, xi[a], xi[b], xp, bias, cs)
+        r = eq.turbulent_interval(s1, s2, xi[a], xi[b], xp, cs)
         blocks += [r[0], r[1], r[2]]
     return xp.concatenate(blocks)[xp.asarray(st.perm)]
 
@@ -712,7 +712,7 @@ def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
         trip_xi = None if b.s_trip is None else float(st.d[nd[0]] * (b.s_trip - ss[b.body]))
         mn = nd[b.k0:]
         r = march_init(xi[mn], np.maximum(ue_inv[mn], 1e-6), reynolds, prm.n_crit, trip_xi,
-                       prm.shape_eq_bias, prm.closure_set, prm.init_hk_max_lam, prm.init_hk_max_turb)
+                       prm.closure_set, prm.init_hk_max_lam, prm.init_hk_max_turb)
         x[mn, 0], x[mn, 1], x[mn, 2], x[mn, 3] = r.theta, r.dstar, r.third, r.ue
         st.turbulent[mn] = r.turbulent
         if b.k0:                                   # the node on the stagnation point
@@ -729,7 +729,7 @@ def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
         (tu, du, cu), (tl, dl, cl) = te[(k, True)], te[(k, False)]
         start = (tu + tl, du + dl + cpl.wakes[k].h_te, float(cs.ctau_wake_start(tu, cu, tl, cl)))
         r = march_wake(xi[wn], np.maximum(ue_inv[wn], 1e-6), cpl.hw[wn], cpl.dead_frac[wn], start,
-                       reynolds, prm.shape_eq_bias, prm.closure_set, prm.init_hk_max_turb)
+                       reynolds, prm.closure_set, prm.init_hk_max_turb)
         x[wn, 0], x[wn, 1], x[wn, 2], x[wn, 3] = r.theta, r.dstar, r.third, r.ue
     return x, st
 

@@ -72,3 +72,27 @@ def test_drela1987_parked(tmp_path):
     vr._write(vr.case_file(tmp_path, "NACA0012", 3e6), rows)
     c = vr.compare_case("NACA0012", 3e6, tmp_path)
     assert list(c.stats) == [vr.method_name("fidkowski2022")]
+
+
+def test_reference_reliability_rule_and_restart_split(tmp_path):
+    """The reliability rule drops a quantity where XFOIL at 240 and 160 nodes differs by more than
+    the per-point target (E387 with the 0.25 % gap at Re 5e5, -4 deg: Cd 0.00714 against 0.01611);
+    points reached by a restart are pooled separately."""
+    from foil_lab.benchmark.xfoil import PolarRow
+    x = PolarRow(0.0, 0.5, 0.010, 0.004, -0.05, 0.5, 0.6)
+    assert vr.unreliable_quantities(x, PolarRow(0.0, 0.61, 0.010, 0.004, -0.05, 0.5, 0.6)) == {"cl"}
+    assert vr.unreliable_quantities(x, PolarRow(0.0, 0.5, 0.0131, 0.004, -0.0801, 0.5, 0.6)) == {"cd", "cm"}
+    assert vr.unreliable_quantities(x, None) == frozenset()
+    _, rows = _rows("E387_GAP025", 5e5, cd_fac=1.05)
+    for r in rows:
+        if r["alpha"] == -4.0:
+            r["cd"], r["path"] = 3.0 * r["cd"], "repair restart"
+    vr._write(vr.case_file(tmp_path, "E387_GAP025", 5e5), rows)
+    c = vr.compare_case("E387_GAP025", 5e5, tmp_path)
+    m = vr.method_name("fidkowski2022")
+    assert c.unreliable["cd"] >= 1
+    assert max(c.variants[(m, "wake", "all", False)].dcd_rel) == pytest.approx(2.15)
+    assert max(c.variants[(m, "wake", "all", True)].dcd_rel) == pytest.approx(0.05)
+    assert c.variants[(m, "wake", "restart", False)].n_compared == 1
+    assert c.variants[(m, "wake", "direct", False)].n_compared == \
+        c.variants[(m, "wake", "all", False)].n_compared - 1

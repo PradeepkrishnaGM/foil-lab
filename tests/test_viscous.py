@@ -84,14 +84,16 @@ def test_converges_quadratically_at_5deg(naca2412):
 
 @pytest.mark.slow
 def test_solution_does_not_depend_on_the_start(naca2412):
-    """5 deg from the starting march and from the 3 deg solution: same Cl, Cd, Cm, transition."""
+    """5 deg from the starting march and from the 3 deg solution: same Cl, Cd, Cm, transition.
+    The 3 deg solution is a polar point (``solve_point``): since the upwinding of FID eq. (13) its
+    start from the march stalls on an isolated H_k clip and is reached by the repair restart."""
     coords, geo = naca2412
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         cold = V.solve_viscous(coords, 5.0, 1e6, geometry=geo)
-        r3 = V.solve_viscous(coords, 3.0, 1e6, geometry=geo)
+        r3 = V.solve_point(coords, 3.0, 1e6, geometry=geo)
         warm = V.solve_continued(coords, 5.0, 1e6, start=r3.state, alpha_start=3.0, geometry=geo)
-    assert cold.converged and warm.converged
+    assert r3.converged and cold.converged and warm.converged
     for q in ("cl", "cd", "cd_te", "cm", "xtr_upper"):
         assert abs(getattr(cold, q) - getattr(warm, q)) <= 1e-7, q
 

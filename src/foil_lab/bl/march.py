@@ -95,7 +95,7 @@ def similarity_start_state(xi0, ue0, ue1, xi1, reynolds, cs, m=None):
     return x[0], x[1]
 
 
-def march(xi, reynolds, ue=None, dstar=None, n_crit=9.0, xi_trip=None, bias=0.5,
+def march(xi, reynolds, ue=None, dstar=None, n_crit=9.0, xi_trip=None,
           ue_start=None, start_state=None, cs="fidkowski2022") -> MarchResult:
     """March one branch. ``xi``: distance from the stagnation point (first station xi[0] > 0).
     Exactly one of ``ue`` (direct) or ``dstar`` (inverse) is prescribed. In the inverse mode the
@@ -137,17 +137,17 @@ def march(xi, reynolds, ue=None, dstar=None, n_crit=9.0, xi_trip=None, bias=0.5,
             t, d, c, u = unpack(x)
             s1 = eq.station(*prev, reynolds, False, cs=cs)
             s2 = eq.station(t, d, c, u, reynolds, False, cs=cs)
-            return eq.laminar_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs, n_crit=n_crit)
+            return eq.laminar_interval(s1, s2, xi[i - 1], xi[i], cs=cs, n_crit=n_crit)
 
         def turb_res(x, prev=prev, dxi=dxi, unpack=unpack):
             t, d, c, u = unpack(x)
             s1 = eq.station(*prev, reynolds, True, cs=cs)
             s2 = eq.station(t, d, c, u, reynolds, True, cs=cs)
-            return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs)
+            return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], cs=cs)
 
         def trans_res(x, forced=None, prev=prev, dxi=dxi, unpack=unpack):
             t, d, c, u = unpack(x)
-            return eq.transition_interval(*prev, t, d, c, u, xi[i - 1], xi[i], reynolds, n_crit, bias=bias,
+            return eq.transition_interval(*prev, t, d, c, u, xi[i - 1], xi[i], reynolds, n_crit,
                                           forced_w=forced, cs=cs)
         guess = np.array([prev[0], prev[1] if direct else prev[3], prev[2]])
         if not turbulent:
@@ -181,7 +181,7 @@ def march(xi, reynolds, ue=None, dstar=None, n_crit=9.0, xi_trip=None, bias=0.5,
     return MarchResult(np.asarray(xi), out_ue, th, ds, third, turb, h, cf, xtr, failed, cs.NAME)
 
 
-def march_init(xi, ue_inv, reynolds, n_crit=9.0, xi_trip=None, bias=0.5, cs="fidkowski2022",
+def march_init(xi, ue_inv, reynolds, n_crit=9.0, xi_trip=None, cs="fidkowski2022",
                hk_max_lam=3.8, hk_max_turb=2.5) -> MarchResult:
     """Starting state of the coupled Newton solver on one branch (FID section V.A, p. 9).
 
@@ -215,14 +215,14 @@ def march_init(xi, ue_inv, reynolds, n_crit=9.0, xi_trip=None, bias=0.5, cs="fid
             else:                                   # prescribed H_k: x = (theta, ue, third)
                 t, d, c, u = x[0], hk_t * x[0], x[2], x[1]
             if kind == "transition":
-                return eq.transition_interval(*prev, t, d, c, u, xi[i - 1], xi[i], reynolds, n_crit, bias=bias,
+                return eq.transition_interval(*prev, t, d, c, u, xi[i - 1], xi[i], reynolds, n_crit,
                                               forced_w=forced, cs=cs)
             tb = kind == "turbulent"
             s1 = eq.station(*prev, reynolds, tb, cs=cs)
             s2 = eq.station(t, d, c, u, reynolds, tb, cs=cs)
             if tb:
-                return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs)
-            return eq.laminar_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs, n_crit=n_crit)
+                return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], cs=cs)
+            return eq.laminar_interval(s1, s2, xi[i - 1], xi[i], cs=cs, n_crit=n_crit)
 
         def solve(kind, mode, hk_t=None):
             if kind == "transition":
@@ -307,7 +307,7 @@ def wake_hk_inverse(hk1, dhk, iterations=6):
     return hk2
 
 
-def march_wake(xi, ue_inv, hw, dead_frac, start, reynolds, bias=0.5, cs="fidkowski2022",
+def march_wake(xi, ue_inv, hw, dead_frac, start, reynolds, cs="fidkowski2022",
                hk_max=2.5) -> MarchResult:
     """Starting state of one wake (FID section V.A, p. 9). ``start`` = (theta, delta*, C_tau) of
     the first wake station (FID eq. 14); ``hw``, ``dead_frac``: dead-air thickness and h_w/h_TE
@@ -329,7 +329,7 @@ def march_wake(xi, ue_inv, hw, dead_frac, start, reynolds, bias=0.5, cs="fidkows
         def res(t, d, c, u, prev=prev, i=i):
             s1 = eq.station(*prev, reynolds, True, cs=cs, wake=True, hw=hw[i - 1], dead_frac=dead_frac[i - 1])
             s2 = eq.station(t, d, c, u, reynolds, True, cs=cs, wake=True, hw=hw[i], dead_frac=dead_frac[i])
-            return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], bias=bias, cs=cs)
+            return eq.turbulent_interval(s1, s2, xi[i - 1], xi[i], cs=cs)
 
         x, ok = _newton(lambda x: res(x[0], x[1], x[2], ue_inv[i]), np.array(prev[:3]), True, hw=hw[i])
         if ok and (x[1] - hw[i]) / x[0] <= hk_max:

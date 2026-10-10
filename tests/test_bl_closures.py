@@ -121,6 +121,20 @@ def test_interval_jacobians_agree(cs, kind):
     assert np.max(np.abs(j_fd - j_cs) / np.maximum(np.abs(j_cs), 1e-3)) <= 1e-5
 
 
+def test_upwind_factor_fid_eq13():
+    """eta_up of FID eq. (13): central (0.5) for equal H_k, towards 1 for a strong change of H_k,
+    C_up = 5 on the airfoil and 1 in the wake, and the value as printed for one case."""
+    def st(hk, wake=False):
+        return eq.Station(1e-3, hk * 1e-3, 1e-3, 1.0, True, hk=hk, wake=wake)
+    assert eq.upwind_factor(st(1.5), st(1.5)) == pytest.approx(0.5, abs=1e-15)
+    assert eq.upwind_factor(st(4.6), st(1.4)) > 0.99
+    hk1, hk2 = 1.4, 1.8
+    lf = np.log((hk2 - 1.0) / (hk1 - 1.0))
+    for wake, c_up in ((False, 5.0), (True, 1.0)):
+        expect = 1.0 - 0.5 * np.exp(-lf ** 2 * c_up / hk2 ** 2)
+        assert eq.upwind_factor(st(hk1, wake), st(hk2, wake)) == pytest.approx(expect, rel=1e-14)
+
+
 # --------------------------------------------------------------------------------------- #
 # SPEC 4.2 flat-plate checks on the new boundary layer (tolerances of the v1.3.1 tests)
 # --------------------------------------------------------------------------------------- #

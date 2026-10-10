@@ -158,6 +158,29 @@ def run_matrix(output_root: Path = Path("benchmark_output"), bench: BenchmarkPar
 # --------------------------------------------------------------------------------------- #
 # Comparison and tables
 # --------------------------------------------------------------------------------------- #
+#: subsets of the converged points by how they were reached (``ViscousResult.path``): "direct" = warm
+#: start, continuation or starting march; "restart" = repair or march restart (DECISIONS.md M3, 3c)
+SUBSETS = ("all", "direct", "restart")
+#: quantities the reference-reliability rule is applied to, with the target it is compared with
+RELIABILITY = {"cl": "cl_max", "cd": "cd_max", "cm": "cm_max"}
+
+
+def reached_by_restart(path: str) -> bool:
+    return "restart" in (path or "")
+
+
+def unreliable_quantities(x160, x240) -> frozenset:
+    """Reference reliability (proposed SPEC.md 4.1 addition, applied in the report; DECISIONS.md M3):
+    the quantities for which XFOIL's own result at 240 PANE nodes differs from that at 160 by more
+    than the target, read as the per-point (max) target: |dCl| > 0.10, |dCd|/Cd > 30 %, |dCm| > 0.03.
+    No 240-node result at that angle: nothing is excluded."""
+    if x160 is None or x240 is None:
+        return frozenset()
+    d = {"cl": abs(x240.cl - x160.cl), "cd": abs(x240.cd - x160.cd) / x160.cd,
+         "cm": abs(x240.cm - x160.cm)}
+    return frozenset(q for q, t in RELIABILITY.items() if d[q] > TARGETS[t])
+
+
 @dataclasses.dataclass
 class ViscousCase:
     section: str
@@ -168,41 +191,64 @@ class ViscousCase:
     stats: dict            # method -> MethodStats (Cd at the wake end)
     stats_te: dict         # method -> MethodStats (Cd TE)
     iters: dict            # method -> list of final-solve iterations (used points)
+    #: (method, "wake" | "te", subset, rule applied) -> MethodStats; subsets other than "all" hold
+    #: only converged points (n_compared = their number)
+    variants: dict = dataclasses.field(default_factory=dict)
+    #: filter angles (XFOIL converged at 160 nodes) whose reference is not counted, per quantity
+    unreliable: dict = dataclasses.field(default_factory=dict)
 
 
 def compare_case(section: str, reynolds: float, output_root: Path,
                  bench: BenchmarkParams = BENCHMARK) -> ViscousCase:
     ref = load_reference(section, reynolds, bench.pane_nodes[0])
+    try:
+        ref240 = load_reference(section, reynolds, bench.pane_nodes[1])
+    except FileNotFoundError:
+        ref240 = None
     filt, _ = attached_filter(ref, bench)
+    unrel = {a: unreliable_quantities(ref.rows[a], None if ref240 is None else ref240.rows.get(a))
+             for a in filt}
     rows = read_case(case_file(output_root, section, reynolds))
-    stats, stats_te, iters = {}, {}, {}
+    stats, stats_te, iters, variants = {}, {}, {}, {}
     for m in sorted({r["method"] for r in rows} & {method_name(c) for c in CLOSURE_SETS}):
         mrows = {r["alpha"]: r for r in rows if r["method"] == m}
-        st, stt, it = MethodStats(), MethodStats(), []
+        var = {(k, sub, rule): MethodStats() for k in ("wake", "te") for sub in SUBSETS
+               for rule in (False, True)}
+        it = []
         for a in filt:
             r, x = mrows.get(a), ref.rows[a]
             if r is None or x is None:
                 continue
-            for s in (st, stt):
+            conv = r["converged"] == "1" and math.isfinite(r["cl"])
+            sub = "restart" if conv and reached_by_restart(r.get("path", "")) else "direct"
+            for (k, s_, rule), s in var.items():
+                if s_ != "all" and (not conv or s_ != sub):
+                    continue
                 s.n_compared += 1
                 s.runtime.append(r["runtime_s"])
-            if r["converged"] != "1" or not math.isfinite(r["cl"]):
-                st.n_unconverged += 1
-                stt.n_unconverged += 1
-                continue
-            it.append(r["iterations"])
-            for s, cd in ((st, r["cd"]), (stt, r["cd_te"])):
-                s.dcl.append(abs(r["cl"] - x.cl))
-                s.dcm.append(abs(r["cm"] - x.cm))
-                s.dcd_rel.append(abs(cd - x.cd) / x.cd)
+                if not conv:
+                    s.n_unconverged += 1
+                    continue
+                skip = unrel[a] if rule else frozenset()
+                cd = r["cd"] if k == "wake" else r["cd_te"]
+                if "cl" not in skip:
+                    s.dcl.append(abs(r["cl"] - x.cl))
+                if "cm" not in skip:
+                    s.dcm.append(abs(r["cm"] - x.cm))
+                if "cd" not in skip:
+                    s.dcd_rel.append(abs(cd - x.cd) / x.cd)
                 if math.isfinite(r["xtr_top"]):
                     s.dxtr_top.append(abs(r["xtr_top"] - x.xtr_top))
                 if math.isfinite(r["xtr_bot"]):
                     s.dxtr_bot.append(abs(r["xtr_bot"] - x.xtr_bot))
-        stats[m], stats_te[m], iters[m] = st, stt, it
+            if conv:
+                it.append(r["iterations"])
+        stats[m], stats_te[m], iters[m] = var[("wake", "all", False)], var[("te", "all", False)], it
+        variants.update({(m,) + key: v for key, v in var.items()})
     sharp = float(ref.provenance.get("trailing_edge_gap", "nan")) == 0.0
+    n_unrel = {q: sum(q in unrel[a] for a in filt if ref.rows[a] is not None) for q in RELIABILITY}
     return ViscousCase(section, reynolds, sharp, filt, sum(ref.rows[a] is None for a in filt), stats,
-                       stats_te, iters)
+                       stats_te, iters, variants, n_unrel)
 
 
 def verdict(st: MethodStats) -> dict:
@@ -218,10 +264,12 @@ def verdict(st: MethodStats) -> dict:
     return v
 
 
-def _pool_dict(cases, key: str, method: str) -> MethodStats:
+def _pool_dict(cases, key, method: str) -> MethodStats:
+    """Pool one method over cases; ``key`` is "stats", "stats_te" or a variant key (kind, subset,
+    rule)."""
     out = MethodStats()
     for c in cases:
-        st = getattr(c, key).get(method)
+        st = getattr(c, key).get(method) if isinstance(key, str) else c.variants.get((method,) + key)
         if st is None:
             continue
         out.n_compared += st.n_compared
@@ -257,6 +305,12 @@ def build_markdown(cases: list[ViscousCase], bench: BenchmarkParams = BENCHMARK)
              "(✓ met, ✗ not met). Cd: Squire-Young at the end of the wake; 'Cd TE' rows use the "
              "Squire-Young value at the trailing edge (cross-check). Iterations are those of the final "
              "solve.", ""]
+    lines += ["Reference reliability (proposed SPEC.md 4.1 addition, applied here; SPEC.md not yet edited): "
+              "a reference point where XFOIL's own result at 240 PANE nodes differs from 160 nodes by more "
+              "than the target for a quantity is reported but not counted towards that quantity's targets; "
+              "the per-point (max) targets are used (|dCl| > 0.10, |dCd|/Cd > 30 %, |dCm| > 0.03); the "
+              "convergence count is not affected. Rows 'rule: yes' apply it, 'rule: no' do not. The "
+              "number of such points per case is in the per-case table.", ""]
     for group, sharp in (("open trailing edge (NACA 0012, 2412, 4412, 23012, Clark Y, E387 with a 0.25 % "
                           "gap)", False), ("sharp trailing edge (E387), no targets", True)):
         lines += [f"## {group}", ""]
@@ -267,11 +321,31 @@ def build_markdown(cases: list[ViscousCase], bench: BenchmarkParams = BENCHMARK)
                 continue
             tag = f"{re:g}" + ("" if re in valid else " (not validated)")
             for m in methods:
-                for key, lab in (("stats", ""), ("stats_te", ", Cd TE")):
-                    st = _pool_dict(sub, key, m)
-                    v = verdict(st) if (re in valid and not sharp) else None
-                    rows.append([tag, m.split(":")[1] + lab] + _cells(st, v))
-        lines += [_md(["Re", "closure set"] + HEAD, rows), ""]
+                for rule in (False, True):
+                    for kind, lab in (("wake", ""), ("te", ", Cd TE")):
+                        st = _pool_dict(sub, (kind, "all", rule), m)
+                        v = verdict(st) if (re in valid and not sharp) else None
+                        rows.append([tag, m.split(":")[1] + lab, "yes" if rule else "no"] + _cells(st, v))
+        lines += [_md(["Re", "closure set", "rule"] + HEAD, rows), ""]
+    lines += ["## Points reached directly and by a restart (open trailing edge, rule: no)", "",
+              "Direct: warm start, continuation or starting march; restart: repair restart or restart from "
+              "the starting march (`path` column; DECISIONS.md M3, 3c). Converged points only.", ""]
+    rows = []
+    for re in sorted({c.reynolds for c in cases}):
+        sub = [c for c in cases if c.reynolds == re and not c.sharp]
+        for m in methods:
+            for s_ in ("direct", "restart"):
+                st = _pool_dict(sub, ("wake", s_, False), m)
+                st_te = _pool_dict(sub, ("te", s_, False), m)
+                rows.append([f"{re:g}", m.split(":")[1], s_, str(st.n_compared),
+                             _f(_mean(st.dcl), ".4f"), _f(_max(st.dcl), ".4f"),
+                             _pct(_mean(st.dcd_rel)), _pct(_max(st.dcd_rel)),
+                             _pct(_mean(st_te.dcd_rel)), _pct(_max(st_te.dcd_rel)),
+                             _f(_mean(st.dcm), ".4f"), _f(_max(st.dcm), ".4f"),
+                             f"{_f(_mean(st.dxtr_top), '.3f')} / {_f(_mean(st.dxtr_bot), '.3f')}"])
+    lines += [_md(["Re", "closure set", "reached", "points", "mean dCl", "max dCl", "mean rel dCd",
+                   "max rel dCd", "mean rel dCd (Cd TE)", "max rel dCd (Cd TE)", "mean dCm", "max dCm",
+                   "mean dx_tr up / low"], rows), ""]
     lines += ["## Per case", ""]
     rows = []
     for c in cases:
@@ -283,9 +357,11 @@ def build_markdown(cases: list[ViscousCase], bench: BenchmarkParams = BENCHMARK)
             rows.append([c.section, f"{c.reynolds:g}", m.split(":")[1]] + _cells(st, None)
                         + [_pct(_mean(c.stats_te[m].dcd_rel)), str(c.xfoil_unconv),
                            f"{_f(_mean(it), '.1f')} / {max(it) if it else '-'}",
-                           _f(_mean(st.runtime), ".1f")])
+                           _f(_mean(st.runtime), ".1f"),
+                           " / ".join(str(c.unreliable.get(q, 0)) for q in RELIABILITY)])
     lines += [_md(["section", "Re", "closure set"] + HEAD + ["mean rel dCd (Cd TE)", "XFOIL not converged",
-                                                              "iterations mean / max", "run time per point (s)"],
+                                                              "iterations mean / max", "run time per point (s)",
+                                                              "unreliable reference Cl / Cd / Cm"],
                   rows), ""]
     return "\n".join(lines)
 

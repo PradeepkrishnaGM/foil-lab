@@ -1728,6 +1728,7 @@ central log form of DG87 p. 1351): the xi-weighted source terms (FID eqs. 9-10),
 upwinding (eq. 13), the midpoint evaluation of cf xi/theta, the stagnation state extrapolated to
 xi = 0 with a quadratic ue fit (p. 7). With the FID set, C1 agrees with XFOIL to about 1 % at the
 trailing edge, so these are not needed for agreement; revisit only if C2 shows otherwise.
+(Later reversed: eqs. 9-10 in C2, the quadratic ue fit in C2, the upwinding of eq. 13 after report 7.)
 
 **Every difference between the sources (item 4), equation numbers, and evaluation on the dumps**
 (`tests/diagnostics/closure_set_compare.py`; ratio closure/XFOIL on the dumped (H, Re_theta),
@@ -2132,14 +2133,121 @@ laminar-separated transition 0 / 1 / 10 / 16; transition relocation 0 / 0 / 0 / 
 0 / 0 / 0 / 4; other 0 / 0 / 0 / 3. The remaining main class (27 of 44) is the one 3b showed needs
 a discretisation or clip change (3d): for the user.
 
+### Decisions after report 7 (user, 2026-10-10)
+
+1. **Wake drag** stays the wake-end value. First test the explanation (open trailing edge: the
+   first wake stations lie in the dead-air region behind the base, where the wake-line velocity is
+   not an edge velocity; the edge velocity jumps across the trailing edge, 0.874 to 0.899 at 0 deg,
+   with no momentum term for the jump): (a) the same spacing and panel tables on the closed NACA
+   2412, where the sensitivity should then be much smaller, with the edge velocity across the
+   trailing edge; (b) if confirmed, a rule (continuous edge velocity across the trailing edge, no
+   wake station sampling the wake-line velocity inside the dead-air length of FID eq. 15, the
+   current treatment for a sharp edge), recorded as our choice; (c) accepted if the wake-end Cd
+   changes by at most 2 % over 160-320 panels and reasonable spacings beyond the dead-air region at
+   0, 5, 10 deg, with C2 still met; (d) otherwise stop and show; never tune the spacing to XFOIL.
+2. **FID eq. 13 upwinding** adopted as published in the shared discretisation; C0, C1, C2 rerun
+   (targets unchanged); the movement of the previously converged C3 points and the failure
+   classification reported. If the "clip after laminar-separated transition" class stays above 5
+   points: FID's airfoil H_k limit for "fidkowski2022" next; anything beyond the paper needs approval.
+3. **Repair restart** accepted as our choice; the `path` column stays; the benchmark report shows the
+   error metrics separately for points reached directly and by a restart.
+4. **Reference reliability**, proposed SPEC.md 4.1 addition, applied in the report now (SPEC.md is
+   edited only after the user confirms): "A reference point where XFOIL's own result at 240 nodes
+   differs from 160 nodes by more than the target for a quantity is reported but not counted
+   towards that quantity's targets. The number of such points is shown per case." Applied to all
+   sections; tables with and without the rule.
+
+### H_k-dependent upwinding, FID eq. 13 (decision 2 after report 7)
+
+Implemented in `bl/equations.py` as FID p. 6 states it (page image): eta_up = 1 - (1/2) exp(-(ln
+|f_Hu|)^2 C_up/H_k2^2), f_Hu = (H_k2 - 1)/(H_k1 - 1), C_up = 5 on the airfoil and 1 in the wake (taken
+from the downstream station), q_u = (1 - eta_up) q1 + eta_up q2; 0.5 (central) for equal H_k, towards 1
+(backward Euler) where H_k changes strongly. Which terms (FID p. 6): momentum all averaged; shape
+equation: the Cf and C_D source terms upwinded, the coefficient of ln(ue2/ue1) averaged; lag equation:
+C_tau^1/2 and C_tau,EQ^1/2 upwinded, delta averaged, u_q from the upwinded Cf and H_k with the averaged
+delta* and Re_theta; dn/dxi averaged. Our reading where FID is silent: K_lag and eta_D averaged (FID:
+"quantities without a subscript are averaged"); the lag equation is FID eq. 12 divided by the averaged
+delta; both subintervals of a transition interval use the same rule. Not part of eq. 13 and not
+adopted: FID's additional midpoint evaluation of cf xi/theta in the momentum equation, and its
+ln(ue2/ue1) form of the due/dxi term of the lag equation (ours stays 2 dxi (due/dxi)(1/ue)_avg). The
+`shape_eq_bias` parameter (0.5, central, never changed) is replaced by eq. 13 and removed. Test
+`test_upwind_factor_fid_eq13`; the interval Jacobian tests (JAX = complex step = finite differences)
+pass unchanged.
+
+- C0: passes. C1 (targets unchanged), trailing-edge delta* / theta ratio against XFOIL: 0 deg upper
+  1.001 / 1.001 (before 1.007 / 1.008), lower 0.997 / 0.997 (1.000 / 1.001), 5 deg upper 1.000 / 1.000
+  (1.009 / 1.007), 5 deg lower (laminar separation) 1.001 / 1.000, H +0.002 (1.011, H +0.042);
+  transition 0.657 / 0.682 / 0.294 / laminar unchanged.
+- C2 (NACA 2412, Re 1e6): converged at every angle -4..16 deg (15 deg now too); final-solve iterations
+  <= 18; |dCl| <= 0.0132 at 0-10 deg; Cl_max 1.530 at 16 deg (XFOIL 1.525); |dCm| <= 0.0028; Cd
+  -3.1..+8.9 % over the attached range (-4..11 deg), -15.1 % at 16 deg (beyond it; before -9.9 %):
+  flagged to the user, as "Cd within 15 %" was judged over all angles in report 6.
+- `test_solution_does_not_depend_on_the_start`: the 3 deg start from the march now stalls on an
+  isolated H_k clip; the test takes the 3 deg solution as a polar point (`solve_point`, repair
+  restart); 5 deg from it converges directly and equals the cold 5 deg solution to 1e-14 (assertion
+  1e-7 unchanged).
+- C3 replay (`c3_failures --write-benchmark`): previously converged points move (open trailing edge,
+  validated Re, attached filter, 335 points converged before and after): Cl mean 0.0019 / max 0.019
+  (NACA 4412 Re 6e6 13 deg); Cd (wake end) relative mean 1.7 % / max 7.4 % (NACA 0012 Re 3e6 13
+  deg), Cd TE 1.8 % / 7.4 %; Cm mean 0.0003 / max 0.0027; transition mean 0.0006 c / max 0.022 c.
+  7 points converged before and not now (NACA 23012 Re 1e6 0, 1 deg; E387 gap Re 1e6 0, 1 deg; Re
+  6e6 0, 4, 5 deg), 40 converge that did not.
+- Failure classes after (Re 5e5 / 1e6 / 3e6 / 6e6, attached, open): not converged 0 / 5 / 0 / 6
+  (report 7: 2 / 4 / 12 / 26); cold start 0 / 5 / 0 / 3; H_k clip after laminar-separated
+  transition 0 / 0 / 0 / 0 (report 7: 0 / 1 / 10 / 16); transition relocation 0; isolated clip 0;
+  other 0 / 0 / 0 / 3. The class is below 5, so FID's airfoil H_k limit was not tried.
+
+### Wake drag: test of the explanation (decision 1 after report 7); stopped at (a)
+
+Test (a), on the eq. 13 state, NACA 2412, Re 1e6, 0 / 5 / 10 deg; closed edge = `generate_naca4('2412',
+N, 'closed')`, its XFOIL reference run with the same recipe for this test (PANE 160: Cd 0.00555,
+0.00824, 0.01546; PANE 240: 0.00556, 0.00820, 0.01540; not committed). Wake-end Cd against XFOIL:
+
+| first wake spacing | 0.0001 c | 0.0004 c (rule) | 0.002 c | 0.005 c | 0.01 c |
+|---|---|---|---|---|---|
+| open | +11.4 / +8.0 / +1.7 % | +8.9 / +4.6 / -1.3 % | +2.8 / -2.3 / -7.2 % | -6.0 / -10.3 / -13.9 % | -25.8 / -26.3 / -25.7 % |
+| closed | -42.3 / -39.9 / -6.6 % | -40.7 / -39.5 / -4.5 % | -50.6 / -46.6 / -14.5 % | +292.6* / -57.5 / -34.3 % | +214.5* / -63.3 / -48.6 % |
+
+| panels | 160 | 240 | 320 |
+|---|---|---|---|
+| open | +8.9 / +4.6 / -1.3 % | +10.6 / +7.1 / +2.0 % | +11.3 / +8.5 / +3.7 % |
+| closed | -40.7 / -39.5 / -4.5 % | -29.6 / -34.1 / -4.9 % | -25.1 / -31.7 / -4.6 % |
+
+(*) another solution (Cl 0.13 below XFOIL, TE ue 0.76). Edge velocity, trailing edge (equal on both
+sides) / first wake station, 160 panels: open 0.874 / 0.899, 0.904 / 0.917, 0.933 / 0.936; closed
+0.902 / 0.772, 0.918 / 0.810, 0.931 / 0.922.
+
+Result: without a dead-air region the sensitivity is larger, not smaller, so (a) does not confirm
+the explanation; per (d) no rule was implemented and nothing was tuned. What the data support: in
+both cases Cd_wake/Cd_TE = (ue_wake1/ue_TE)^k with k = 3.2-3.6 wherever |jump| >= 0.02 (except open
+5 deg, k 4.8-5.1), i.e. Squire-Young's (H + 5)/2 applied to a theta carried unchanged across the
+edge-velocity jump at the first wake station (FID eq. 14); spacing and panel count act through that
+jump, whose sign differs (open: wake-line speed above the TE value; closed, finite TE angle: below).
+Open for the user.
+
+### Reference reliability in the report (decision 4 after report 7; SPEC.md not edited)
+
+`viscous_run.unreliable_quantities`: "differs by more than the target for a quantity" is read as the
+per-point (max) target, |dCl| > 0.10, |dCd|/Cd > 30 %, |dCm| > 0.03 (our reading; for the user to
+confirm with the SPEC.md wording); no 240-node result at that angle: nothing excluded; the
+convergence count is unaffected. The report shows every table with and without the rule, the
+number of such points per case and quantity, and the direct/restart split (decision 3).
+
 ---
 
 ## Later
 
-- M3: convergence at Re 3e6-6e6 (after the restarts of report 7): the main remaining cause is the
-  H_k clip after a laminar-separated transition station (27 of 44 failures); a remedy changes the
-  discretisation or the clip and needs the user's decision. (Transition relocation, the main cause
-  in C3, now accounts for 1 failure.)
+- M3 (after report 8): convergence at Re 1e6 and 6e6 is 94.5 % (target 95 %); 8 of the 11
+  non-converged attached points are cold starts at 0 or 1 deg, the first angles of an up sweep
+  started from the march (the H_k clip after a laminar-separated transition, report 7's main
+  class, is gone with the eq. 13 upwinding). A "how reached" measure (e.g. reaching such points
+  from the nearest converged angle of the sweep) is for the user to decide.
+- M3 (after report 8): wake drag. The wake-end Cd follows the edge-velocity jump between the
+  trailing edge and the first wake station on open and closed trailing edges (decision 1 after
+  report 7, test (a)); open for the user.
+- M3/M9 (after report 8): with a closed (sharp) trailing edge, NACA 2412 at Re 1e6 shows dCl -0.053
+  and dCm +0.011 at 5 deg and +0.048 / -0.010 at 10 deg (open edge within 0.01 / 0.002), with the
+  same edge-velocity jump; sharp sections are reported without targets (SPEC 4.1).
 - M5: the velocity of one body's wake sources at another body's wake (not included in M3).
 - M3 (end of M3, after the convergence work; user's decision after report 6): E387 sharp at Re 1e6,
   -4 and -3 deg converges to a non-physical solution (Cl 0.19 against XFOIL -0.063).

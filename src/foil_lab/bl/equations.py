@@ -24,12 +24,19 @@ with xi carried inside the average (FID eqs. 9-10), which keeps the first interv
 stagnation point consistent (there Cf and C_D grow like 1/ue ~ 1/xi; DECISIONS.md M3, C2):
 
     R1 = ln(theta2/theta1) + (2 + H)_a ln(ue2/ue1) - ln(xi2/xi1) (xi Cf/(2 theta))_a
-    R2 = ln(H*2/H*1) + (1 - H)_b ln(ue2/ue1) - ln(xi2/xi1) (xi (2C_D/H* - Cf/2)/theta)_b
+    R2 = ln(H*2/H*1) + (1 - H)_a ln(ue2/ue1) - ln(xi2/xi1) (xi (2C_D/H* - Cf/2)/theta)_u
     R3 = n2 - n1 - dxi (dn/dxi)_a                                                  laminar
-    R3 = ln(C_tau2/C_tau1) - dxi (dln C_tau/dxi)_a                                 turbulent
+    R3 = ln(C_tau2/C_tau1) - dxi [K_a (C_tau,EQ^1/2_u - eta_D C_tau^1/2_u)/delta_a
+                                  + 2 (u_q(Cf_u, H_k,u, Re_theta,a, delta*_a) - (due/dxi)(1/ue)_a)]
+                                                                                   turbulent
 
-(_a = average of the two stations; _b = weighted toward the downstream station with ``bias``,
-0.5 = central; dxi = xi2 - xi1). Every function accepts complex values (complex-step derivatives)
+(_a = average of the two stations; _u = upwinded with the H_k-dependent factor of FID eq. (13),
+q_u = (1 - eta_up) q1 + eta_up q2; dxi = xi2 - xi1). Which quantities are upwinded and which are
+averaged is FID p. 6: in the momentum equation everything is averaged; in the shape equation the
+Cf and C_D source terms are upwinded; in the lag equation C_tau^1/2 and C_tau,EQ^1/2 are
+upwinded, delta is averaged, and u_q uses an upwinded Cf and H_k with an averaged delta* and
+Re_theta; dn/dxi is averaged (DECISIONS.md M3, "H_k-dependent upwinding").
+Every function accepts complex values (complex-step derivatives)
 and is written against an array namespace.
 """
 
@@ -66,6 +73,7 @@ class Station:
     k_lag: Any = None       # lag-equation rate constant, eta_D, equilibrium u_q
     eta_d: Any = None
     uq: Any = None
+    wake: bool = False      # wake station (C_up of FID eq. 13; wake u_q)
 
 
 def station(theta, dstar, third, ue, reynolds, turbulent: bool, xp=np, cs="fidkowski2022",
@@ -82,7 +90,7 @@ def station(theta, dstar, third, ue, reynolds, turbulent: bool, xp=np, cs="fidko
         dcl = dstar - hw
         h = dcl / theta
         hk = cs.hk_wake(h, xp)
-        st = Station(theta, dcl, third, ue, True, h=h, hk=hk, ret=ret, h_full=h_full)
+        st = Station(theta, dcl, third, ue, True, h=h, hk=hk, ret=ret, h_full=h_full, wake=True)
         st.hstar = cs.hstar_turb(hk, ret, xp)
         st.cf = 0.0 * h
         st.us = cs.us_wake(st.hstar, h, hk, xp)
@@ -109,7 +117,23 @@ def station(theta, dstar, third, ue, reynolds, turbulent: bool, xp=np, cs="fidko
     return st
 
 
-def _common(s1: Station, s2: Station, xi1, xi2, xp, bias):
+#: C_up of FID eq. (13) on the airfoil and in the wake (published constants of the method)
+UPWIND_C_AIRFOIL = 5.0
+UPWIND_C_WAKE = 1.0
+
+
+def upwind_factor(s1: Station, s2: Station, xp=np):
+    """eta_up of FID eq. (13): 1 - exp(-(ln|f_Hu|)^2 C_up/H_k2^2)/2, f_Hu = (H_k2 - 1)/(H_k1 - 1).
+
+    0.5 (central) where H_k changes little across the interval, towards 1 (backward Euler) where it
+    changes strongly. C_up from the downstream station (wake or airfoil)."""
+    f = (s2.hk - 1.0) / (s1.hk - 1.0)
+    lf = xp.log(xp.where(_re(f) > 0.0, f, -f))
+    c_up = UPWIND_C_WAKE if s2.wake else UPWIND_C_AIRFOIL
+    return 1.0 - 0.5 * xp.exp(-lf ** 2 * c_up / s2.hk ** 2)
+
+
+def _common(s1: Station, s2: Station, xi1, xi2, xp, eta):
     lu = xp.log(s2.ue / s1.ue)
     lx = xp.log(xi2 / xi1)
     h_a = 0.5 * (s1.h_full + s2.h_full)
@@ -118,9 +142,8 @@ def _common(s1: Station, s2: Station, xi1, xi2, xp, bias):
     r1 = xp.log(s2.theta / s1.theta) + (2.0 + h_a) * lu - 0.5 * lx * 0.5 * (f1 + f2)
     src1 = xi1 * (2.0 * s1.cd / s1.hstar - 0.5 * s1.cf) / s1.theta
     src2 = xi2 * (2.0 * s2.cd / s2.hstar - 0.5 * s2.cf) / s2.theta
-    src = (1.0 - bias) * src1 + bias * src2
-    r2 = (xp.log(s2.hstar / s1.hstar) + (1.0 - ((1.0 - bias) * s1.h_full + bias * s2.h_full)) * lu
-          - lx * src)
+    src = (1.0 - eta) * src1 + eta * src2
+    r2 = xp.log(s2.hstar / s1.hstar) + (1.0 - h_a) * lu - lx * src
     return r1, r2
 
 
@@ -128,26 +151,46 @@ def lam_rate(s: Station, xp, cs, n_crit):
     return closure_sets.get(cs).dn_dxi(s.hk, s.theta, s.ret, s.third, n_crit, xp)
 
 
-def turb_lograte(s: Station, due_dxi, xp, cs):
-    """d ln C_tau / d xi of the common lag equation (FID eq. 8; LNE89 eq. 23 as a special case);
-    K, eta_D and u_q come from the station (surface or wake closures of the set)."""
-    return (s.k_lag * (xp.sqrt(s.ctau_eq) - s.eta_d * xp.sqrt(s.third)) / s.delta
-            + 2.0 * (s.uq - due_dxi / s.ue))
+def turb_lograte(s1: Station, s2: Station, eta, due_dxi, xp, cs):
+    """d ln C_tau / d xi over an interval, the common lag equation (FID eq. 8; LNE89 eq. 23 as a
+    special case) divided by the averaged delta, with the upwinding of FID p. 6: C_tau^1/2 and
+    C_tau,EQ^1/2 upwinded, u_q from the upwinded Cf and H_k and the averaged delta* and Re_theta;
+    delta, the rate constant K, eta_D and 1/ue averaged. The set supplies K, eta_D and u_q
+    (surface or wake closures)."""
+    csm = closure_sets.get(cs)
+
+    def up(a, b):
+        return (1.0 - eta) * a + eta * b
+
+    hk_u = up(s1.hk, s2.hk)
+    ret_a = 0.5 * (s1.ret + s2.ret)
+    ds_a = 0.5 * (s1.dstar + s2.dstar)
+    if s2.wake:
+        uq = csm.uq_wake(hk_u, ret_a, ds_a, xp)
+    else:
+        uq = csm.uq(up(s1.cf, s2.cf), hk_u, ret_a, ds_a, xp)
+    k_a = 0.5 * (s1.k_lag + s2.k_lag)
+    eta_d = 0.5 * (s1.eta_d + s2.eta_d)
+    sq_eq = up(xp.sqrt(s1.ctau_eq), xp.sqrt(s2.ctau_eq))
+    sq_c = up(xp.sqrt(s1.third), xp.sqrt(s2.third))
+    delta_a = 0.5 * (s1.delta + s2.delta)
+    inv_ue = 0.5 * (1.0 / s1.ue + 1.0 / s2.ue)
+    return k_a * (sq_eq - eta_d * sq_c) / delta_a + 2.0 * (uq - due_dxi * inv_ue)
 
 
-def laminar_interval(s1: Station, s2: Station, xi1, xi2, xp=np, bias=0.5, cs="fidkowski2022", n_crit=9.0):
-    r1, r2 = _common(s1, s2, xi1, xi2, xp, bias)
+def laminar_interval(s1: Station, s2: Station, xi1, xi2, xp=np, cs="fidkowski2022", n_crit=9.0):
+    r1, r2 = _common(s1, s2, xi1, xi2, xp, upwind_factor(s1, s2, xp))
     dxi = xi2 - xi1
     r3 = s2.third - s1.third - dxi * 0.5 * (lam_rate(s1, xp, cs, n_crit) + lam_rate(s2, xp, cs, n_crit))
     return xp.stack([r1, r2, r3])
 
 
-def turbulent_interval(s1: Station, s2: Station, xi1, xi2, xp=np, bias=0.5, cs="fidkowski2022"):
-    r1, r2 = _common(s1, s2, xi1, xi2, xp, bias)
+def turbulent_interval(s1: Station, s2: Station, xi1, xi2, xp=np, cs="fidkowski2022"):
+    eta = upwind_factor(s1, s2, xp)
+    r1, r2 = _common(s1, s2, xi1, xi2, xp, eta)
     dxi = xi2 - xi1
     due = (s2.ue - s1.ue) / dxi
-    g = 0.5 * (turb_lograte(s1, due, xp, cs) + turb_lograte(s2, due, xp, cs))
-    r3 = xp.log(s2.third / s1.third) - dxi * g
+    r3 = xp.log(s2.third / s1.third) - dxi * turb_lograte(s1, s2, eta, due, xp, cs)
     return xp.stack([r1, r2, r3])
 
 
@@ -189,7 +232,7 @@ def transition_onset(s1: Station, theta2, dstar2, ue2, dxi, reynolds, n_crit, xp
 
 
 def transition_interval(theta1, dstar1, n1, ue1, theta2, dstar2, ctau2, ue2, xi1, xi2, reynolds,
-                        n_crit, xp=np, bias=0.5, forced_w=None, cs="fidkowski2022"):
+                        n_crit, xp=np, forced_w=None, cs="fidkowski2022"):
     """Residuals of an interval containing transition onset (DG87 Fig. 5; FID eqs. 16-18).
 
     The state at the onset is interpolated linearly between the stations; the laminar
@@ -213,11 +256,11 @@ def transition_interval(theta1, dstar1, n1, ue1, theta2, dstar2, ctau2, ue2, xi1
     s2 = station(theta2, dstar2, ctau2, ue2, reynolds, True, xp, cs)
     d2 = (1.0 - w) * dxi
     xt = xi1 + w * dxi
-    a1, a2 = _common(s1, stl, xi1, xt, xp, bias)
-    b1, b2 = _common(stt, s2, xt, xi2, xp, bias)
+    a1, a2 = _common(s1, stl, xi1, xt, xp, upwind_factor(s1, stl, xp))
+    eta = upwind_factor(stt, s2, xp)
+    b1, b2 = _common(stt, s2, xt, xi2, xp, eta)
     due = (s2.ue - stt.ue) / xp.where(_re(d2) > 1e-12 * _re(dxi), d2, 1e-12 * dxi)
-    g = 0.5 * (turb_lograte(stt, due, xp, cs) + turb_lograte(s2, due, xp, cs))
-    r3 = xp.log(s2.third / stt.third) - d2 * g
+    r3 = xp.log(s2.third / stt.third) - d2 * turb_lograte(stt, s2, eta, due, xp, cs)
     return xp.stack([a1 + b1, a2 + b2, r3]), w
 
 
