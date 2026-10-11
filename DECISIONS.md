@@ -2451,6 +2451,27 @@ own, `make_structure`) driven by XFOIL's delta* on airfoil and wake. Scripts: jo
    behind a sharp, finite-angle trailing edge in the coupled problem, and the installed XFOIL departs
    from the printed eq. 9. Options for the user (report 10); none implemented.
 
+### Decisions after report 10 (user, 2026-10-11)
+
+1. **M3 accuracy and convergence criteria met.** Track A met every SPEC.md 4.1 target at Re 5e5, 1e6,
+   3e6 and 6e6 (table in "Track A, step 6"). M3's accuracy and convergence criteria are recorded as
+   met with closure set "fidkowski2022", which is **confirmed as the default set**
+   (`ViscousParams.closure_set`; the docstring no longer says "provisional"). "drela1987" stays parked.
+2. **Slow marks.** `test_farfield_lift_equals_pressure_lift` and
+   `test_report_command_never_writes_the_baseline_document` are marked `slow`; the fast suite runs in
+   42.6 s again (370 passed, 1 xfailed). The full suite runs before every merge.
+3. **`reach_from_nearest` across sweeps.** A point whose start from the march failed may be reached from
+   the nearest converged angle of either sweep of the same case. Implemented as a second pass in
+   `viscous_run.run_case` after the per-sweep walks (which are unchanged, so every earlier result is
+   unchanged): over the combined, sorted angles, a still-failed cold point is walked to from a converged
+   angle of the other sweep where that angle is at least as near as the nearest converged angle of its
+   own sweep (that one has already been tried) (`reach_from_nearest(..., group=...)`; our reading).
+   Test: `test_reach_from_nearest_uses_the_other_sweep_when_it_is_nearer`.
+4. **Sharp trailing edge.** Option (b) of report 10 (the sharp edge as the small-gap limit of the open
+   treatment) is the route for v2.0, with (c) (the interim state: warning, no substitution) as the
+   fallback. Option (a), a resolution-independent sharp-edge treatment, is a Later item after v2.0,
+   starting from the Track B findings.
+
 ---
 
 ## Later
@@ -2543,5 +2564,14 @@ own, `make_structure`) driven by XFOIL's delta* on airfoil and wake. Scripts: jo
   "fidkowski2022" follows the later published forms (close to later XFOIL versions).
 - After v2.0: compare both closure sets ("fidkowski2022", "drela1987") with wind-tunnel data,
   downloaded on demand (not committed).
-- After C3: the user chooses the default closure set, with both benchmark results in front of them
-  ("drela1987" is parked until after v2.0; see above).
+- After v2.0 (user, after report 10): option (a) for the sharp trailing edge, a resolution-independent
+  treatment of the edge velocity at and just behind a sharp edge in the coupled problem (our choice, not
+  published). Starting point, the Track B findings (M3, "Track B"): with XFOIL's delta* our edge velocity
+  agrees to about 0.003 except over the last ~0.6 % of chord and the first ~0.008 c of wake; two parts
+  depend on the panel size there, the LNE89 eq. 9 trailing-edge node value (0.835 on XFOIL's nodes, 0.70
+  on ours) and a logarithmic source spike at the airfoil/wake junction (+0.04 per halving of the
+  distance to the edge; +0.249 / +0.506 at 0 / 5 deg on our 160 panels); the inviscid wake-line velocity
+  follows the exact corner flow (|u| ~ r^k, k = tau/(2 pi - tau) = 0.048). Candidate forms: the TE speed
+  extrapolated from the attached flow upstream (as eq. 9 does for gamma, applied to the total ue), and
+  a source strength ramped across the edge over a length set by the layer (a few delta*), each chosen
+  by convergence under panel refinement (160 / 320 / 640), never tuned to XFOIL.

@@ -5,7 +5,8 @@ sets" and the parking of "drela1987"), run like the
 XFOIL reference: per section and Reynolds number two sweeps from 0 deg (up to ``alpha_max``, down to
 ``alpha_min``), each angle started from the last converged one with angle-of-attack continuation
 (``viscous.polar``; the down sweep starts from the converged 0 deg state); a point whose start from
-the starting march failed is then reached from the nearest converged angle of its sweep
+the starting march failed is then reached from the nearest converged angle of its sweep, and if
+that fails, from the nearest converged angle of the other sweep where that is at least as near
 (``viscous.reach_from_nearest``; the ``path`` column says so). Both codes read the same
 canonical coordinate file. Drag is Squire-Young at the end of the wake; the trailing-edge value
 (``cd_te``) is reported next to it as a cross-check.
@@ -84,6 +85,7 @@ def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, floa
     geo = V.build_geometry(coords)
     up, down = _sweeps()
     rows, state0 = [], None
+    all_alphas, all_res, all_cold, all_group = [], [], [], []
     for sweep in (up, down):
         start, a_prev = (state0, 0.0) if (sweep is down and state0 is not None) else (None, None)
         first = len(rows)
@@ -123,6 +125,28 @@ def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, floa
             V.reach_from_nearest(coords, sweep, res, cold, reynolds, prm, geometry=geo, on_result=walked)
         if sweep is up and 0.0 in sweep and res[sweep.index(0.0)].converged:
             state0 = res[sweep.index(0.0)].state
+        all_alphas += sweep
+        all_res += res
+        all_cold += cold
+        all_group += [first] * len(sweep)
+    # then from the nearest converged angle of the other sweep, where that is at least as near as the
+    # one of its own sweep (user, after report 10); rows are in the order of ``all_*``
+    order = sorted(range(len(all_alphas)), key=lambda q: all_alphas[q])
+    res_c = [all_res[q] for q in order]
+
+    def walked_c(k, r, seconds):
+        old = rows[order[k]]
+        if r.converged:
+            rows[order[k]] = _row(r, closure_set, old["runtime_s"] + seconds)
+        else:
+            old["runtime_s"] += seconds
+            old["iterations_total"] += r.iterations_total
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        V.reach_from_nearest(coords, [all_alphas[q] for q in order], res_c, [all_cold[q] for q in order],
+                             reynolds, prm, geometry=geo, on_result=walked_c,
+                             group=[all_group[q] for q in order])
     return section, reynolds, rows
 
 

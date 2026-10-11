@@ -245,3 +245,37 @@ def test_reach_from_nearest_walks_from_the_nearest_converged_angle(monkeypatch):
     assert res[6].path == "from 5 deg: warm start"
     assert res[1].iterations == 5 and res[1].iterations_total == 7 + 10
     assert res[4].path == "march" and res[8].path == "march"   # not walked to / walk stopped before
+
+
+def test_reach_from_nearest_uses_the_other_sweep_when_it_is_nearer(monkeypatch):
+    """With ``group`` (the sweep of each angle; user, after report 10) a cold point that its own sweep
+    did not reach is walked to from a converged angle of the other sweep, but only where that angle is
+    at least as near as the nearest converged angle of its own sweep (already tried)."""
+    calls = []
+
+    def fake(coords, alpha, reynolds, params=None, trips=None, start=None, alpha_start=None,
+             geometry=None):
+        calls.append((alpha, alpha_start))
+        return V.ViscousResult(alpha=alpha, reynolds=reynolds, converged=True, iterations=5,
+                               iterations_total=7, reason="converged", state=("x", alpha), path="warm start")
+
+    monkeypatch.setattr(V, "solve_point", fake)
+
+    def run(alphas, group, conv, cold):
+        calls.clear()
+        res = [V.ViscousResult(alpha=a, reynolds=1e6, converged=a in conv, iterations=4, iterations_total=10,
+                               reason="", state=("x", a), path="march") for a in alphas]
+        V.reach_from_nearest(None, alphas, res, [a in cold for a in alphas], 1e6, geometry=object(),
+                             group=group)
+        return res
+
+    # 0 deg (up sweep): own nearest 3 deg, other sweep's -1 deg nearer -> walked from -1 deg; 1 and 2 deg
+    # then have a nearer converged angle in their own sweep, -2 deg in its own sweep: not walked to
+    res = run([-2.0, -1.0, 0.0, 1.0, 2.0, 3.0], ["d", "d", "u", "u", "u", "u"], {-1.0, 3.0},
+              {-2.0, 0.0, 1.0, 2.0})
+    assert calls == [(0.0, -1.0)]
+    assert res[2].converged and res[2].path == "from -1 deg: warm start"
+    assert [r.converged for r in res] == [False, True, True, False, False, True]
+    # equally near in both sweeps: the other sweep's angle is used (its own was already tried)
+    res = run([-1.0, 0.0, 1.0], ["d", "u", "u"], {-1.0, 1.0}, {0.0})
+    assert calls == [(0.0, -1.0)]

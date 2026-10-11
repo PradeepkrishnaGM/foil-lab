@@ -1016,22 +1016,32 @@ def solve_point(coords, alpha: float, reynolds: float, params: ViscousParams = V
 
 def reach_from_nearest(coords, alphas, results: list, cold: list, reynolds: float,
                        params: ViscousParams = VISCOUS, trips=None, geometry: Geometry | None = None,
-                       on_result=None) -> None:
+                       on_result=None, group: list | None = None) -> None:
     """Points of one sweep whose start from the starting march failed (``cold``) are reached from
     the nearest converged angle of the sweep, walking towards them one angle of the sweep at a time,
     each angle a polar point (:func:`solve_point`) started from the last one reached; the walk stops
     at the first angle that fails (our choice; DECISIONS.md M3, decision 3 after report 8; FID
     section VIII.C). ``results`` is updated in place where a point converges this way; its ``path``
     starts with "from <angle> deg: " and its ``iterations_total`` includes the failed attempts.
-    ``on_result(i, result, seconds)`` is called for every point the walk solves."""
+    ``on_result(i, result, seconds)`` is called for every point the walk solves.
+
+    ``group`` (one label per angle, e.g. the sweep it belongs to; ``alphas`` then sorted): the walk
+    starts only from a converged angle of another group, and only where that angle is at least as
+    near as the nearest converged angle of the point's own group, which the walk within its own sweep
+    has already tried (user, after report 10: the nearest converged angle of either sweep of the case
+    may be used)."""
     import time
     geo = geometry or build_geometry(coords)
     for i in range(len(alphas)):
         if results[i].converged or not cold[i]:
             continue
         conv = [j for j in range(len(alphas)) if results[j].converged]
+        if group is not None:
+            own = [abs(alphas[q] - alphas[i]) for q in conv if group[q] == group[i]]
+            conv = [q for q in conv if group[q] != group[i]
+                    and abs(alphas[q] - alphas[i]) <= min(own, default=np.inf)]
         if not conv:
-            return
+            continue
         j = min(conv, key=lambda q: (abs(alphas[q] - alphas[i]), abs(q - i)))
         step = 1 if i > j else -1
         start, a_prev = results[j].state, alphas[j]

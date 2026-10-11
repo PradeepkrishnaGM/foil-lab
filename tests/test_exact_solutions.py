@@ -172,6 +172,7 @@ def _farfield_cl(sol, alpha_deg, half=10.0, res=801):
     return 2.0 * (fy * np.cos(a) - fx * np.sin(a))
 
 
+@pytest.mark.slow
 def test_farfield_lift_equals_pressure_lift():
     """Within 0.5 %."""
     af = generate_naca4("2412", 200)

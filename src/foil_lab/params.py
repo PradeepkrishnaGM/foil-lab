@@ -156,8 +156,9 @@ class ViscousParams:
     ----------
     closure_set:
         Closure set of the boundary layer, ``"fidkowski2022"`` or ``"drela1987"``
-        (``foil_lab.bl.closure_sets``). Provisional default: the set the SPEC 4.1 targets are
-        judged with; the user chooses the default after checkpoint C3 (DECISIONS.md M3).
+        (``foil_lab.bl.closure_sets``). Default ``"fidkowski2022"``, confirmed by the user after
+        report 10: the set with which M3 met the SPEC.md 4.1 targets; ``"drela1987"`` is parked
+        (DECISIONS.md M3).
     n_crit:
         Critical amplification factor of the e^n envelope method (both surfaces).
     residual_tol:
