@@ -2472,6 +2472,40 @@ own, `make_structure`) driven by XFOIL's delta* on airfoil and wake. Scripts: jo
    fallback. Option (a), a resolution-independent sharp-edge treatment, is a Later item after v2.0,
    starting from the Track B findings.
 
+### Step 1 after report 10: sharp edge as the small-gap limit; rule not met, interim state kept
+
+User's rule: between gaps 0.001 c and 0.0005 c, if Cd changes by less than 1 % and Cl by less than 0.005
+at every point (closed NACA 2412 and sharp E387, Re 1e6 and 3e6, alpha 0 / 5 / 10 deg), a closed trailing
+edge gets `DESIGN.min_te_gap` by default in viscous analysis; otherwise the interim state stays.
+
+Study on e9d54fc (no package code changed): `generate_naca4('2412', 160, 'closed')` and the canonical
+E387, up sweep 0..10 deg as in the benchmark (march, warm starts, `reach_from_nearest`), at the sharp
+original (closed treatment) and with the gap tool at 0.002 / 0.001 / 0.0005 / 0.00025 c (open treatment).
+XFOIL 6.99 as the external program on the same coordinate files, PANE 160 and 240. Scripts and tables
+are generated output, not committed.
+
+| case (0 / 5 / 10 deg) | max rel dCd, 0.001 -> 0.0005 c | max dCl | met |
+|---|---|---|---|
+| NACA 2412, Re 1e6 | 0.26 % (5) | 0.0036 (10) | yes |
+| NACA 2412, Re 3e6 | 0.23 % (5) | **0.0056 (5)** | no |
+| E387, Re 1e6 | 0.42 % (5) | 0.0020 (5) | yes |
+| E387, Re 3e6 | 0.37 % (10) | 0.0041 (10) | no: 5 deg does not converge at 0.001 or 0.0005 c (50 iterations; unconverged values differ by 0.81 % / 0.0028) |
+
+- Over all eleven angles the maxima are 0.34 / 0.57 / 0.47 / 0.58 % in Cd and 0.0036 / 0.0056 / 0.0029
+  / 0.0041 in Cl. The changes roughly halve with each halving of the gap (NACA 2412 Re 3e6, 5 deg, dCl:
+  0.0100, 0.0056, 0.0026 for the steps 0.002 -> 0.001 -> 0.0005 -> 0.00025 c).
+- **Decision (by the rule): not met; no policy implemented.** Closed edges keep report 8's treatment
+  and `WARN_CLOSED_TE_DRAG`; nothing is substituted.
+- Ours against XFOIL (PANE 160) on the same 0.001 c geometry, 0 / 5 / 10 deg, the 10 points where both
+  converged (E387 Re 3e6: XFOIL fails at 0 deg, ours at 5 deg): |dCl| <= 0.009, |dCm| <= 0.0015, rel dCd
+  -8.9 to +1.4 % (9 of 10 between -2.2 and +1.4 %; E387 Re 1e6 10 deg -8.9 %, where XFOIL itself moves
+  6.8 % between PANE 160 and 240).
+- XFOIL's sharp result differs from its own 0.001 c result by up to 0.042 in Cl (NACA 2412 Re 1e6
+  5 deg: 0.8564 sharp, 0.8141 gapped). Inviscid, the two geometries differ by <= 0.0008 in Cl (XFOIL and
+  ours agree to 0.0013), so the jump comes from XFOIL's viscous sharp-edge treatment.
+- The missing XFOIL polar (sharp NACA 2412, Re 3e6, PANE 240) was generated again in the foreground:
+  25 of 25 converged, data identical to the earlier run.
+
 ---
 
 ## Later
@@ -2575,3 +2609,7 @@ own, `make_structure`) driven by XFOIL's delta* on airfoil and wake. Scripts: jo
   extrapolated from the attached flow upstream (as eq. 9 does for gamma, applied to the total ue), and
   a source strength ramped across the edge over a length set by the layer (a few delta*), each chosen
   by convergence under panel refinement (160 / 320 / 640), never tuned to XFOIL.
+- After v2.0: a converged but wrong result on a sharp edge. Closed NACA 2412, Re 3e6, 0 deg converges
+  (march, 13 iterations) at Cl 0.059, Cd 0.0272 against XFOIL 0.234, 0.00537 (step 1 after report 10);
+  the 0.001 c gapped section gives 0.243, 0.00530 there. The closed-edge warning is the only guard;
+  option (a) must remove it.
