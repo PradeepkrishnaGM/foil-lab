@@ -81,10 +81,6 @@ class BenchmarkParams:
     attached_fraction:
         A point is in the attached-flow filter if its alpha is at least ``alpha_min`` and below
         the first positive angle at which XFOIL's Cl reaches this fraction of its maximum.
-    newton_sections, newton_reynolds, newton_alphas:
-        Small subset on which the v1.3.1 Newton VII solver is run.
-    vii_max_iter, vii_tol, newton_max_iter, newton_tol:
-        Iteration settings of the v1.3.1 viscous solvers, as used by its command line.
     workers:
         Parallel worker processes for reference generation and baseline runs.
     """
@@ -96,13 +92,6 @@ class BenchmarkParams:
     pane_nodes: tuple[int, int] = (160, 240)
     num_panels: int = 160
     attached_fraction: float = 0.9
-    newton_sections: tuple[str, ...] = ("NACA0012", "NACA2412")
-    newton_reynolds: tuple[float, ...] = (5e4, 2e5)
-    newton_alphas: tuple[float, ...] = (0.0, 2.0, 4.0, 6.0, 8.0)
-    vii_max_iter: int = 200
-    vii_tol: float = 1e-3
-    newton_max_iter: int = 60
-    newton_tol: float = 1e-4
     workers: int = 6
 
 

@@ -18,7 +18,6 @@ from foil_lab.generators import (generate_naca4, generate_naca5, generate_parsec
 from foil_lab.flowfield import compute_velocity_field
 from foil_lab.ground_effect import solve_ground_effect
 from foil_lab.advanced import solve_swept_wing
-from foil_lab.vii import solve_vii
 
 class FoilLabMainWindow(QMainWindow):
     def __init__(self):
@@ -194,15 +193,10 @@ class FoilLabMainWindow(QMainWindow):
     def _build_flow_groups(self):
         flight_group = QGroupBox("Flight Conditions")
         flight_layout = QFormLayout()
+        # Re 0: inviscid. Re > 0: the coupled viscous-inviscid solver (one body, Mach 0).
         self.spin_re = QDoubleSpinBox(); self.spin_re.setRange(0.0, 1e8); self.spin_re.setValue(1000000); self.spin_re.setDecimals(0); self.spin_re.setSingleStep(100000)
         self.spin_mach = QDoubleSpinBox(); self.spin_mach.setRange(0.0, 0.75); self.spin_mach.setValue(0.0); self.spin_mach.setSingleStep(0.05)
         self.spin_ar = QDoubleSpinBox(); self.spin_ar.setRange(0.0, 100.0); self.spin_ar.setValue(0.0); self.spin_ar.setToolTip("Set to 0 for infinite 2D wing")
-        self.spin_rough = QDoubleSpinBox(); self.spin_rough.setRange(0, 3); self.spin_rough.setDecimals(0); self.spin_rough.setValue(0); self.spin_rough.setToolTip("0 = clean, 3 = very rough (trips transition early, raises drag)")
-        self.chk_poststall = QCheckBox("Enable Post-Stall Model")
-        self.chk_poststall.setToolTip("Apply empirical Cl/Cd corrections past stall (Re > 0)")
-        self.chk_vii = QCheckBox("Enable VII (viscous coupling)")
-        self.chk_vii.setToolTip("Transpiration viscous-inviscid interaction; needs Re > 0. "
-                                "Converges for attached/mild-separation flow.")
         self.spin_ncrit = QDoubleSpinBox(); self.spin_ncrit.setRange(2.0, 14.0); self.spin_ncrit.setValue(9.0); self.spin_ncrit.setSingleStep(0.5)
         self.spin_ncrit.setToolTip("e^n transition N_crit: ~9 clean, ~4-7 noisy/rough, ~11-13 very quiet")
         self.spin_sweep = QDoubleSpinBox(); self.spin_sweep.setRange(0.0, 75.0); self.spin_sweep.setValue(0.0); self.spin_sweep.setSuffix(" °"); self.spin_sweep.setToolTip("Leading-edge sweep (Busemann simple-sweep approximation)")
@@ -212,12 +206,9 @@ class FoilLabMainWindow(QMainWindow):
         flight_layout.addRow("Reynolds Number:", self.spin_re)
         flight_layout.addRow("Mach Number:", self.spin_mach)
         flight_layout.addRow("Aspect Ratio:", self.spin_ar)
-        flight_layout.addRow("Roughness (0-3):", self.spin_rough)
         flight_layout.addRow("Sweep Angle:", self.spin_sweep)
         flight_layout.addRow("Trip Upper:", self.spin_trip_up)
         flight_layout.addRow("Trip Lower:", self.spin_trip_lo)
-        flight_layout.addRow(self.chk_poststall)
-        flight_layout.addRow(self.chk_vii)
         flight_layout.addRow("e^n N_crit:", self.spin_ncrit)
         flight_group.setLayout(flight_layout)
 
@@ -354,14 +345,11 @@ class FoilLabMainWindow(QMainWindow):
         mach = self.spin_mach.value()
         ar = self.spin_ar.value()
         reynolds = self.spin_re.value()
-        roughness = int(self.spin_rough.value())
-        post_stall = self.chk_poststall.isChecked()
         sweep = self.spin_sweep.value()
         ground = self.chk_ground.isChecked()
         height = self.spin_height.value()
         trip_up = self.spin_trip_up.value() or None
         trip_lo = self.spin_trip_lo.value() or None
-        use_vii = self.chk_vii.isChecked()
 
         try:
             if ground:
@@ -375,27 +363,20 @@ class FoilLabMainWindow(QMainWindow):
                 sol = swept.normal_solution
                 sol.cl, sol.cd_ind = swept.cl_3d, swept.cd_3d
                 sol.cm_qc = swept.cm_qc_3d
-            elif use_vii:
-                if reynolds <= 0:
-                    self.lbl_status.setText("VII needs Reynolds number > 0.")
-                    return
-                trip = trip_up or trip_lo
-                vii = solve_vii(self.panelled_bodies[0], alpha, reynolds=reynolds,
-                                mach=mach, trip_x=trip, max_iter=200, tol=1e-3,
-                                transition_model="en", n_crit=self.spin_ncrit.value())
-                sol = vii.solution
-                tag = "converged" if vii.converged else "NOT converged"
-                self.lbl_status.setText(
-                    f"VII {tag} ({vii.iterations} iters)\n"
-                    f"Cl={sol.cl:.3f}  Cd={vii.cd_wake:.5f}")
             else:
                 sol = solve_flow(self.panelled_bodies, alpha, mach=mach,
                                  reynolds=reynolds, aspect_ratio=ar,
-                                 roughness=roughness, enable_post_stall=post_stall,
-                                 trip_x_upper=trip_up, trip_x_lower=trip_lo)
+                                 trip_x_upper=trip_up, trip_x_lower=trip_lo,
+                                 n_crit=self.spin_ncrit.value())
         except Exception as e:
             self.lbl_status.setText(f"Solver Error:\n{str(e)}")
             return
+        if sol.reynolds > 0:
+            tag = f"converged ({sol.iterations} it)" if sol.converged else "NOT converged"
+            self.lbl_status.setText(f"Viscous: {tag}\nCl={sol.cl:.3f}  Cd={sol.cd_total:.5f}"
+                                    + "".join(f"\n{w}" for w in sol.warnings))
+        else:
+            self.lbl_status.setText(f"Inviscid: Cl={sol.cl:.3f}")
         
         # --- Update Tab 1: Single Analysis (Cp Distribution) ---
         self.tabs.setCurrentIndex(0) 
@@ -473,8 +454,6 @@ class FoilLabMainWindow(QMainWindow):
         mach = self.spin_mach.value()
         ar = self.spin_ar.value()
         reynolds = self.spin_re.value()
-        roughness = int(self.spin_rough.value())
-        post_stall = self.chk_poststall.isChecked()
 
         # The polar sweep runs on a single body (the main element).
         sweep_body = self.panelled_bodies[0] if self.panelled_bodies else None
@@ -489,13 +468,19 @@ class FoilLabMainWindow(QMainWindow):
                 self.spin_end.value(), 
                 self.spin_step.value(),
                 mach=mach, reynolds=reynolds, aspect_ratio=ar,
-                roughness=roughness, enable_post_stall=post_stall
+                trip_x_upper=self.spin_trip_up.value() or None,
+                trip_x_lower=self.spin_trip_lo.value() or None,
+                n_crit=self.spin_ncrit.value(),
             )
         except Exception as e:
             self.lbl_status.setText(f"Sweep Error:\n{str(e)}")
             return
         
         self.btn_export_csv.setEnabled(True) 
+        if reynolds > 0:
+            sols = self.last_polar.solutions
+            n_ok = sum(bool(s.converged) for s in sols)
+            self.lbl_status.setText(f"Viscous polar: {n_ok} of {len(sols)} points converged")
         
         self.polar_plot.fig.clear()
         

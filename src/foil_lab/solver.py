@@ -1,23 +1,29 @@
 """Solver entry point kept for the GUI, CLI, batch and design layers.
 
 ``solve_flow`` runs the inviscid core in :mod:`foil_lab.inviscid` (linear-strength vortex
-panels, one assembly for every mode) and adds the existing compressibility, 3D, one-way viscous
-drag and post-stall layers unchanged. ``SolutionData`` and ``compute_panel_geometry`` keep their
-shapes so those layers need no changes; ``SolutionData.panels`` carries the core's panel set so
-off-body velocities can be rebuilt from the same singularity model.
+panels, one assembly for every mode) and adds the existing compressibility and 3D layers. With a
+Reynolds number it runs the coupled viscous-inviscid solver of :mod:`foil_lab.viscous` (M3): lift,
+moment, surface pressure and drag then come from the coupled solution, and the result carries its
+``converged`` flag, iterations, residual, path and warnings. ``SolutionData`` and
+``compute_panel_geometry`` keep their shapes; ``SolutionData.panels`` carries the core's panel set
+so off-body velocities can be rebuilt from the same singularity model.
+
+Viscous analysis is for one body at Mach 0 in this version (DECISIONS.md M3, Q4 and C5); other
+requests with a Reynolds number raise ``NotImplementedError`` instead of returning a result
+without viscous drag.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Union
 
 import numpy as np
 
 from . import inviscid as core
-from .boundary_layer import calculate_viscous_drag
 from .corrections import apply_3d_corrections, karman_tsien_correction
-from .viscous_mods import apply_post_stall, estimate_separation_from_cp
+from .params import VISCOUS, ViscousParams
 
 CoordsLike = Union[np.ndarray, Sequence[np.ndarray]]
 
@@ -34,10 +40,21 @@ class SolutionData:
     cd_visc: float
     cm_le: float
     cm_qc: float
-    sources: np.ndarray            # per-panel known source strength (transpiration), else zeros
+    sources: np.ndarray            # per-panel source strength (viscous displacement), else zeros
     gamma: np.ndarray              # nodal vortex strengths of the core (all bodies)
     coords_list: List[np.ndarray]  # supports multiple bodies
     panels: Optional[core.PanelSet] = field(default=None, repr=False)
+    #: viscous results only (``reynolds > 0``); an inviscid result keeps the defaults
+    converged: bool = True         # inviscid: finite solution; viscous: the residual criteria were met
+    cd_friction: float = float("nan")
+    cd_pressure: float = float("nan")
+    xtr_upper: float = float("nan")
+    xtr_lower: float = float("nan")
+    iterations: int = 0
+    residual: float = float("nan")
+    path: str = ""
+    warnings: List[str] = field(default_factory=list)
+    viscous: object = field(default=None, repr=False)   # the ``viscous.ViscousResult``
 
     @property
     def cd_total(self) -> float:
@@ -75,6 +92,53 @@ def loads_from_cp(ps: core.PanelSet, cp: np.ndarray, alpha_deg: float, body=None
     return float(cl), float(cm_le), float(cm_qc)
 
 
+def viscous_params(n_crit: Optional[float] = None, params: Optional[ViscousParams] = None
+                   ) -> ViscousParams:
+    """``params`` (default ``params.VISCOUS``) with ``n_crit`` replaced when it is given."""
+    prm = VISCOUS if params is None else params
+    return prm if n_crit is None else dataclasses.replace(prm, n_crit=float(n_crit))
+
+
+def trips_dict(trip_x_upper: Optional[float] = None, trip_x_lower: Optional[float] = None,
+               body: int = 0) -> Optional[dict]:
+    """Forced transition locations (x of the body, x/c for a unit chord) in the form of
+    :func:`foil_lab.viscous.solve_viscous`; ``None`` or 0 means free transition."""
+    trips = {}
+    if trip_x_upper:
+        trips[(body, "upper")] = float(trip_x_upper)
+    if trip_x_lower:
+        trips[(body, "lower")] = float(trip_x_lower)
+    return trips or None
+
+
+def _check_viscous(num_bodies: int, mach: float) -> None:
+    if num_bodies != 1:
+        raise NotImplementedError("viscous analysis (a Reynolds number) of several bodies is added in M5; "
+                                  "use reynolds=0 for an inviscid multi-element result")
+    if mach > 0.0:
+        raise NotImplementedError("viscous results are Mach 0 in this version (compressibility in M6); "
+                                  "use mach=0 with a Reynolds number, or reynolds=0")
+
+
+def solution_from_viscous(body: np.ndarray, vres, mach: float = 0.0, aspect_ratio: float = 0.0
+                          ) -> SolutionData:
+    """``SolutionData`` of one coupled viscous result (``viscous.ViscousResult``) on ``body``."""
+    ps = core.PanelSet.from_bodies([body])
+    alpha = float(vres.alpha)
+    cp = np.asarray(vres.cp) if vres.cp is not None else np.full(ps.num_panels, np.nan)
+    _, cm_le, _ = loads_from_cp(ps, cp, alpha)
+    cl, cd_ind, cm_qc = apply_3d_corrections(float(vres.cl), float(vres.cm), alpha, aspect_ratio, mach)
+    return SolutionData(
+        alpha_deg=alpha, mach=mach, reynolds=float(vres.reynolds), aspect_ratio=aspect_ratio,
+        cp_dist=cp, cl=cl, cd_ind=cd_ind, cd_visc=float(vres.cd), cm_le=cm_le, cm_qc=cm_qc,
+        sources=(np.zeros(ps.num_panels) if vres.sources is None else np.asarray(vres.sources)),
+        gamma=(np.full(ps.num_nodes, np.nan) if vres.gamma is None else np.asarray(vres.gamma)),
+        coords_list=[body], panels=ps, converged=bool(vres.converged), cd_friction=float(vres.cdf),
+        cd_pressure=float(vres.cdp), xtr_upper=float(vres.xtr_upper), xtr_lower=float(vres.xtr_lower),
+        iterations=int(vres.iterations), residual=vres.residual, path=vres.path,
+        warnings=list(vres.warnings), viscous=vres)
+
+
 def solve_flow(
     coords_input: CoordsLike,
     alpha_deg: float,
@@ -83,25 +147,31 @@ def solve_flow(
     reynolds: float = 0.0,
     aspect_ratio: float = 0.0,
     real_body_index: Optional[int] = 0,
-    roughness: int = 0,
-    enable_post_stall: bool = False,
     trip_x_upper: Optional[float] = None,
     trip_x_lower: Optional[float] = None,
+    n_crit: Optional[float] = None,
+    params: Optional[ViscousParams] = None,
 ) -> SolutionData:
-    """Solve incompressible inviscid flow over one or more bodies with the core.
+    """Solve the flow over one or more bodies.
+
+    ``reynolds`` 0: inviscid core (Kármán-Tsien on Cp, aspect-ratio correction). ``reynolds`` > 0:
+    the coupled viscous solver (:func:`foil_lab.viscous.solve_point`, started from its starting
+    march; one body, Mach 0), with e^n transition (``n_crit``, default ``params.VISCOUS.n_crit``)
+    and forced trips ``trip_x_upper`` / ``trip_x_lower`` (x/c; ``None`` or 0 = free transition).
 
     real_body_index : with more than one body, the body whose loads are reported (None: all
         bodies together).
-    roughness : surface roughness state 0-3, threaded into the viscous solve
-        (earlier transition + higher drag).
-    enable_post_stall : if True, apply empirical post-stall Cl/Cd corrections
-        when the boundary layer reports significant separation (single body,
-        Re > 0 only).
     """
     bodies = geom_to_coords_list(coords_input)
+    if reynolds > 0:
+        from . import viscous
+        _check_viscous(len(bodies), mach)
+        vres = viscous.solve_point(bodies[0], float(alpha_deg), float(reynolds),
+                                   viscous_params(n_crit, params), trips_dict(trip_x_upper, trip_x_lower))
+        return solution_from_viscous(np.asarray(bodies[0], dtype=float), vres, mach, aspect_ratio)
+
     ps = core.PanelSet.from_bodies(bodies)
     sol = core.solve(ps, alpha_deg)
-    vt = np.asarray(sol.vt) * v_inf
 
     cp_dist = karman_tsien_correction(np.asarray(sol.cp), mach)
 
@@ -110,30 +180,25 @@ def solve_flow(
 
     cl, cd_ind, cm_qc = apply_3d_corrections(cl0, cm_qc0, alpha_deg, aspect_ratio, mach)
 
-    cd_visc = 0.0
-    sep_fraction = 0.0
-    if reynolds > 0 and ps.num_bodies == 1:
-        cd_visc, sep_fraction = calculate_viscous_drag(
-            ps.mid_x, ps.mid_y, ps.lengths, vt, reynolds,
-            roughness=roughness, return_details=True,
-            trip_x_upper=trip_x_upper, trip_x_lower=trip_x_lower,
-        )
-
-    # Empirical post-stall knock-down, keyed to the inviscid suction peak
-    # (a more robust stall proxy than the integral BL separation point).
-    if enable_post_stall:
-        cp_min = float(cp_dist.min())
-        stall_frac = estimate_separation_from_cp(cp_min)
-        if stall_frac > 0.0:
-            result = apply_post_stall(cl, cd_ind + cd_visc, stall_frac,
-                                      sep_threshold=0.0)
-            cl = result.cl
-            cd_visc = result.cd - cd_ind
-
     return SolutionData(
         alpha_deg=alpha_deg, mach=mach, reynolds=reynolds, aspect_ratio=aspect_ratio,
-        cp_dist=cp_dist, cl=cl, cd_ind=cd_ind, cd_visc=cd_visc,
+        cp_dist=cp_dist, cl=cl, cd_ind=cd_ind, cd_visc=0.0,
         cm_le=cm_le, cm_qc=cm_qc,
         sources=np.zeros(ps.num_panels), gamma=np.asarray(sol.gamma),
-        coords_list=bodies, panels=ps,
+        coords_list=bodies, panels=ps, converged=bool(np.all(np.isfinite(np.asarray(sol.cp)))),
     )
+
+
+def solve_flow_sweep(coords: np.ndarray, alphas: Sequence[float], reynolds: float, mach: float = 0.0,
+                     aspect_ratio: float = 0.0, trip_x_upper: Optional[float] = None,
+                     trip_x_lower: Optional[float] = None, n_crit: Optional[float] = None,
+                     params: Optional[ViscousParams] = None) -> List[SolutionData]:
+    """Viscous results at ``alphas`` (in that order) for one body, reached with warm starts
+    (:func:`foil_lab.viscous.sweep`); each result says how it was reached (``path``)."""
+    from . import viscous
+    bodies = geom_to_coords_list(coords)
+    _check_viscous(len(bodies), mach)
+    body = np.asarray(bodies[0], dtype=float)
+    res = viscous.sweep(body, [float(a) for a in alphas], float(reynolds), viscous_params(n_crit, params),
+                        trips_dict(trip_x_upper, trip_x_lower))
+    return [solution_from_viscous(body, r, mach, aspect_ratio) for r in res]

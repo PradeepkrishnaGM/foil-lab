@@ -5,11 +5,11 @@ as an external program; its documented ``DUMP`` command writes s, x, y, Ue/Vinf,
 Cf, H (surface rows, then wake rows). XFOIL's dumped Cf is relative to the freestream dynamic
 pressure, ours to the local edge value; the comparison divides XFOIL's by ue^2.
 
-Three comparisons per angle:
-
-* coupled: our ``vii.solve_vii`` (benchmark settings) against XFOIL, station by station;
-* fed: our boundary-layer marcher on XFOIL's own edge velocity (closures without coupling);
-* inviscid check: our core driven by XFOIL's delta* as transpiration, giving Cl and Cm.
+The comparison kept here is the inviscid check: our core driven by XFOIL's delta* as
+transpiration, giving Cl and Cm. The diagnosis before the rewrite (DECISIONS.md M3, "Diagnosis")
+also compared the v1.3.1 transpiration VII and its boundary-layer marcher with these dumps; both
+were deleted in M3 C5, and so were those two comparisons. The coupled solver of M3 is compared
+with the same dumps by ``c1_compare`` and ``transition_compare``.
 
 Committed dumps (0, 5 and 10 deg) live in ``tests/diagnostics/data`` with provenance headers, so the
 comparison runs without XFOIL. Print the tables with ``python -m tests.diagnostics.bl_compare``.
@@ -17,12 +17,10 @@ comparison runs without XFOIL. Print the tables with ``python -m tests.diagnosti
 
 from __future__ import annotations
 
-import contextlib
 import datetime
 import hashlib
 import shutil
 import tempfile
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -30,7 +28,6 @@ import numpy as np
 DATA = Path(__file__).parent / "data"
 ANGLES = (0.0, 5.0, 10.0)
 RE = 1e6
-STATIONS = (0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99)
 
 
 def dump_name(alpha: float) -> str:
@@ -97,62 +94,14 @@ def _surfaces(air):
     return air[:k + 1][::-1], air[k:]          # upper, lower: stagnation point -> trailing edge
 
 
-@contextlib.contextmanager
-def _capture():
-    from foil_lab import vii
-    rec = {"split": None, "prof": []}
-    orig_split, orig_march = vii._split_surfaces, vii.march_boundary_layer
-
-    def split(geom, vt):
-        out = orig_split(geom, vt)
-        rec["split"] = (out, np.asarray(geom.mid_x), np.asarray(geom.mid_y))
-        return out
-
-    def march(*a, **k):
-        p = orig_march(*a, **k)
-        rec["prof"].append(p)
-        return p
-    vii._split_surfaces, vii.march_boundary_layer = split, march
-    try:
-        yield rec
-    finally:
-        vii._split_surfaces, vii.march_boundary_layer = orig_split, orig_march
-
-
 def compare(alpha: float, dump: Path | None = None) -> dict:
-    """All three comparisons at one angle. Returns tables and summary numbers."""
-    from foil_lab import bl_integral, inviscid as core, vii
+    """The inviscid check at one angle: our core with XFOIL's delta* as transpiration (surface
+    only). Returns Cl, Cm and the number of surface and wake rows of the dump."""
+    from foil_lab import inviscid as core
     coords = canonical_coords()
     air, wake = read_dump(dump or DATA / dump_name(alpha))
     up, lo = _surfaces(air)
-    with warnings.catch_warnings(), _capture() as rec:
-        warnings.simplefilter("ignore")
-        r = vii.solve_vii(coords, alpha, reynolds=RE, max_iter=200, tol=1e-3, transition_model="en",
-                          n_crit=9.0)
-    (ia, s_a, ue_a, ib, s_b, ue_b, _), mx, my = rec["split"]
-    pa, pb = rec["prof"][-2], rec["prof"][-1]
-    a_up = np.mean(my[ia]) > np.mean(my[ib])
-    ours = {"upper": (ia, pa, ue_a) if a_up else (ib, pb, ue_b),
-            "lower": (ib, pb, ue_b) if a_up else (ia, pa, ue_a)}
-    out = {"alpha": alpha, "cl": r.solution.cl, "cd": r.cd_wake, "converged": r.converged,
-           "iterations": r.iterations, "tables": {}}
-    for lab, xf in (("upper", up), ("lower", lo)):
-        ii, p, ue = ours[lab]
-        s = np.abs(xf[:, 0] - xf[0, 0])
-        fed = bl_integral.march_boundary_layer(s, np.abs(xf[:, 3]), RE, transition_model="en",
-                                               n_crit=9.0)
-        rows = []
-        for x in STATIONS:
-            i = int(np.argmin(np.abs(xf[:, 1] - x)))
-            j = int(np.argmin(np.abs(mx[ii] - x)))
-            uex = abs(xf[i, 3])
-            rows.append(dict(x=x, ue_xf=uex, ue_cpl=ue[j], dstar_xf=xf[i, 4], dstar_cpl=p.delta_star[j],
-                             dstar_fed=fed.delta_star[i], theta_xf=xf[i, 5], theta_cpl=p.theta[j],
-                             theta_fed=fed.theta[i], H_xf=xf[i, 7], H_cpl=p.H[j], H_fed=fed.H[i],
-                             cf_xf_local=xf[i, 6] / uex ** 2, cf_cpl=p.cf[j], cf_fed=fed.cf[i]))
-        out["tables"][lab] = rows
-        out[f"xtr_{lab}_coupled"] = float(mx[ii][p.transition_idx])
-        out[f"xtr_{lab}_fed"] = float(xf[fed.transition_idx, 1])
+    out = {"alpha": alpha, "rows_upper": len(up), "rows_lower": len(lo), "rows_wake": len(wake)}
     # inviscid check: our core with XFOIL's delta* as transpiration (surface only)
     ps = core.PanelSet.from_bodies(coords)
     sig = np.zeros(ps.num_panels)
@@ -174,16 +123,8 @@ def compare(alpha: float, dump: Path | None = None) -> dict:
 def main() -> None:
     for a in ANGLES:
         c = compare(a)
-        print(f"\n== alpha {a:g}: ours Cl {c['cl']:.4f} Cd {c['cd']:.5f} converged {c['converged']} "
-              f"({c['iterations']} it); core with XFOIL delta*: Cl {c['cl_core_with_xfoil_dstar']:.4f} "
+        print(f"alpha {a:g}: core with XFOIL delta*: Cl {c['cl_core_with_xfoil_dstar']:.4f} "
               f"Cm {c['cm_core_with_xfoil_dstar']:+.4f}")
-        for lab in ("upper", "lower"):
-            print(f"   {lab}: transition coupled {c[f'xtr_{lab}_coupled']:.3f}, fed {c[f'xtr_{lab}_fed']:.3f}")
-            print("     x/c   ue XF/cpl        d* XF / cpl / fed            H XF / cpl / fed      Cf(local) XF / cpl / fed")
-            for r in c["tables"][lab]:
-                print(f"    {r['x']:.2f}  {r['ue_xf']:.3f} {r['ue_cpl']:.3f}   {r['dstar_xf']:.6f} {r['dstar_cpl']:.6f} "
-                      f"{r['dstar_fed']:.6f}   {r['H_xf']:.2f} {r['H_cpl']:.2f} {r['H_fed']:.2f}   "
-                      f"{r['cf_xf_local']:+.5f} {r['cf_cpl']:+.5f} {r['cf_fed']:+.5f}")
 
 
 if __name__ == "__main__":

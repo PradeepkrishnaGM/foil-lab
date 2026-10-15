@@ -26,11 +26,8 @@ def test_committed_dump_matches_canonical_geometry(alpha):
 @pytest.mark.parametrize("alpha", bc.ANGLES)
 def test_comparison_runs_without_xfoil(alpha):
     c = bc.compare(alpha)
-    for lab in ("upper", "lower"):
-        rows = c["tables"][lab]
-        assert len(rows) == len(bc.STATIONS)
-        assert all(np.isfinite(r["dstar_xf"]) and np.isfinite(r["dstar_cpl"]) for r in rows)
-    assert np.isfinite(c["cl_core_with_xfoil_dstar"])
+    assert c["rows_upper"] > 0 and c["rows_lower"] > 0 and c["rows_wake"] > 0
+    assert np.isfinite(c["cl_core_with_xfoil_dstar"]) and np.isfinite(c["cm_core_with_xfoil_dstar"])
 
 
 @pytest.mark.slow

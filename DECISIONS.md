@@ -2506,6 +2506,92 @@ are generated output, not committed.
 - The missing XFOIL polar (sharp NACA 2412, Re 3e6, PANE 240) was generated again in the foreground:
   25 of 25 converged, data identical to the earlier run.
 
+### C5: one viscous solver behind every interface; the v1.3.1 viscous code deleted
+
+As planned (Q3 of the plan; user's step 2 after report 10). Viscous numerics unchanged: the coupled
+solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sources`, `residual`).
+
+- **Deleted** with their tests: `boundary_layer.py`, `bl_integral.py`, `transition.py`, `vii.py`,
+  `vii_newton.py`, `vii_qs.py`, `viscous_mods.py` (one-way drag, Michel transition, roughness, the
+  empirical post-stall model, transpiration VII, Newton VII, quasi-simultaneous VII);
+  `tests/test_vii.py`, `test_vii_newton.py`, `test_vii_qs_experimental.py`, `test_transition.py`, the
+  roughness and post-stall tests of `test_features.py`, `examples/vii_demo.py`. A test checks that none
+  of the seven modules can be imported. The SPEC.md 4.2 flat-plate checks were already in
+  `tests/test_bl_closures.py` on the new boundary layer.
+- **Routed to the coupled solver** (one body, Mach 0; anything else with a Reynolds number raises
+  `NotImplementedError` instead of returning a result without viscous drag):
+  - `solver.solve_flow(reynolds > 0)` -> `viscous.solve_point` (from the starting march), with `n_crit`
+    and the trips; `SolutionData` gains `converged`, `cd_friction`, `cd_pressure`, `xtr_upper/lower`,
+    `iterations`, `residual`, `path`, `warnings`. New `solver.solve_flow_sweep` -> `viscous.sweep`.
+  - `fl.analyze` / `fl.polar` accept `re` (plus `n_crit`, `trip_upper`, `trip_lower`, `params`); the
+    solver receives `re / ref_chord` (it works per unit length) and the result reports `re` and Cd on
+    the reference chord. `fl.polar` reaches the angles as the benchmark does (`viscous.sweep`: up from
+    the angle nearest 0 deg, then down from it, then failed starts from the nearest converged angle of
+    either sweep).
+  - `analysis.run_alpha_sweep` (GUI polar) -> `solve_flow_sweep`; roughness and post-stall arguments
+    removed, `n_crit` and trips added.
+  - Command line: `--vii` removed; `--re` runs the coupled solver (`analyze`: `solve_flow`; `polar`:
+    `solve_flow_sweep`), with `--ncrit`, `--trip-upper`, `--trip-lower`; every viscous line prints the
+    convergence status and warnings; invalid input gives an `error:` message, not a traceback.
+  - Batch: `Case` loses `roughness` and `enable_post_stall`, gains `n_crit`; a row's `converged` is the
+    solver's flag (and, as before, false for implausible drag); rows carry friction and pressure drag,
+    transition, iterations, path and warnings.
+  - `design.maximize_ld`: every L/D evaluation is `solve_flow` with the Reynolds number; `use_vii` (and
+    the one-way alternative) removed; a candidate that did not converge is penalised as before, the Cl
+    constraint of a failed candidate counts as violated, and `success` also needs the final solve to
+    have converged.
+  - `advanced`: unchanged calls (through `solve_flow`); a wing-loading point is converged only if the
+    final viscous solve converged. `ground_effect` with a Reynolds number raises (viscous ground effect
+    is M6).
+  - GUI (routing only; repair is M8): the roughness, post-stall and VII controls are removed; single case
+    and polar call `solve_flow` / `run_alpha_sweep` with N_crit and the trip spin boxes; the status line
+    shows converged, iterations and warnings, and the polar the number of converged points.
+- **Benchmark adapter of M1** (`baseline_v131.py`): its viscous methods called the deleted modules and
+  are removed; `run` now writes the inviscid rows only. The committed before pictures
+  (`docs/baseline_v1.3.1.md`, `docs/benchmark_m2.md`) stay unchanged (Q5); the `baseline-doc` command,
+  which rewrote the first of them, is removed because it can no longer reproduce it. `BenchmarkParams`
+  loses the fields of the deleted solvers (`newton_*`, `vii_max_iter`, `vii_tol`); no other default
+  changed.
+- `tests/diagnostics/bl_compare.py` keeps the XFOIL dumps and the inviscid check (core driven by XFOIL's
+  delta*); its two comparisons of the deleted v1.3.1 VII and marcher are removed.
+- SPEC.md 4.3 already reads "Transition by the e^n envelope method, with forced trip locations per
+  surface." (approved with the plan, commit f83b237); no edit.
+- **Tests:** fast routing tests with a stand-in for the solver (`tests/test_viscous_interfaces.py`:
+  `solve_flow`, the API, command line, batch, `maximize_ld`, the errors) and slow end-to-end smoke
+  tests with the real solver (API, closed-edge warning, `run_alpha_sweep` and batch, the GUI headless).
+  Tests that now run the coupled solver (trip wires, viscous batch, wing loading, determinism) are
+  marked slow: a cold-started point takes 10-24 s here.
+- **Single points started from the march do not always converge** (found by the full suite; open for
+  the user). At Re 1e6, NACA 0012 (120 panels) 5 deg and NACA 2412 (160 panels) 4 deg stop at 50
+  iterations (residual 7.6 and 3.4) with `converged` False. Both converge when reached by a warm start
+  in a polar. NACA 2412 at 0 and 5 deg (120 panels) and at 5 deg (160), and NACA 0012 at 0 deg,
+  converge. This touches every single-point interface (`fl.analyze`, `solve_flow`, command line
+  `analyze`, GUI single case, batch, `maximize_ld`). How single points are reached is not changed
+  here (a "how reached" measure is the user's decision). Two tests were changed accordingly, for the
+  user to check:
+  - the determinism test runs its viscous point at 5 deg instead of 4;
+  - `test_batch_matrix_and_run` no longer asserts that all four cold-started cases converge; it
+    asserts that each row carries the solver's own flag and values, and that at least 3 of 4
+    converge (the measured count).
+- **Design path** (Later item "M3 cleanup (C5)"): `maximize_ld` uses the coupled solver (fast
+  routing tests). The design example with `--ld` was stopped after 48 min (Later, M7 speed). It is
+  replaced by a slow smoke test (`test_maximize_ld_runs_on_the_coupled_viscous_solver`: 60 panels,
+  2 optimiser iterations, 4 deg, Re 3e6; 124.6 s). Measured: 12 viscous solves of about 10 s each,
+  10 converged; the returned design's final solve converged with L/D 106.3 (Cl 0.678, Cd 0.00638),
+  and the NACA 2412 reference at the same point gives 118.2 (Cl 0.678, Cd 0.00573). `success` is
+  False because SLSQP stops at its iteration limit. The demo's `--ld` section now uses the same
+  reduced settings. The batch example uses the coupled solver through `solve_flow` (not run: 153
+  cold-started cases at about 10 s each).
+- **Fast suite** after C5: 360 passed, 1 xfailed (the M6 aspect-ratio test), 35.6 s on an idle CPU;
+  the slowest fast test takes 2.4 s.
+- **C3 on the C5 code** (`docs/benchmark_m3.md`): all 1167 points that converged in both runs are
+  bit-identical to report 10, with none gained or lost. So the second `reach_from_nearest` pass
+  (after report 10) reached no new point. Every SPEC.md 4.1 target is still met at Re 5e5-6e6.
+- **`viscous.sweep` against the benchmark's `run_case`** (the two reach the angles the same way): on
+  NACA 2412 Re 1e6, all 25 points are identical (flag, Cl, Cd, Cm, path) with one BLAS thread, as the
+  benchmark workers run. With the default multi-threaded BLAS, values differ by up to 1.4e-10 in Cl
+  (NACA 2412 Re 1e6 and E387 0.25 % gap Re 6e6, 50 points); flags and paths are the same.
+
 ---
 
 ## Later
@@ -2544,6 +2630,21 @@ are generated output, not committed.
 - `examples/basic_alpha_sweep.py` opens `naca2412.dat` relative to the current directory, so it
   only works when run from `examples/`. Fix with the M7 example rework.
 - README and TESTING.md still describe `PYTHONPATH=src` and older test counts; rewrite in M9.
+- M7 speed (after C5; user): design/maximize_ld with the viscous solver is too slow for interactive
+  use. `examples/inverse_design_demo.py --ld` (NACA 2412 reference, 4 deg, Re 3e6, `target_cl` 0.8,
+  `max_iter` 3, 120 panels) ran 48 min 25 s of wall time and was stopped unfinished by the user's
+  instruction. About 47 min of that was `maximize_ld`; when stopped it was inside SLSQP's
+  finite-difference Jacobian of the Cl constraint, and how many optimiser iterations had finished is
+  not known (the demo prints only at the end). A cold-started viscous point takes 10-24 s here. Each
+  SLSQP iteration needs finite-difference gradients over 11 PARSEC parameters for the objective and
+  for the Cl constraint, and the constraint solves again the candidates the objective already solved
+  (no caching). Candidates for M7: cache solves by design vector, warm-start each candidate from the
+  previous solution, fewer finite-difference solves.
+- M9 (after C5): the README still describes the deleted v1.3.1 viscous paths (`vii.solve_vii`,
+  `--vii`, one-way drag, roughness, post-stall); rewrite with the M9 README.
+- M3/M7 (after C5): `viscous.sweep` repeats the angle-reaching logic of
+  `benchmark.viscous_run.run_case` (which adds the benchmark's row bookkeeping and per-point timing);
+  they agree point for point (C5). Decide whether `run_case` should call `viscous.sweep`.
 - M2: decide which NACA trailing edge (open or closed) is the default in v2.0.
 - M3: transpiration VII shows a panel-to-panel Cp oscillation over the last panels of the
   upper surface at 10 deg (NACA 2412, Re 1e6), with either trailing edge.

@@ -20,9 +20,10 @@ def test_batch_row_with_absurd_drag_is_not_converged(monkeypatch, cd_visc):
     af = generate_naca4("2412", 80)
     real = solve_flow
 
-    def fake(*a, **kw):
-        s = real(*a, **kw)
-        s.cd_visc = cd_visc
+    def fake(coords, alpha, *a, **kw):
+        # a converged viscous result with the given drag, without running the coupled solver
+        s = real(coords, alpha)
+        s.reynolds, s.converged, s.cd_visc = kw.get("reynolds", 0.0), True, cd_visc
         return s
 
     monkeypatch.setattr(batch, "solve_flow", fake)

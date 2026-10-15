@@ -1,7 +1,7 @@
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Tuple
-from .solver import solve_flow, SolutionData
+from .solver import solve_flow, solve_flow_sweep, SolutionData
 
 @dataclass
 class PolarData:
@@ -20,7 +20,8 @@ class PolarData:
 def run_alpha_sweep(coords: np.ndarray, alpha_start: float, alpha_end: float, 
                     alpha_step: float = 1.0, v_inf: float = 1.0,
                     mach: float = 0.0, reynolds: float = 0.0, aspect_ratio: float = 0.0,
-                    roughness: int = 0, enable_post_stall: bool = False) -> PolarData:
+                    trip_x_upper: float = None, trip_x_lower: float = None,
+                    n_crit: float = None) -> PolarData:
     """
     Executes the aerodynamic solver across a specified range of angles of attack.
 
@@ -30,8 +31,10 @@ def run_alpha_sweep(coords: np.ndarray, alpha_start: float, alpha_end: float,
         alpha_end: Ending angle of attack in degrees.
         alpha_step: Increment between angles in degrees.
         v_inf: Freestream velocity.
-        roughness: Surface roughness state 0-3 (viscous transition/drag).
-        enable_post_stall: Apply empirical post-stall Cl/Cd corrections.
+        reynolds: 0 for inviscid; otherwise the coupled viscous solver, reached with warm starts
+            (``solver.solve_flow_sweep``); each solution carries its ``converged`` flag.
+        trip_x_upper, trip_x_lower: forced transition x/c (None = free), viscous only.
+        n_crit: e^n critical amplification factor (default ``params.VISCOUS.n_crit``).
 
     Returns:
         PolarData: A dataclass containing arrays of coefficients and full solution data.
@@ -39,13 +42,16 @@ def run_alpha_sweep(coords: np.ndarray, alpha_start: float, alpha_end: float,
     # Calculate the number of points to ensure we hit the alpha_end exactly
     num_steps = int(np.round((alpha_end - alpha_start) / alpha_step)) + 1
     alphas = np.linspace(alpha_start, alpha_end, num_steps)
+
+    if reynolds > 0:
+        sols = solve_flow_sweep(coords, alphas, reynolds, mach=mach, aspect_ratio=aspect_ratio,
+                                trip_x_upper=trip_x_upper, trip_x_lower=trip_x_lower, n_crit=n_crit)
+    else:
+        sols = [solve_flow(coords, alpha, v_inf, mach, reynolds, aspect_ratio) for alpha in alphas]
     
     cls, cds, cm_les, cm_qcs, solutions = [], [], [], [], [] # Add cds list
     
-    for alpha in alphas:
-        sol = solve_flow(coords, alpha, v_inf, mach, reynolds, aspect_ratio,
-                         roughness=roughness, enable_post_stall=enable_post_stall)
-        
+    for sol in sols:
         cls.append(sol.cl)
         # Track the TOTAL drag (Viscous + Induced) for the drag polar
         cds.append(sol.cd_total) 

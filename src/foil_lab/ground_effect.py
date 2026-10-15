@@ -36,6 +36,9 @@ def solve_ground_effect(
     wall_type: str = "ground",
 ) -> SolutionData:
     """Solve a single section at ``height`` chords (quarter-chord point) above a rigid wall."""
+    if reynolds > 0:
+        raise NotImplementedError("ground effect is inviscid in this version (viscous ground effect: M6); "
+                                  "use reynolds=0")
     if wall_type != "ground":
         raise NotImplementedError(
             "Only the rigid 'ground' image is implemented; the deformable "

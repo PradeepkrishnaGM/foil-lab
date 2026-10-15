@@ -40,7 +40,8 @@ def test_overlap_detection():
     assert not bodies_overlap([a, c])
 
 
-# --- Trip wires ------------------------------------------------------------- #
+# --- Trip wires (coupled viscous solver) ------------------------------------ #
+@pytest.mark.slow
 def test_trip_wire_increases_drag():
     af = generate_naca4("2412", 200)
     natural = solve_flow(af, 5.0, reynolds=3e6).cd_visc
@@ -49,6 +50,7 @@ def test_trip_wire_increases_drag():
     assert tripped > natural
 
 
+@pytest.mark.slow
 def test_trip_wire_monotonic():
     af = generate_naca4("2412", 200)
     cds = [solve_flow(af, 5.0, reynolds=3e6, trip_x_upper=t, trip_x_lower=t).cd_visc
@@ -58,6 +60,7 @@ def test_trip_wire_monotonic():
 
 
 # --- Batch ------------------------------------------------------------------ #
+@pytest.mark.slow
 def test_batch_matrix_and_run():
     from foil_lab.batch import build_matrix, run_batch
     afs = {"a": generate_naca4("2412", 120), "b": generate_naca4("0012", 120)}
@@ -65,7 +68,12 @@ def test_batch_matrix_and_run():
     assert len(cases) == 4
     rows = run_batch(cases, workers=1)
     assert len(rows) == 4
-    assert all(r["converged"] for r in rows)
+    # each row carries the coupled solver's own flag (every case is started from the march; NACA
+    # 0012 at 5 deg does not converge from there: DECISIONS.md M3, C5)
+    for r in rows:
+        s = solve_flow(afs[r["airfoil"]], r["alpha_deg"], reynolds=1e6)
+        assert r["converged"] is bool(s.converged) and r["cl"] == s.cl and r["iterations"] == s.iterations
+    assert sum(r["converged"] for r in rows) >= 3
 
 
 def test_batch_export_roundtrip(tmp_path):

@@ -1,8 +1,12 @@
 """Public analysis interface: ``analyze`` and ``polar`` returning ``Result`` and ``Polar``.
 
-Inviscid only in M2 (the inviscid core of :mod:`foil_lab.inviscid`); passing a Reynolds number
-raises ``NotImplementedError`` until M3. ``solver.solve_flow`` keeps its own behaviour for the
-GUI, CLI and batch tools (DECISIONS.md, M2 Q8).
+Without a Reynolds number: the inviscid core of :mod:`foil_lab.inviscid`. With ``re``: the coupled
+viscous-inviscid solver of :mod:`foil_lab.viscous` (M3; one element, Mach 0), with transition by
+the e^n envelope method (``n_crit``) and forced trip locations per surface (``trip_upper``,
+``trip_lower``, x/c), as SPEC.md 4.3 states. A viscous result carries the total drag and its
+friction and pressure parts, the transition location on each surface, the Newton iterations, the
+final residual, how the point was reached (``path``), warnings, and ``converged``, which is true
+only if the residual criteria of ``params.ViscousParams`` were met.
 
 Conventions (SPEC.md section 3): Cl, Cd and Cm per unit span, normalised by the reference
 chord; Cm about the moment reference point, nose up positive; Cp and surface labels in Selig
@@ -18,10 +22,11 @@ import numpy as np
 
 from . import inviscid as core
 from .airfoil import Airfoil, Configuration, Element
-from .params import GEOMETRY
+from .params import GEOMETRY, ViscousParams
 
 Geometry = Union[Airfoil, Element, Configuration]
 METHOD = "inviscid linear-strength vortex panel method"
+METHOD_VISCOUS = "coupled viscous-inviscid (integral boundary layer and wake, e^n transition)"
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,18 @@ class Result:
     repanelled: bool
     version: str
     reynolds: Optional[float] = None
+    #: viscous results only; ``None`` for an inviscid result
+    cd_friction: Optional[float] = None
+    cd_pressure: Optional[float] = None
+    xtr_upper: Optional[float] = None       # transition x/c (nan: laminar to the trailing edge)
+    xtr_lower: Optional[float] = None
+    iterations: Optional[int] = None        # Newton iterations of the final solve
+    iterations_total: Optional[int] = None  # including failed attempts and continuation
+    residual: Optional[float] = None        # largest scaled residual at the last iteration
+    path: Optional[str] = None              # how the point was reached ("march", "warm start", ...)
+    warnings: Tuple[str, ...] = ()
+    n_crit: Optional[float] = None
+    trips: Optional[Tuple[Optional[float], Optional[float]]] = None   # (upper, lower) x/c
 
     @property
     def num_panels(self) -> Tuple[int, ...]:
@@ -66,7 +83,12 @@ class Result:
         d = dict(alpha=self.alpha, cl=self.cl, cm=self.cm, cd=self.cd, ref_chord=self.ref_chord,
                  ref_point=self.ref_point, converged=self.converged, method=self.method,
                  corrections=list(self.corrections), repanelled=self.repanelled,
-                 num_panels=list(self.num_panels), version=self.version, reynolds=self.reynolds)
+                 num_panels=list(self.num_panels), version=self.version, reynolds=self.reynolds,
+                 cd_friction=self.cd_friction, cd_pressure=self.cd_pressure, xtr_upper=self.xtr_upper,
+                 xtr_lower=self.xtr_lower, iterations=self.iterations,
+                 iterations_total=self.iterations_total, residual=self.residual, path=self.path,
+                 warnings=list(self.warnings), n_crit=self.n_crit,
+                 trips=None if self.trips is None else list(self.trips))
         d["elements"] = [dict(name=e.name, cl=e.cl, cm=e.cm, cd=e.cd) for e in self.elements]
         return d
 
@@ -90,6 +112,11 @@ class Polar:
         return np.array([r.cm for r in self.results])
 
     @property
+    def cd(self) -> np.ndarray:
+        """Total drag (nan for inviscid results)."""
+        return np.array([np.nan if r.cd is None else r.cd for r in self.results])
+
+    @property
     def converged(self) -> np.ndarray:
         return np.array([r.converged for r in self.results])
 
@@ -109,10 +136,40 @@ def _prepare(geometry: Geometry, repanel: bool, num_panels: Optional[int]):
     return config, bodies, names
 
 
-def _check_re(re) -> None:
-    if re is not None and re != 0:
-        raise NotImplementedError("viscous analysis (a Reynolds number) is added in M3; "
-                                  "fl.analyze and fl.polar are inviscid in this version")
+def _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params):
+    from .solver import trips_dict, viscous_params
+    if len(bodies) != 1:
+        raise NotImplementedError("viscous analysis (re) of several elements is added in M5; "
+                                  "omit re for an inviscid multi-element result")
+    if not re > 0:
+        raise ValueError(f"re must be a positive Reynolds number, got {re!r}")
+    return viscous_params(n_crit, params), trips_dict(trip_upper, trip_lower)
+
+
+def _viscous_result(vres, bodies, names, config, repanel: bool, prm, trip_upper, trip_lower) -> Result:
+    from . import __version__
+    b = bodies[0]
+    chord, point = config.reference()
+    ps = core.PanelSet.from_bodies([b])
+    cp_all = np.asarray(vres.cp) if vres.cp is not None else np.full(ps.num_panels, np.nan)
+    # the solver's loads are about the quarter chord of the unit chord at the origin; recompute them
+    # from the viscous surface pressure about the configuration's reference (as the inviscid path)
+    cl, _, cm = core.pressure_loads(ps, cp_all, vres.alpha, 0, chord, point)
+    cp = cp_all[::-1] if ps.reversed_input[0] else cp_all             # Selig (input) order
+    mid = 0.5 * (b[:-1] + b[1:])
+    te_mid = 0.5 * (b[0] + b[-1])
+    le = int(np.argmax(np.hypot(*(b - te_mid).T)))
+    surface = np.where(np.arange(len(mid)) < le, "upper", "lower")
+    cd = float(vres.cd) / chord
+    el = ElementResult(names[0], float(cl), float(cm), cd, mid[:, 0].copy(), mid[:, 1].copy(),
+                       np.asarray(cp).copy(), surface, len(mid))
+    return Result(float(vres.alpha), float(cl), float(cm), cd, (el,), chord, point,
+                  bool(vres.converged), METHOD_VISCOUS, (), repanel, __version__, float(vres.reynolds) * chord,
+                  cd_friction=float(vres.cdf) / chord, cd_pressure=float(vres.cdp) / chord,
+                  xtr_upper=float(vres.xtr_upper), xtr_lower=float(vres.xtr_lower),
+                  iterations=int(vres.iterations), iterations_total=int(vres.iterations_total),
+                  residual=vres.residual, path=vres.path, warnings=tuple(vres.warnings),
+                  n_crit=prm.n_crit, trips=(trip_upper or None, trip_lower or None))
 
 
 def _result(ps, asm, bodies, names, config, alpha: float, repanel: bool) -> Result:
@@ -139,24 +196,52 @@ def _result(ps, asm, bodies, names, config, alpha: float, repanel: bool) -> Resu
 
 
 def analyze(geometry: Geometry, alpha: float, re: Optional[float] = None, repanel: bool = True,
-            num_panels: Optional[int] = None) -> Result:
-    """Analyse one operating point (inviscid).
+            num_panels: Optional[int] = None, n_crit: Optional[float] = None,
+            trip_upper: Optional[float] = None, trip_lower: Optional[float] = None,
+            params: Optional[ViscousParams] = None) -> Result:
+    """Analyse one operating point.
 
     ``geometry``: an ``Airfoil``, ``Element`` or ``Configuration``. ``repanel``: repanel every
     element by arc length to ``num_panels`` (default ``params.GEOMETRY.num_panels``); with
-    ``repanel=False`` the given points are used unchanged. ``re``: not supported until M3.
+    ``repanel=False`` the given points are used unchanged.
+
+    ``re``: Reynolds number based on the reference chord (the solver works per unit length, so it
+    receives ``re / ref_chord``); ``None`` or 0 gives the inviscid result.
+    With ``re`` the coupled viscous solver runs (one element, Mach 0), started from its starting
+    march (:func:`foil_lab.viscous.solve_point`): e^n transition with ``n_crit`` (default
+    ``params.VISCOUS.n_crit``), forced trips at x/c ``trip_upper`` / ``trip_lower`` (``None`` = free
+    transition), other solver settings from ``params`` (default ``params.VISCOUS``). For several
+    angles use :func:`polar`, which reaches each angle from a converged neighbour.
     """
-    _check_re(re)
     config, bodies, names = _prepare(geometry, repanel, num_panels)
+    if re:
+        from . import viscous
+        prm, trips = _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params)
+        vres = viscous.solve_point(bodies[0], float(alpha), float(re) / config.reference()[0], prm, trips)
+        return _viscous_result(vres, bodies, names, config, repanel, prm, trip_upper, trip_lower)
     ps = core.PanelSet.from_bodies(bodies)
     return _result(ps, core.assemble(ps), bodies, names, config, float(alpha), repanel)
 
 
 def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = None,
-          repanel: bool = True, num_panels: Optional[int] = None) -> Polar:
-    """Analyse a list of angles (inviscid); the system is assembled once."""
-    _check_re(re)
+          repanel: bool = True, num_panels: Optional[int] = None, n_crit: Optional[float] = None,
+          trip_upper: Optional[float] = None, trip_lower: Optional[float] = None,
+          params: Optional[ViscousParams] = None) -> Polar:
+    """Analyse a list of angles; results in the order given.
+
+    Inviscid: the system is assembled once. With ``re`` (see :func:`analyze`): the angles are
+    reached as the benchmark reaches them (:func:`foil_lab.viscous.sweep`: from the angle nearest
+    0 deg up and down with warm starts, then failed starts from the nearest converged angle); each
+    result's ``path`` says how it was reached.
+    """
     config, bodies, names = _prepare(geometry, repanel, num_panels)
+    alphas = [float(a) for a in alphas]
+    if re:
+        from . import viscous
+        prm, trips = _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params)
+        res = viscous.sweep(bodies[0], alphas, float(re) / config.reference()[0], prm, trips)
+        return Polar(tuple(_viscous_result(r, bodies, names, config, repanel, prm, trip_upper, trip_lower)
+                           for r in res))
     ps = core.PanelSet.from_bodies(bodies)
     asm = core.assemble(ps)
-    return Polar(tuple(_result(ps, asm, bodies, names, config, float(a), repanel) for a in alphas))
+    return Polar(tuple(_result(ps, asm, bodies, names, config, a, repanel) for a in alphas))

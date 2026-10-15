@@ -11,7 +11,8 @@ Two features:
    leading edge and recombining.
 
 Both are thin wrappers around :func:`solver.solve_flow`; they add no per-panel
-cost beyond the solves they request.
+cost beyond the solves they request. With a Reynolds number each solve is the coupled
+viscous-inviscid solver (one body, Mach 0 in this version), started from its starting march.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ class WingLoadingPoint:
     cm_qc: float
     speed: float        # converged flight speed (m/s)
     reynolds: float     # converged chord Reynolds number
-    converged: bool
+    converged: bool     # Re fixed point reached and the final viscous solve converged
 
 
 def solve_constant_wing_loading(
@@ -66,7 +67,8 @@ def solve_constant_wing_loading(
     But Cl depends (through the viscous solve) on Re = rho V c / mu, which
     depends on V. We iterate: guess Re -> solve for Cl -> update V -> update Re,
     until Re converges. If Cl <= 0 (no level-flight solution at this alpha) the
-    point is returned unconverged with the last estimates.
+    point is returned unconverged with the last estimates. The point is converged only if the
+    fixed point is reached and the final viscous solve converged (``SolutionData.converged``).
     """
     reynolds = float(re_init)
     speed = np.nan
@@ -95,7 +97,7 @@ def solve_constant_wing_loading(
     sol = solve_flow(coords, alpha_deg, mach=mach, reynolds=reynolds,
                      aspect_ratio=aspect_ratio)
     return WingLoadingPoint(alpha_deg, sol.cl, sol.cd_total, sol.cm_qc,
-                            speed, reynolds, converged)
+                            speed, reynolds, bool(converged and sol.converged))
 
 
 def constant_wing_loading_sweep(

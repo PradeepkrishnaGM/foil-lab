@@ -22,32 +22,13 @@ def test_busemann_sweep_cos_squared_scaling():
     assert cl30 / cl0 == pytest.approx(expected, abs=1e-3)
 
 
+@pytest.mark.slow
 def test_constant_wing_loading_converges():
     af = generate_naca4("2412", 160)
     p = solve_constant_wing_loading(af, 5.0, wing_loading=600.0, chord=1.2)
     assert p.converged
     assert p.speed > 0
     assert p.reynolds > 0
-
-
-# --- Viscous modifiers ------------------------------------------------------ #
-def test_roughness_increases_drag():
-    af = generate_naca4("2412", 200)
-    cds = [solve_flow(af, 5.0, reynolds=3e6, roughness=r).cd_visc for r in range(4)]
-    assert all(cds[i] <= cds[i + 1] + 1e-9 for i in range(3))
-    assert cds[3] > cds[0]
-
-
-def test_post_stall_caps_lift():
-    af = generate_naca4("2412", 200)
-    # Without post-stall, Cl keeps rising; with it, a peak forms.
-    cl_high_plain = solve_flow(af, 20.0, reynolds=3e6).cl
-    cl_high_ps = solve_flow(af, 20.0, reynolds=3e6, enable_post_stall=True).cl
-    assert cl_high_ps < cl_high_plain
-    # Peak Cl should be physically bounded.
-    cls = [solve_flow(af, float(a), reynolds=3e6, enable_post_stall=True).cl
-           for a in range(0, 24, 2)]
-    assert max(cls) < 2.2
 
 
 # --- Ground effect ---------------------------------------------------------- #

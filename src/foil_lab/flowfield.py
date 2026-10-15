@@ -1,10 +1,12 @@
 """Off-body velocity field reconstruction for streamline visualization.
 
 Rebuilds the velocity (U, V) on a grid from the solution's own singularity model: the core's
-nodal vortex strengths (``solution.gamma``), any known panel sources (``solution.sources``,
-the VII transpiration) and, for an open trailing edge, the trailing-edge panel, all on the panel
-set the solver used (``solution.panels``; for ground effect that includes the image body).
-The velocity is therefore the one the solver's boundary conditions hold.
+nodal vortex strengths (``solution.gamma``), any panel sources (``solution.sources``: the
+displacement sources of a coupled viscous solution) and, for an open trailing edge, the
+trailing-edge panel, all on the panel set the solver used (``solution.panels``; for ground effect
+that includes the image body). For a viscous solution the wake sources are not included, so the
+field differs from the solver's in the wake region; elsewhere the velocity is the one the
+solver's boundary conditions hold.
 """
 
 from __future__ import annotations

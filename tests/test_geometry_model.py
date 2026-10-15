@@ -255,11 +255,14 @@ def test_element_loads_sum_to_totals():
     assert abs(sum(e.cm for e in r.elements) - r.cm) <= 1e-12
 
 
-def test_reynolds_number_not_supported_yet():
+def test_viscous_analysis_of_several_elements_not_supported_yet():
+    main = fl.Airfoil.naca("2412")
+    flap = fl.Element(fl.Airfoil.naca("0012"), offset=(1.05, -0.05), scale=0.3, rotation_deg=-10.0)
+    config = fl.Configuration((fl.Element(main), flap))
     with pytest.raises(NotImplementedError):
-        fl.analyze(fl.Airfoil.naca("2412"), 4.0, re=1e6)
+        fl.analyze(config, 4.0, re=1e6)
     with pytest.raises(NotImplementedError):
-        fl.polar(fl.Airfoil.naca("2412"), [0.0], re=1e6)
+        fl.polar(config, [0.0], re=1e6)
 
 
 def test_polar_matches_analyze():

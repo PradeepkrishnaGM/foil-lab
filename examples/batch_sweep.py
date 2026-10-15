@@ -18,12 +18,11 @@ def main():
 
     cases = build_matrix(
         airfoils,
-        alpha=range(-6, 15),
+        alpha=range(-4, 13),
         reynolds=[1e6, 3e6, 6e6],
-        roughness=[0, 2],
-        enable_post_stall=True,
     )
-    print(f"Solving {len(cases)} cases...")
+    print(f"Solving {len(cases)} cases with the coupled viscous solver (each from its starting "
+          f"march; about 10 s per case on one core)...")
 
     rows = run_batch(cases, workers=1, progress=True)
     n_ok = sum(r["converged"] for r in rows)
@@ -36,13 +35,13 @@ def main():
     # Quick peek: best L/D per airfoil at Re=3e6, clean.
     by_foil = {}
     for r in rows:
-        if r["reynolds"] == 3e6 and r["roughness"] == 0 and r["converged"] \
+        if r["reynolds"] == 3e6 and r["converged"] \
                 and r["cd_total"] > 1e-6 and r["cl"] > 0:
             ld = r["cl"] / r["cd_total"]
             best = by_foil.get(r["airfoil"])
             if best is None or ld > best[0]:
                 by_foil[r["airfoil"]] = (ld, r["alpha_deg"])
-    print("\nBest L/D (Re=3e6, clean):")
+    print("\nBest L/D (Re=3e6, converged points):")
     for foil, (ld, a) in sorted(by_foil.items()):
         print(f"  {foil:12s} L/D={ld:6.1f} at alpha={a:+.0f} deg")
 

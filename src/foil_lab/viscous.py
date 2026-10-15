@@ -727,6 +727,14 @@ class ViscousResult:
     closure_set: str = ""
     path: str = ""                                    # how the result was reached (:func:`solve_point`)
     warnings: list = field(default_factory=list)      # e.g. :data:`WARN_CLOSED_TE_DRAG`
+    cp: Any = field(default=None, repr=False)         # surface pressure at the panel midpoints (solver order)
+    gamma: Any = field(default=None, repr=False)      # nodal sheet strengths of the coupled solution
+    sources: Any = field(default=None, repr=False)    # airfoil panel source strengths (wake sources excluded)
+
+    @property
+    def residual(self) -> float:
+        """Largest scaled residual at the last iteration (``residual_tol`` is the criterion)."""
+        return float(self.residual_history[-1]) if self.residual_history else float("nan")
 
 
 def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
@@ -839,9 +847,12 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
     cpl = st.cpl
     m = ps.num_nodes
     th, dsx, c, ue = x.T
-    gamma = cpl.gamma_inv + cpl.g @ (cpl.dd(st.d[:m]) * ue * dsx)
+    ddm = cpl.dd(st.d[:m]) * ue * dsx
+    gamma = cpl.gamma_inv + cpl.g @ ddm
     g_mid = 0.5 * (gamma[ps.start_node] + gamma[ps.end_node])
     cp = 1.0 - g_mid ** 2
+    lengths = np.asarray(ps.lengths)
+    sources = (ddm[ps.end_node] - ddm[ps.start_node]) / lengths     # q = P (dd m), airfoil panels
     cl, _, cm = inviscid.pressure_loads(ps, cp, alpha)
     ss = stagnation_s(st, ue)
     a = np.deg2rad(alpha)
@@ -896,7 +907,8 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
     u1 = (tu * uu + tl * ul) / th1
     cd_te = 2.0 * th1 * u1 ** ((h1 + 5.0) / 2.0)
     out.update(cd=float(cd), cd_te=float(cd_te), cdf=cdf, cdp=float(cd - cdf), surface=surface,
-               warnings=[] if all(ps.open_te) else [WARN_CLOSED_TE_DRAG])
+               warnings=[] if all(ps.open_te) else [WARN_CLOSED_TE_DRAG], cp=np.asarray(cp),
+               gamma=np.asarray(gamma), sources=np.asarray(sources))
     return out
 
 
@@ -1079,3 +1091,45 @@ def polar(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trip
         if r.converged:
             start, a_prev = r.state, a
     return out
+
+
+def sweep(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trips=None,
+          geometry: Geometry | None = None) -> list:
+    """Results at ``alphas`` (any order, returned in that order), reached as the benchmark reaches
+    them (``foil_lab.benchmark.viscous_run.run_case``): from the angle nearest 0 deg (starting march)
+    up through the larger angles, then from that angle's converged state down through the smaller
+    ones, each a polar point (:func:`polar`); then every point whose start from the march failed is
+    reached from the nearest converged angle of its sweep, and else of the other sweep
+    (:func:`reach_from_nearest`). Only how points are reached is chosen here; each result's
+    ``path`` says how it was reached and ``converged`` is that of :func:`solve_viscous`."""
+    geo = geometry or build_geometry(coords)
+    vals = sorted({float(a) for a in alphas})
+    if not vals:
+        return []
+    a0 = min(vals, key=lambda a: (abs(a), a))
+    up = [a for a in vals if a >= a0]
+    down = [a for a in reversed(vals) if a < a0]
+    done: dict[float, ViscousResult] = {}
+    all_a, all_r, all_cold, group = [], [], [], []
+    for g, sw in enumerate((up, down)):
+        if not sw:
+            continue
+        start = a_prev = None
+        if g == 1 and done[a0].converged:
+            start, a_prev = done[a0].state, a0
+        res = polar(coords, sw, reynolds, params, trips, geo, start, a_prev)
+        cold = [False] * len(sw)
+        for i, r in enumerate(res):
+            cold[i] = start is None and (i == 0 or not any(q.converged for q in res[:i]))
+        reach_from_nearest(coords, sw, res, cold, reynolds, params, trips, geo)
+        done.update(zip(sw, res))
+        all_a += sw
+        all_r += res
+        all_cold += cold
+        group += [g] * len(sw)
+    order = sorted(range(len(all_a)), key=lambda q: all_a[q])
+    res_c = [all_r[q] for q in order]
+    reach_from_nearest(coords, [all_a[q] for q in order], res_c, [all_cold[q] for q in order], reynolds,
+                       params, trips, geo, group=[group[q] for q in order])
+    done.update({all_a[q]: r for q, r in zip(order, res_c)})
+    return [done[float(a)] for a in alphas]

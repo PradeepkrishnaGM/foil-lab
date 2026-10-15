@@ -3,17 +3,18 @@
 Three problems:
   1. design_for_cl  — find a shape that produces a target lift coefficient.
   2. match_cp       — recover a shape whose Cp matches a target airfoil.
-  3. maximize_ld    — (optional, slow) maximize L/D via the VII viscous solver.
+  3. maximize_ld    — (optional, slow: --ld) maximize L/D with the coupled viscous solver.
 
-Run from the repo root:  python examples/inverse_design_demo.py
+Run from the repo root:  python examples/inverse_design_demo.py [--ld]
 """
+import sys
 import time
 
 import numpy as np
 
 from foil_lab.generators import generate_naca4
 from foil_lab.solver import solve_flow
-from foil_lab.design import design_for_cl, match_cp
+from foil_lab.design import design_for_cl, match_cp, maximize_ld
 
 
 def main():
@@ -40,9 +41,20 @@ def main():
     print("  PARSEC cannot exactly equal a NACA shape, so this is the closest")
     print("  PARSEC fit — the honest result of an ill-posed inverse problem.")
 
-    print("\n  (maximize_ld is available too, but routes through the VII viscous")
-    print("   solver for physical drag and is correspondingly slower — see the")
-    print("   design.maximize_ld docstring.)")
+    if "--ld" not in sys.argv:
+        print("\n  (maximize_ld: run with --ld. It calls the coupled viscous solver for every")
+        print("   candidate, about 10 s each; the reduced run below takes about 2 minutes.)")
+        return
+
+    print("\n=== 3. Maximize L/D at 4 deg, Re 3e6 (coupled viscous solver; reduced: 60 panels, "
+          "2 iterations) ===")
+    t = time.perf_counter()
+    start = solve_flow(generate_naca4("2412", 120), 4.0, reynolds=3e6)
+    print(f"  reference NACA 2412: Cl={start.cl:.3f} Cd={start.cd_total:.5f} "
+          f"L/D={start.cl / start.cd_total:.1f} converged={start.converged}")
+    r = maximize_ld(alpha_deg=4.0, reynolds=3e6, num_panels=60, max_iter=2)
+    print(f"  optimised PARSEC: {r.message}, success={r.success}")
+    print(f"  ({r.n_evals} evals, {time.perf_counter()-t:.0f}s)")
 
 
 if __name__ == "__main__":
