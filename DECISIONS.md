@@ -2584,6 +2584,33 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   cold-started cases at about 10 s each).
 - **Fast suite** after C5: 360 passed, 1 xfailed (the M6 aspect-ratio test), 35.6 s on an idle CPU;
   the slowest fast test takes 2.4 s.
+- **Step 3: low-Re targets, proposal only (not applied; SPEC.md not edited; for the user).** The
+  figures are measured on the C5 run (open trailing edges, attached filter, reference-reliability
+  rule; the rule excludes no point at Re 1e5 or 2e5):
+
+  | Re | converged | mean / max dCl | mean / max rel dCd | mean / max dCm |
+  |---|---|---|---|---|
+  | 2e5 | 83/83 (100 %) | 0.0029 / 0.0146 | 2.0 % / 19.9 % | 0.0006 / 0.0026 |
+  | 1e5 | 81/81 (100 %) | 0.0062 / 0.0275 | 3.0 % / 26.3 % | 0.0011 / 0.0040 |
+
+  - **Proposal (A):** the SPEC.md 4.1 targets, unchanged, also at Re 1e5 and 2e5 (validated range
+    1e5 to 6e6). Both Reynolds numbers meet every target today.
+  - **The tight margin** is max rel dCd at 1e5: 26.3 % against 30 %. It comes from a single point,
+    E387 with the 0.25 % gap at -4 deg (Cd 0.02735 against 0.03713), where XFOIL itself moves 17.7 %
+    between 160 and 240 nodes. The next largest is 10.0 % (Clark Y, -4 deg); 9 of 81 points are over
+    5 %. At 2e5 the maximum is 19.9 %, from the same section and angle (XFOIL 160 vs 240: 11.0 %),
+    and only 1 of 83 points is over 5 %.
+  - **Alternative (B):** validate down to 2e5 only, and keep 1e5 reported without a claim.
+  - **Re 5e4 stays reported without a claim:** 72/78 converged (92.3 %), max dCl 0.138, max rel dCd
+    35.9 %, max dCm 0.056 (three per-point targets missed).
+  - **Caveats:** the agreement is with XFOIL, not with experiment; one benchmark run per Reynolds
+    number; the seven sections of the matrix.
+  - **SPEC.md text that would change (wording for approval):**
+    - 2 "valid at Re from 5e5 to 6e6" -> "from 1e5 to 6e6";
+    - 4.1 "Validated range: Re = 1e5, 2e5, 5e5, 1e6, 3e6, 6e6" and "Reported but outside the
+      validated range: Re = 5e4";
+    - 5 "Validated at Re from 1e5 to 6e6";
+    - 2 Later, v2.2: "low-Reynolds-number accuracy below Re 1e5 (laminar separation bubbles)".
 - **C3 on the C5 code** (`docs/benchmark_m3.md`): all 1167 points that converged in both runs are
   bit-identical to report 10, with none gained or lost. So the second `reach_from_nearest` pass
   (after report 10) reached no new point. Every SPEC.md 4.1 target is still met at Re 5e5-6e6.
