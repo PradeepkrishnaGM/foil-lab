@@ -38,7 +38,7 @@ def fake_viscous(monkeypatch):
                                      cl=0.5, cd=0.01, cdf=0.006, cdp=0.004, cm=-0.05,
                                      xtr_upper=0.3, xtr_lower=0.6, path="march")
 
-    def solve_point(coords, alpha, reynolds, params=viscous.VISCOUS, trips=None, *a, **kw):
+    def solve_single(coords, alpha, reynolds, params=viscous.VISCOUS, trips=None, *a, **kw):
         calls.append(("point", alpha, reynolds, params.n_crit, trips))
         return result(alpha, reynolds, params, trips)
 
@@ -46,7 +46,7 @@ def fake_viscous(monkeypatch):
         calls.append(("sweep", list(alphas), reynolds, params.n_crit, trips))
         return [result(a, reynolds, params, trips) for a in alphas]
 
-    monkeypatch.setattr(viscous, "solve_point", solve_point)
+    monkeypatch.setattr(viscous, "solve_single", solve_single)
     monkeypatch.setattr(viscous, "sweep", sweep)
     return calls
 
@@ -167,9 +167,15 @@ def test_analyze_and_polar_with_re_end_to_end():
 
 
 @pytest.mark.slow
-def test_closed_trailing_edge_result_carries_the_wake_drag_warning():
-    r = fl.analyze(fl.Airfoil.naca("2412", trailing_edge="closed"), 4.0, re=1e6)
-    assert viscous.WARN_CLOSED_TE_DRAG in r.warnings
+def test_closed_trailing_edge_kept_sharp_carries_the_wake_drag_warning():
+    """Default: the closed edge is opened (a correction, no warning). Kept sharp
+    (``closed_te_gap`` 0): the result carries the closed-edge drag warning."""
+    import dataclasses
+    af = fl.Airfoil.naca("2412", trailing_edge="closed")
+    r = fl.analyze(af, 4.0, re=1e6)
+    assert r.corrections and viscous.WARN_CLOSED_TE_DRAG not in r.warnings
+    sharp = fl.analyze(af, 4.0, re=1e6, params=dataclasses.replace(viscous.VISCOUS, closed_te_gap=0.0))
+    assert sharp.corrections == () and viscous.WARN_CLOSED_TE_DRAG in sharp.warnings
 
 
 @pytest.mark.slow
@@ -200,3 +206,95 @@ def test_gui_single_case_runs_the_coupled_solver(monkeypatch):
     assert text.startswith("Viscous: converged"), text
     w.close()
     del app
+
+
+# ---------------------------------------------------------------------------------------- #
+# Single points: direct start, else continuation (user, after report 11)
+# ---------------------------------------------------------------------------------------- #
+@pytest.fixture
+def scripted(monkeypatch):
+    """``viscous.solve_point`` replaced by a script: angles in ``cold_ok`` converge from the march,
+    every warm-started angle converges unless it is in ``warm_fail``."""
+    cfg = {"cold_ok": set(), "warm_fail": set(), "calls": []}
+
+    def solve_point(coords, alpha, reynolds, params=viscous.VISCOUS, trips=None, start=None,
+                    alpha_start=None, geometry=None, *a, **kw):
+        cold = start is None
+        cfg["calls"].append((float(alpha), "cold" if cold else f"warm from {alpha_start:g}"))
+        ok = alpha in cfg["cold_ok"] if cold else alpha not in cfg["warm_fail"]
+        return viscous.ViscousResult(alpha=alpha, reynolds=reynolds, converged=ok, iterations=2,
+                                     reason="" if ok else "max_iter", iterations_total=2,
+                                     state=("x", alpha), path="march" if cold else "warm start")
+
+    monkeypatch.setattr(viscous, "solve_point", solve_point)
+    monkeypatch.setattr(viscous, "build_geometry", lambda c: None)
+    return cfg
+
+
+def test_single_point_direct_start(scripted):
+    scripted["cold_ok"] = {5.0}
+    r = viscous.solve_single(None, 5.0, 1e6)
+    assert r.converged and r.path == "direct: march" and scripted["calls"] == [(5.0, "cold")]
+
+
+def test_single_point_continuation_from_zero(scripted):
+    scripted["cold_ok"] = {0.0}
+    r = viscous.solve_single(None, -2.5, 1e6)
+    assert r.converged and r.path == "continuation from 0 deg: warm start"
+    assert scripted["calls"] == [(-2.5, "cold"), (0.0, "cold"), (-1.0, "warm from 0"),
+                                 (-2.0, "warm from -1"), (-2.5, "warm from -2")]
+    assert r.iterations == 2 and r.iterations_total == 10
+
+
+def test_single_point_from_the_nearest_converged_angle_when_zero_fails(scripted):
+    scripted["cold_ok"] = {2.0, 7.0}             # 0 fails; 7 (after 4, 6 and 3) is the nearest to converge
+    r = viscous.solve_single(None, 5.0, 1e6)
+    assert r.converged and r.path == "from 7 deg: warm start"
+    assert [c for c in scripted["calls"] if c[1] == "cold"] == [(5.0, "cold"), (0.0, "cold"), (4.0, "cold"),
+                                                                (6.0, "cold"), (3.0, "cold"), (7.0, "cold")]
+
+
+def test_single_point_that_fails_says_what_was_tried(scripted):
+    scripted["cold_ok"] = {0.0}
+    scripted["warm_fail"] = {3.0}
+    r = viscous.solve_single(None, 3.0, 1e6)
+    assert not r.converged and r.path == "direct: march; continuation from 0 deg failed"
+    scripted["cold_ok"], scripted["warm_fail"] = set(), set()
+    r = viscous.solve_single(None, 1.0, 1e6)
+    assert not r.converged and r.path.endswith("0 deg failed; no converged start within 4 deg")
+
+
+# ---------------------------------------------------------------------------------------- #
+# Closed trailing edge opened for viscous analysis (user, after report 11)
+# ---------------------------------------------------------------------------------------- #
+def test_closed_trailing_edge_is_opened_and_recorded():
+    import dataclasses
+    from foil_lab.geometry import trailing_edge_gap
+    closed = generate_naca4("2412", 160, "closed")
+    c, corr = viscous.open_closed_te(closed)
+    assert abs(trailing_edge_gap(c) - 0.0005) <= 1e-6 and len(corr) == 1 and "0.0005 c" in corr[0]
+    opened = generate_naca4("2412", 160)
+    c2, corr2 = viscous.open_closed_te(opened)
+    assert corr2 == [] and np.array_equal(c2, opened)
+    sharp = dataclasses.replace(viscous.VISCOUS, closed_te_gap=0.0)
+    c3, corr3 = viscous.open_closed_te(closed, sharp)
+    assert corr3 == [] and np.array_equal(c3, closed)
+
+
+def test_interfaces_record_the_opened_trailing_edge(fake_viscous):
+    s = solver.solve_flow(generate_naca4("2412", 120, "closed"), 4.0, reynolds=1e6)
+    assert len(s.corrections) == 1 and "opened" in s.corrections[0]
+    r = fl.analyze(fl.Airfoil.naca("2412", trailing_edge="closed"), 4.0, re=1e6)
+    assert len(r.corrections) == 1 and "opened" in r.corrections[0]
+    assert fl.analyze(fl.Airfoil.naca("2412"), 4.0, re=1e6).corrections == ()
+
+
+@pytest.mark.slow
+def test_sharp_naca2412_re3e6_0deg_now_agrees_with_xfoil_at_the_small_gap():
+    """Closed NACA 2412 (160 panels), Re 3e6, 0 deg: the sharp path converged to Cl 0.059 (XFOIL
+    sharp 0.2336). With the default opening (0.0005 c), Cl is within 0.03 of XFOIL 6.99 at 0.001 c
+    (Cl 0.2425; PANE 160, N_crit 9; step 1 after report 10), or the point is reported as not
+    converged."""
+    s = solver.solve_flow(generate_naca4("2412", 160, "closed"), 0.0, reynolds=3e6)
+    assert s.corrections
+    assert (not s.converged) or abs(s.cl - 0.2425) <= 0.03, (s.cl, s.path)

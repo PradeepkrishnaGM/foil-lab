@@ -13,7 +13,7 @@ canonical coordinate file. Drag is Squire-Young at the end of the wake; the trai
 
 Metrics and the attached-flow filter are those of ``report.py`` (SPEC.md 4.1): a point enters the
 metrics only if XFOIL and our solver converged there; points we did not converge on are counted.
-The SPEC.md 4.1 targets apply to open trailing edges at Re 5e5-6e6, per Reynolds number; the
+The SPEC.md 4.1 targets apply to open trailing edges at Re 1e5-6e6, per Reynolds number; the
 sharp-edged E387 and the low Reynolds numbers are reported without targets.
 
     python -m foil_lab.benchmark viscous          # run (writes benchmark_output/m3_viscous)
@@ -27,7 +27,6 @@ import dataclasses
 import math
 import multiprocessing as mp
 import os
-import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -36,7 +35,7 @@ from ..params import BENCHMARK, SWEEP, VISCOUS, BenchmarkParams
 from .references import load_reference
 from .report import MethodStats, _f, _max, _md, _mean, _pct, attached_filter
 
-#: SPEC.md 4.1 targets (open trailing edge, Re 5e5-6e6, attached-flow filter, per Reynolds number)
+#: SPEC.md 4.1 targets (open trailing edge, Re 1e5-6e6, attached-flow filter, per Reynolds number)
 TARGETS = {"converged": 0.95, "cl_mean": 0.03, "cl_max": 0.10, "cd_mean": 0.10, "cd_max": 0.30,
            "cm_mean": 0.01, "cm_max": 0.03}
 #: closure sets run and reported by the benchmark. "drela1987" is parked: it does not converge with the
@@ -77,77 +76,36 @@ def _row(r, closure_set: str, runtime: float, error: str = "") -> dict:
 
 
 def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, float, list[dict]]:
-    """Both sweeps of one (section, Reynolds number) with one closure set."""
+    """Both sweeps of one (section, Reynolds number) with one closure set: the angles are reached by
+    :func:`foil_lab.viscous.sweep` (the same path as ``fl.polar``); this adds the rows and the run
+    time per point. A point a walk reaches keeps its row, with the run time and iterations of the
+    walk added (DECISIONS.md M3, decision 3 after report 8)."""
     from .. import viscous as V
     from .sections import canonical
     prm = dataclasses.replace(VISCOUS, closure_set=closure_set)
     coords = canonical(section).coords
-    geo = V.build_geometry(coords)
     up, down = _sweeps()
-    rows, state0 = [], None
-    all_alphas, all_res, all_cold, all_group = [], [], [], []
-    for sweep in (up, down):
-        start, a_prev = (state0, 0.0) if (sweep is down and state0 is not None) else (None, None)
-        first = len(rows)
-        res, cold = [], []
-        for a in sweep:
-            t0 = time.perf_counter()
-            cold.append(start is None)
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    r = V.polar(coords, [a], reynolds, prm, geometry=geo, start=start, alpha_start=a_prev)[0]
-                row = _row(r, closure_set, time.perf_counter() - t0)
-            except Exception as exc:  # recorded, never hidden
-                r = None
-                row = _row(None, closure_set, time.perf_counter() - t0, f"{type(exc).__name__}: {exc}")
-                row["alpha"] = a
-            rows.append(row)
-            if r is None:                      # never walked to (DECISIONS.md M3, decision 3, report 8)
-                r = V.ViscousResult(alpha=a, reynolds=reynolds, converged=False, iterations=0, reason="exception")
-                cold[-1] = False
-            res.append(r)
-            if r.converged:
-                start, a_prev = r.state, a
+    rows: dict[float, dict] = {}
 
-        def walked(k, r, seconds):
-            old = rows[first + k]
-            if r.converged:
-                rows[first + k] = _row(r, closure_set, old["runtime_s"] + seconds)
+    def record(a, r, seconds, walked, error):
+        if not walked:
+            if error is None:
+                rows[a] = _row(r, closure_set, seconds)
             else:
-                old["runtime_s"] += seconds
-                old["iterations_total"] += r.iterations_total
-
-        # a point whose start from the march failed: reached from the nearest converged angle of
-        # the sweep (DECISIONS.md M3, decision 3 after report 8)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            V.reach_from_nearest(coords, sweep, res, cold, reynolds, prm, geometry=geo, on_result=walked)
-        if sweep is up and 0.0 in sweep and res[sweep.index(0.0)].converged:
-            state0 = res[sweep.index(0.0)].state
-        all_alphas += sweep
-        all_res += res
-        all_cold += cold
-        all_group += [first] * len(sweep)
-    # then from the nearest converged angle of the other sweep, where that is at least as near as the
-    # one of its own sweep (user, after report 10); rows are in the order of ``all_*``
-    order = sorted(range(len(all_alphas)), key=lambda q: all_alphas[q])
-    res_c = [all_res[q] for q in order]
-
-    def walked_c(k, r, seconds):
-        old = rows[order[k]]
+                rows[a] = _row(None, closure_set, seconds, error)
+                rows[a]["alpha"] = a
+            return
+        old = rows[a]
         if r.converged:
-            rows[order[k]] = _row(r, closure_set, old["runtime_s"] + seconds)
+            rows[a] = _row(r, closure_set, old["runtime_s"] + seconds)
         else:
             old["runtime_s"] += seconds
             old["iterations_total"] += r.iterations_total
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        V.reach_from_nearest(coords, [all_alphas[q] for q in order], res_c, [all_cold[q] for q in order],
-                             reynolds, prm, geometry=geo, on_result=walked_c,
-                             group=[all_group[q] for q in order])
-    return section, reynolds, rows
+        V.sweep(coords, up + down, reynolds, prm, on_result=record)
+    return section, reynolds, [rows[a] for a in up + down]
 
 
 def _write(path: Path, rows: list[dict]) -> None:
@@ -350,7 +308,8 @@ def build_markdown(cases: list[ViscousCase], bench: BenchmarkParams = BENCHMARK)
     lines = ["# M3 C3: coupled viscous solver against XFOIL (SPEC.md 4.1)", "",
              "Reference XFOIL 6.99, 160 PANE nodes, N_crit 9, Mach 0. Attached-flow filter and metrics as "
              "in the baseline report; a point is used only if both codes converged. Targets (SPEC.md 4.1, "
-             "open trailing edge, Re 5e5-6e6, per Reynolds number): converged >= 95 %, mean |dCl| <= 0.03 "
+             f"open trailing edge, Re {min(valid):g}-{max(valid):g}, per Reynolds number): converged >= 95 %, "
+             "mean |dCl| <= 0.03 "
              "and max <= 0.10, mean rel |dCd| <= 10 % and max <= 30 %, mean |dCm| <= 0.01 and max <= 0.03 "
              "(✓ met, ✗ not met). Cd: Squire-Young at the end of the wake; 'Cd TE' rows use the "
              "Squire-Young value at the trailing edge (cross-check). Iterations are those of the final "

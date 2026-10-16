@@ -258,14 +258,11 @@ def test_numpy_and_jax_agree(make, alpha):
 
 @pytest.mark.slow
 def test_deterministic_inviscid_and_viscous():
-    """Same input, bit-identical output (inviscid Cp; coupled viscous Cp, Cd, Cl, transition).
-
-    Viscous at 5 deg, where the start from the march converges (at 4 deg it does not on this
-    160-panel section: 50 iterations, residual 3.4; DECISIONS.md M3, C5)."""
+    """Same input, bit-identical output (inviscid Cp; coupled viscous Cp, Cd, Cl, transition)."""
     af = generate_naca4("2412", 160)
     i1, i2 = solve_flow(af, 4.0), solve_flow(af, 4.0)
     assert np.array_equal(i1.cp_dist, i2.cp_dist)
-    s1, s2 = solve_flow(af, 5.0, reynolds=1e6), solve_flow(af, 5.0, reynolds=1e6)
+    s1, s2 = solve_flow(af, 4.0, reynolds=1e6), solve_flow(af, 4.0, reynolds=1e6)
     assert s1.converged and s2.converged
     assert np.array_equal(s1.cp_dist, s2.cp_dist) and s1.cd_visc == s2.cd_visc and s1.cl == s2.cl
     assert (s1.xtr_upper, s1.xtr_lower, s1.iterations) == (s2.xtr_upper, s2.xtr_lower, s2.iterations)

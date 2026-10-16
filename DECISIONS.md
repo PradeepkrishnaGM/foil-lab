@@ -2619,6 +2619,122 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   benchmark workers run. With the default multi-threaded BLAS, values differ by up to 1.4e-10 in Cl
   (NACA 2412 Re 1e6 and E387 0.25 % gap Re 6e6, 50 points); flags and paths are the same.
 
+### Decisions after report 11 (user, 2026-10-15)
+
+1. **Cold start (blocking).** Loosening the tests is not accepted. Both test changes of C5 are
+   reverted: the determinism test is back at 4 deg, and `test_batch_matrix_and_run` again asserts
+   that all 4 cases converge.
+   - Single points (`fl.analyze`, `solve_flow`, and through it the command line, GUI, batch and
+     `maximize_ld`) are solved by `viscous.solve_single`, in this order: the direct start; else
+     continuation from 0 deg in steps of `single_point_step` (1 deg), warm-started as `fl.polar`
+     reaches angles; else, only if 0 deg fails, the start from the nearest angle that converges,
+     as `reach_from_nearest` does.
+   - The result's `path` says how the point was reached ("direct: ...", "continuation from 0 deg:
+     ...", "from <angle> deg: ..."), or what was tried when it failed. `converged` stays
+     residual-only.
+   - The search for that nearest angle is bounded by `ViscousParams.single_point_reach` = 4 deg.
+     This bound is our choice, for the user's approval.
+   - **Measurement.** Every benchmark point at Re 1e5 to 6e6 (7 sections x 25 angles x 6 Re = 1050)
+     as an independent `solver.solve_flow` call (the single-point path of `fl.analyze`, which only
+     adds the reference-chord scaling of Re; same canonical file, closed edge kept sharp so that the
+     geometry is the benchmark's). 6 worker processes, one BLAS thread each, on an otherwise idle
+     CPU (an XFOIL run in parallel for part of it). Compared with the polar (all 25 angles, C3 run on
+     the C5 code):
+
+     | Re | points | polar converged | single converged | single via continuation / nearest angle | max dCl / max rel dCd, both converged | run time per point mean / max (s) |
+     |---|---|---|---|---|---|---|
+     | 1e5 | 175 | 173 | 172 | 63 | 3.6e-5 / 0.012 % | 66 / 229 |
+     | 2e5 | 175 | 172 | 172 | 41 | 2.3e-5 / 0.013 % | 36 / 181 |
+     | 5e5 | 175 | 169 | 168 | 39 | 1.6e-5 / 0.008 % | 34 / 297 |
+     | 1e6 | 175 | 173 | 173 | 44 | 0.456 / 59.6 % (sharp E387, 11 deg) | 25 / 119 |
+     | 3e6 | 175 | 173 | 173 | 43 | 0.712 / 35.6 % (sharp E387, 19 deg) | 34 / 197 |
+     | 6e6 | 175 | 170 | 170 | 43 | 0.663 / 75.1 % (sharp E387) | 31 / 146 |
+
+     - How the 1028 converged single points were reached: 755 direct, 236 continuation from 0 deg,
+       37 from another angle.
+     - **Target not met at 2 points** (converged in the polar, not as single points):
+       - E387 Re 1e5, 20 deg: 0 deg fails from the march and no angle within 4 deg converges from
+         it;
+       - Clark Y Re 5e5, 11 deg: 0 deg fails; the nearest angle that converges from the march is
+         12 deg, and the walk from 12 to 11 fails.
+
+       No point converged as a single point but not in the polar.
+     - **Measured option (diagnostic, not implemented):** continue past a failed walk to the next
+       nearest converged start, without the 4 deg bound. This reaches both points, with the polar's
+       solution (Cl equal to 1e-4):
+       - Clark Y from 8 deg, after 5 cold starts (266 s); 12 and 13 deg converge but their walks
+         fail;
+       - E387 from 15 deg, after 9 cold starts (187 s).
+     - **Different solutions, all on the sharp E387** (kept sharp here). 7 points converge in both
+       but to different solutions, |dCl| > 1e-3:
+       - 6 outside the attached-flow filter: 1e6 11 deg; 3e6 19 deg; 6e6 12, 16, 18 and 20 deg.
+         The single-point Cl is the closer one to XFOIL at these, except 1e6 11 deg (polar 1.164,
+         single 1.621, XFOIL 1.326).
+       - 1 inside the filter: 6e6, -1 deg; Cl 0.2739 polar, 0.2700 single, XFOIL 0.274.
+
+       Every open-edge point agrees to 3.6e-5 in Cl and 0.013 % in Cd. Through the interfaces, a
+       closed edge is now opened by default (item 2).
+     - **Labelling fix found by this comparison:** `reach_from_nearest` reported a walked point to
+       `on_result` before adding its "from <angle> deg:" prefix and earlier iterations. Benchmark
+       rows of walked points therefore showed the bare path (5 rows), and the report counted them
+       as reached directly. Fixed; the numbers are unchanged.
+2. **Sharp trailing edge, approved policy.** For viscous analysis through the interfaces, a closed
+   trailing edge is opened to `ViscousParams.closed_te_gap` = 0.0005 c (new parameter) with the gap
+   tool, and the result's `corrections` record it. `closed_te_gap` = 0 keeps the sharp edge, with
+   `WARN_CLOSED_TE_DRAG`.
+   - **The rule as set was not met** (step 1 after report 10): between 0.001 and 0.0005 c, NACA 2412
+     at Re 3e6, 5 deg changes Cl by 0.0056 (limit 0.005), and E387 at Re 3e6, 5 deg does not
+     converge at either gap.
+   - **Why 0.0005 c (user's decision):** the changes are first order in the gap (NACA 2412 Re 3e6,
+     5 deg, dCl per halving: 0.0100, 0.0056, 0.0026). The sharp path also gives converged but
+     wrong results (sharp NACA 2412 at Re 3e6, 0 deg: Cl 0.059 against XFOIL 0.234). 0.0005 c is
+     the smallest gap of the study at which the step to the next halving was measured.
+   - **Measured 0.0005 -> 0.00025 c**, over 0..10 deg: max rel dCd 0.15 / 0.32 / 0.27 / 0.15 % and
+     max dCl 0.0019 / 0.0034 / 0.0034 / 0.0011 (NACA 2412 Re 1e6 / 3e6, E387 Re 1e6 / 3e6); E387
+     Re 3e6 5 deg does not converge at either gap.
+   - The default trailing edge of `fl.Airfoil.naca` and of `generate_naca4` is **open** (unchanged).
+   - The benchmark solves the canonical files unchanged (SPEC.md 4.1), so its sharp E387 rows stay
+     sharp; the rerun through the new default is reported separately (below).
+   - **Rerun through the new default** (`solve_flow_sweep`, -4..20 deg; attached-flow filter of each
+     XFOIL polar, PANE 160). The XFOIL polars at Re 5e5 and 6e6 were generated for this; E387 at
+     0.001 c, Re 5e5 converges at 18 of 25 angles in XFOIL.
+
+     | section | Re | vs XFOIL sharp: conv., mean / max dCl, mean / max rel dCd, mean / max dCm | vs XFOIL 0.001 c: same |
+     |---|---|---|---|
+     | NACA 2412 closed | 5e5 | 15/15, 0.0192 / 0.0651, 2.4 / 6.7 %, 0.0041 / 0.0139 | 15/15, 0.0034 / 0.0125, 1.6 / 2.5 %, 0.0007 / 0.0023 |
+     | NACA 2412 closed | 1e6 | 14/14, 0.0207 / 0.0689, 1.5 / 5.1 %, 0.0045 / 0.0146 | 15/15, 0.0042 / 0.0126, 1.5 / 2.8 %, 0.0009 / 0.0025 |
+     | NACA 2412 closed | 3e6 | 18/18, 0.0196 / 0.0625, 1.0 / 2.9 %, 0.0043 / 0.0132 | 18/18, 0.0057 / 0.0218, 1.5 / 2.9 %, 0.0012 / 0.0041 |
+     | NACA 2412 closed | 6e6 | 18/19, 0.0209 / 0.0608, 1.1 / 2.8 %, 0.0047 / 0.0128 | 18/19, 0.0060 / 0.0185, 1.6 / 3.6 %, 0.0012 / 0.0036 |
+     | E387 | 5e5 | 13/13, 0.0113 / 0.0329, 1.8 / 16.3 %, 0.0025 / 0.0071 | 13/13, 0.0022 / 0.0067, 2.5 / 15.6 %, 0.0005 / 0.0019 |
+     | E387 | 1e6 | 13/13, 0.0114 / 0.0306, 1.3 / 5.7 %, 0.0025 / 0.0066 | 13/13, 0.0020 / 0.0062, 2.3 / 7.8 %, 0.0004 / 0.0012 |
+     | E387 | 3e6 | 13/14, 0.0118 / 0.0292, 1.1 / 5.3 %, 0.0026 / 0.0065 | 12/13, 0.0021 / 0.0064, 1.6 / 4.0 %, 0.0004 / 0.0014 |
+     | E387 | 6e6 | 16/16, 0.0142 / 0.0326, 1.5 / 6.6 %, 0.0032 / 0.0071 | 16/16, 0.0027 / 0.0104, 2.4 / 6.8 %, 0.0006 / 0.0023 |
+
+     - Against XFOIL at 0.001 c, every SPEC.md 4.1 target holds in every case.
+     - Against XFOIL sharp, the mean dCl is 0.011-0.021. That is XFOIL's own sharp-vs-gapped jump
+       (up to 0.042 in Cl, step 1).
+     - For E387 the old sharp path gave mean / max dCl 0.0054-0.0155 / up to 0.110 and max rel dCd
+       up to 34.6 % (`docs/benchmark_m3.md`); the new default gives max dCl 0.033 and max dCd 16.3 %.
+     - Not converged:
+       - NACA 2412: Re 5e5 20 deg; Re 6e6 1 deg (inside the filter);
+       - E387: Re 5e5 18-20 deg; Re 1e6 19 deg; Re 3e6 5 deg (inside the filter, the point that
+         also fails at 0.001 and 0.0005 c in step 1).
+     - Every result carries the correction.
+     - New test: sharp NACA 2412, Re 3e6, 0 deg is within 0.03 in Cl of XFOIL at 0.001 c (0.2425),
+       or reported not converged.
+3. **Low Re, proposal A approved.** SPEC.md 2, 4.1 and 5 and the v2.2 line are edited with the wording
+   of "C5", Step 3. `BenchmarkParams.reynolds_validated` is now (1e5, 2e5, 5e5, 1e6, 3e6, 6e6) and
+   `reynolds_low` is (5e4,), so that the reports follow SPEC.md (user's approval of A).
+   `docs/benchmark_m3.md` is updated. Later (M9) item added.
+4. **`run_case` calls `viscous.sweep`.** `viscous.sweep` now has the benchmark's per-point loop: a
+   point whose solve raises is recorded as not converged (reason "exception") and never walked to,
+   and an `on_result(alpha, result, seconds, walked, error)` hook reports every solve.
+   `run_case` only builds the rows and run times from that hook, so the angle-reaching logic exists
+   once. The Later item on the duplicate is closed. C3 run again on this code
+   (`benchmark_output/m3_r12`): all 1225 rows identical to the C5 run (converged, Cl, Cd, Cd TE, Cm,
+   transition). The only changes are the 5 path labels of the labelling fix; so the benchmark
+   tables are unchanged.
+
 ---
 
 ## Later
@@ -2667,11 +2783,12 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   for the Cl constraint, and the constraint solves again the candidates the objective already solved
   (no caching). Candidates for M7: cache solves by design vector, warm-start each candidate from the
   previous solution, fewer finite-difference solves.
+- M9 (user, after report 11): Validation statements say 'agreement with XFOIL', not experiment.
+  Consider comparing E387 at Re 1e5 to 3e5 with the NASA Langley wind-tunnel data (McGhee et al.,
+  NASA TM-4062, 1988); verify the citation and data licence before use, and do not bundle the data.
 - M9 (after C5): the README still describes the deleted v1.3.1 viscous paths (`vii.solve_vii`,
   `--vii`, one-way drag, roughness, post-stall); rewrite with the M9 README.
-- M3/M7 (after C5): `viscous.sweep` repeats the angle-reaching logic of
-  `benchmark.viscous_run.run_case` (which adds the benchmark's row bookkeeping and per-point timing);
-  they agree point for point (C5). Decide whether `run_case` should call `viscous.sweep`.
+- (Closed after report 11: `run_case` now calls `viscous.sweep`.)
 - M2: decide which NACA trailing edge (open or closed) is the default in v2.0.
 - M3: transpiration VII shows a panel-to-panel Cp oscillation over the last panels of the
   upper surface at 10 deg (NACA 2412, Re 1e6), with either trailing edge.

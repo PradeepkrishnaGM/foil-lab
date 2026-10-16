@@ -146,9 +146,12 @@ def _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params):
     return viscous_params(n_crit, params), trips_dict(trip_upper, trip_lower)
 
 
-def _viscous_result(vres, bodies, names, config, repanel: bool, prm, trip_upper, trip_lower) -> Result:
+def _viscous_result(vres, body, names, config, repanel: bool, prm, trip_upper, trip_lower,
+                    corrections=()) -> Result:
+    """``Result`` of one viscous solution on ``body``, the geometry that was solved (a closed
+    trailing edge already opened, see ``corrections``)."""
     from . import __version__
-    b = bodies[0]
+    b = body
     chord, point = config.reference()
     ps = core.PanelSet.from_bodies([b])
     cp_all = np.asarray(vres.cp) if vres.cp is not None else np.full(ps.num_panels, np.nan)
@@ -164,7 +167,8 @@ def _viscous_result(vres, bodies, names, config, repanel: bool, prm, trip_upper,
     el = ElementResult(names[0], float(cl), float(cm), cd, mid[:, 0].copy(), mid[:, 1].copy(),
                        np.asarray(cp).copy(), surface, len(mid))
     return Result(float(vres.alpha), float(cl), float(cm), cd, (el,), chord, point,
-                  bool(vres.converged), METHOD_VISCOUS, (), repanel, __version__, float(vres.reynolds) * chord,
+                  bool(vres.converged), METHOD_VISCOUS, tuple(corrections), repanel, __version__,
+                  float(vres.reynolds) * chord,
                   cd_friction=float(vres.cdf) / chord, cd_pressure=float(vres.cdp) / chord,
                   xtr_upper=float(vres.xtr_upper), xtr_lower=float(vres.xtr_lower),
                   iterations=int(vres.iterations), iterations_total=int(vres.iterations_total),
@@ -207,8 +211,11 @@ def analyze(geometry: Geometry, alpha: float, re: Optional[float] = None, repane
 
     ``re``: Reynolds number based on the reference chord (the solver works per unit length, so it
     receives ``re / ref_chord``); ``None`` or 0 gives the inviscid result.
-    With ``re`` the coupled viscous solver runs (one element, Mach 0), started from its starting
-    march (:func:`foil_lab.viscous.solve_point`): e^n transition with ``n_crit`` (default
+    With ``re`` the coupled viscous solver runs (one element, Mach 0): the direct start from the
+    march, and if that fails continuation from 0 deg (:func:`foil_lab.viscous.solve_single`; the
+    result's ``path`` says which). A closed trailing edge is opened to
+    ``params.ViscousParams.closed_te_gap`` of the chord first and ``corrections`` says so (0 keeps
+    the sharp edge, with a drag warning). e^n transition with ``n_crit`` (default
     ``params.VISCOUS.n_crit``), forced trips at x/c ``trip_upper`` / ``trip_lower`` (``None`` = free
     transition), other solver settings from ``params`` (default ``params.VISCOUS``). For several
     angles use :func:`polar`, which reaches each angle from a converged neighbour.
@@ -217,8 +224,9 @@ def analyze(geometry: Geometry, alpha: float, re: Optional[float] = None, repane
     if re:
         from . import viscous
         prm, trips = _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params)
-        vres = viscous.solve_point(bodies[0], float(alpha), float(re) / config.reference()[0], prm, trips)
-        return _viscous_result(vres, bodies, names, config, repanel, prm, trip_upper, trip_lower)
+        body, corr = viscous.open_closed_te(bodies[0], prm)
+        vres = viscous.solve_single(body, float(alpha), float(re) / config.reference()[0], prm, trips)
+        return _viscous_result(vres, body, names, config, repanel, prm, trip_upper, trip_lower, corr)
     ps = core.PanelSet.from_bodies(bodies)
     return _result(ps, core.assemble(ps), bodies, names, config, float(alpha), repanel)
 
@@ -239,9 +247,10 @@ def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = Non
     if re:
         from . import viscous
         prm, trips = _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params)
-        res = viscous.sweep(bodies[0], alphas, float(re) / config.reference()[0], prm, trips)
-        return Polar(tuple(_viscous_result(r, bodies, names, config, repanel, prm, trip_upper, trip_lower)
-                           for r in res))
+        body, corr = viscous.open_closed_te(bodies[0], prm)
+        res = viscous.sweep(body, alphas, float(re) / config.reference()[0], prm, trips)
+        return Polar(tuple(_viscous_result(r, body, names, config, repanel, prm, trip_upper, trip_lower,
+                                           corr) for r in res))
     ps = core.PanelSet.from_bodies(bodies)
     asm = core.assemble(ps)
     return Polar(tuple(_result(ps, asm, bodies, names, config, a, repanel) for a in alphas))

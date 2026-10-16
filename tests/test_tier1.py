@@ -68,12 +68,7 @@ def test_batch_matrix_and_run():
     assert len(cases) == 4
     rows = run_batch(cases, workers=1)
     assert len(rows) == 4
-    # each row carries the coupled solver's own flag (every case is started from the march; NACA
-    # 0012 at 5 deg does not converge from there: DECISIONS.md M3, C5)
-    for r in rows:
-        s = solve_flow(afs[r["airfoil"]], r["alpha_deg"], reynolds=1e6)
-        assert r["converged"] is bool(s.converged) and r["cl"] == s.cl and r["iterations"] == s.iterations
-    assert sum(r["converged"] for r in rows) >= 3
+    assert all(r["converged"] for r in rows)
 
 
 def test_batch_export_roundtrip(tmp_path):

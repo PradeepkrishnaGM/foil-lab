@@ -1063,12 +1063,13 @@ def reach_from_nearest(coords, alphas, results: list, cold: list, reynolds: floa
                 continue
             t0 = time.perf_counter()
             r = solve_point(coords, alphas[k], reynolds, params, trips, start, a_prev, geo)
+            if r.converged:          # labelled before it is reported (fixed after report 11)
+                r.path = f"from {alphas[j]:g} deg: {r.path}"
+                r.iterations_total += results[k].iterations_total
             if on_result is not None:
                 on_result(k, r, time.perf_counter() - t0)
             if not r.converged:
                 break
-            r.path = f"from {alphas[j]:g} deg: {r.path}"
-            r.iterations_total += results[k].iterations_total
             results[k] = r
             start, a_prev = r.state, alphas[k]
 
@@ -1094,14 +1095,21 @@ def polar(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trip
 
 
 def sweep(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trips=None,
-          geometry: Geometry | None = None) -> list:
+          geometry: Geometry | None = None, on_result=None) -> list:
     """Results at ``alphas`` (any order, returned in that order), reached as the benchmark reaches
-    them (``foil_lab.benchmark.viscous_run.run_case``): from the angle nearest 0 deg (starting march)
-    up through the larger angles, then from that angle's converged state down through the smaller
-    ones, each a polar point (:func:`polar`); then every point whose start from the march failed is
+    them (``foil_lab.benchmark.viscous_run.run_case`` calls this): from the angle nearest 0 deg
+    (starting march) up through the larger angles, then from that angle's converged state down
+    through the smaller ones, each a polar point (:func:`solve_point`, started from the last
+    converged angle as :func:`polar` does); then every point whose start from the march failed is
     reached from the nearest converged angle of its sweep, and else of the other sweep
     (:func:`reach_from_nearest`). Only how points are reached is chosen here; each result's
-    ``path`` says how it was reached and ``converged`` is that of :func:`solve_viscous`."""
+    ``path`` says how it was reached and ``converged`` is that of :func:`solve_viscous`.
+
+    A point whose solve raises is recorded as not converged (``reason`` "exception") and is never
+    walked to. ``on_result(alpha, result, seconds, walked, error)`` is called for every solve: the
+    points of the two sweeps (``walked`` False; ``error`` the exception text or None) and each point
+    a walk solves (``walked`` True)."""
+    import time
     geo = geometry or build_geometry(coords)
     vals = sorted({float(a) for a in alphas})
     if not vals:
@@ -1117,19 +1125,127 @@ def sweep(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trip
         start = a_prev = None
         if g == 1 and done[a0].converged:
             start, a_prev = done[a0].state, a0
-        res = polar(coords, sw, reynolds, params, trips, geo, start, a_prev)
-        cold = [False] * len(sw)
-        for i, r in enumerate(res):
-            cold[i] = start is None and (i == 0 or not any(q.converged for q in res[:i]))
-        reach_from_nearest(coords, sw, res, cold, reynolds, params, trips, geo)
+        res, cold = [], []
+        for a in sw:
+            t0 = time.perf_counter()
+            is_cold, err = start is None, None
+            try:
+                r = solve_point(coords, a, reynolds, params, trips, start, a_prev, geo)
+            except Exception as exc:  # recorded, never hidden
+                r = ViscousResult(alpha=a, reynolds=reynolds, converged=False, iterations=0,
+                                  reason="exception")
+                is_cold, err = False, f"{type(exc).__name__}: {exc}"
+            if on_result is not None:
+                on_result(a, r, time.perf_counter() - t0, False, err)
+            res.append(r)
+            cold.append(is_cold)
+            if r.converged:
+                start, a_prev = r.state, a
+        walked = None if on_result is None else (
+            lambda k, r, s, sw=sw: on_result(sw[k], r, s, True, None))
+        reach_from_nearest(coords, sw, res, cold, reynolds, params, trips, geo, on_result=walked)
         done.update(zip(sw, res))
         all_a += sw
         all_r += res
         all_cold += cold
         group += [g] * len(sw)
     order = sorted(range(len(all_a)), key=lambda q: all_a[q])
+    a_c = [all_a[q] for q in order]
     res_c = [all_r[q] for q in order]
-    reach_from_nearest(coords, [all_a[q] for q in order], res_c, [all_cold[q] for q in order], reynolds,
-                       params, trips, geo, group=[group[q] for q in order])
-    done.update({all_a[q]: r for q, r in zip(order, res_c)})
+    walked = None if on_result is None else (lambda k, r, s: on_result(a_c[k], r, s, True, None))
+    reach_from_nearest(coords, a_c, res_c, [all_cold[q] for q in order], reynolds, params, trips, geo,
+                       on_result=walked, group=[group[q] for q in order])
+    done.update(dict(zip(a_c, res_c)))
     return [done[float(a)] for a in alphas]
+
+
+def _steps(a_from: float, a_to: float, step: float) -> list:
+    """Angles from ``a_from`` (excluded) to ``a_to`` (included) in steps of ``step``."""
+    n = int(np.ceil(abs(a_to - a_from) / step - 1e-9))
+    d = np.sign(a_to - a_from) * step
+    return [float(a_from + k * d) for k in range(1, n)] + [float(a_to)]
+
+
+def solve_single(coords, alpha: float, reynolds: float, params: ViscousParams = VISCOUS, trips=None,
+                 geometry: Geometry | None = None) -> ViscousResult:
+    """One operating point on its own (``fl.analyze``, ``solver.solve_flow``), reached as a polar
+    reaches its angles when the direct start fails (user, after report 11). In order, until one
+    converges:
+
+    1. direct: the start from the march at ``alpha`` (:func:`solve_point`, with its repair
+       restarts);
+    2. continuation from 0 deg: the start from the march at 0 deg, then the angles towards
+       ``alpha`` in steps of ``params.single_point_step``, each started from the last converged one
+       (:func:`polar`);
+    3. only if 0 deg does not converge from the march: the angle nearest ``alpha`` (in steps of
+       ``single_point_step``, at most ``single_point_reach`` away, ties towards 0 deg) that converges
+       from the march, then the angles towards ``alpha`` as in 2 (as :func:`reach_from_nearest`
+       starts from the nearest converged angle).
+
+    ``path`` says how the point was reached: "direct: <path>", "continuation from 0 deg: <path>"
+    or "from <angle> deg: <path>"; if every attempt fails it is "direct: <path>; continuation
+    from 0 deg failed" (or "... no converged start within <reach> deg"). ``iterations`` are those
+    of the final solve, ``iterations_total`` all Newton iterations of every attempt. ``converged``
+    is that of :func:`solve_viscous` (the residual criteria) at ``alpha``."""
+    geo = geometry or build_geometry(coords)
+    alpha = float(alpha)
+    direct = solve_point(coords, alpha, reynolds, params, trips, None, None, geo)
+    direct.path = f"direct: {direct.path or direct.reason}"
+    if direct.converged:
+        return direct
+    total = direct.iterations_total
+    step = float(params.single_point_step)
+
+    def walk(a_start: float, r_start: ViscousResult, label: str):
+        nonlocal total
+        res = polar(coords, _steps(a_start, alpha, step), reynolds, params, trips, geo,
+                    r_start.state, a_start)
+        total += sum(q.iterations_total for q in res)
+        r = res[-1]
+        if r.converged:
+            r.path = f"{label}: {r.path}"
+            r.iterations_total = total
+            return r
+        return None
+
+    r0 = direct if alpha == 0.0 else solve_point(coords, 0.0, reynolds, params, trips, None, None, geo)
+    if alpha != 0.0:
+        total += r0.iterations_total
+    if r0.converged:
+        r = walk(0.0, r0, "continuation from 0 deg")
+        if r is not None:
+            return r
+        direct.path += "; continuation from 0 deg failed"
+    else:
+        reach = float(params.single_point_reach)
+        offsets = [k * step for k in range(1, int(np.floor(reach / step + 1e-9)) + 1)]
+        cands = sorted({alpha - o for o in offsets} | {alpha + o for o in offsets}, key=lambda a: (abs(a - alpha), abs(a)))
+        for a_c in (a for a in cands if a != 0.0):
+            rc = solve_point(coords, a_c, reynolds, params, trips, None, None, geo)
+            total += rc.iterations_total
+            if rc.converged:
+                r = walk(a_c, rc, f"from {a_c:g} deg")
+                if r is not None:
+                    return r
+                direct.path += f"; 0 deg failed; from {a_c:g} deg failed"
+                break
+        else:
+            direct.path += f"; 0 deg failed; no converged start within {reach:g} deg"
+    direct.iterations_total = total
+    return direct
+
+
+def open_closed_te(coords, params: ViscousParams = VISCOUS):
+    """``(coords, corrections)`` for viscous analysis: a closed (sharp) trailing edge
+    (``inviscid.has_open_te`` false) opened to ``params.closed_te_gap`` of the chord with
+    ``geometry.set_trailing_edge_gap``, recorded as a correction (user, after report 11). An open
+    edge, or ``closed_te_gap`` 0, is returned unchanged with no correction."""
+    from .geometry import set_trailing_edge_gap
+    c = np.asarray(coords, dtype=float)
+    gap = float(params.closed_te_gap)
+    if gap <= 0.0 or inviscid.has_open_te(c):
+        return c, []
+    te = 0.5 * (c[0] + c[-1])
+    chord = float(np.max(np.hypot(*(c - te).T)))
+    return set_trailing_edge_gap(c, gap * chord), [
+        f"closed trailing edge opened to {gap:g} c for viscous analysis (params.ViscousParams.closed_te_gap)"]

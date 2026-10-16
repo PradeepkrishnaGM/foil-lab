@@ -10,7 +10,10 @@ so off-body velocities can be rebuilt from the same singularity model.
 
 Viscous analysis is for one body at Mach 0 in this version (DECISIONS.md M3, Q4 and C5); other
 requests with a Reynolds number raise ``NotImplementedError`` instead of returning a result
-without viscous drag.
+without viscous drag. A closed (sharp) trailing edge is opened to ``ViscousParams.closed_te_gap``
+for viscous analysis and the result's ``corrections`` say so (user, after report 11); a single
+point whose direct start fails is reached by continuation (:func:`foil_lab.viscous.solve_single`,
+its ``path`` says how).
 """
 
 from __future__ import annotations
@@ -54,6 +57,7 @@ class SolutionData:
     residual: float = float("nan")
     path: str = ""
     warnings: List[str] = field(default_factory=list)
+    corrections: List[str] = field(default_factory=list)  # e.g. the closed trailing edge opened
     viscous: object = field(default=None, repr=False)   # the ``viscous.ViscousResult``
 
     @property
@@ -120,9 +124,10 @@ def _check_viscous(num_bodies: int, mach: float) -> None:
                                   "use mach=0 with a Reynolds number, or reynolds=0")
 
 
-def solution_from_viscous(body: np.ndarray, vres, mach: float = 0.0, aspect_ratio: float = 0.0
-                          ) -> SolutionData:
-    """``SolutionData`` of one coupled viscous result (``viscous.ViscousResult``) on ``body``."""
+def solution_from_viscous(body: np.ndarray, vres, mach: float = 0.0, aspect_ratio: float = 0.0,
+                          corrections: Sequence[str] = ()) -> SolutionData:
+    """``SolutionData`` of one coupled viscous result (``viscous.ViscousResult``) on ``body`` (the
+    geometry that was solved)."""
     ps = core.PanelSet.from_bodies([body])
     alpha = float(vres.alpha)
     cp = np.asarray(vres.cp) if vres.cp is not None else np.full(ps.num_panels, np.nan)
@@ -136,7 +141,7 @@ def solution_from_viscous(body: np.ndarray, vres, mach: float = 0.0, aspect_rati
         coords_list=[body], panels=ps, converged=bool(vres.converged), cd_friction=float(vres.cdf),
         cd_pressure=float(vres.cdp), xtr_upper=float(vres.xtr_upper), xtr_lower=float(vres.xtr_lower),
         iterations=int(vres.iterations), residual=vres.residual, path=vres.path,
-        warnings=list(vres.warnings), viscous=vres)
+        warnings=list(vres.warnings), corrections=list(corrections), viscous=vres)
 
 
 def solve_flow(
@@ -155,9 +160,11 @@ def solve_flow(
     """Solve the flow over one or more bodies.
 
     ``reynolds`` 0: inviscid core (Kármán-Tsien on Cp, aspect-ratio correction). ``reynolds`` > 0:
-    the coupled viscous solver (:func:`foil_lab.viscous.solve_point`, started from its starting
-    march; one body, Mach 0), with e^n transition (``n_crit``, default ``params.VISCOUS.n_crit``)
-    and forced trips ``trip_x_upper`` / ``trip_x_lower`` (x/c; ``None`` or 0 = free transition).
+    the coupled viscous solver (:func:`foil_lab.viscous.solve_single`: the direct start, else
+    continuation; one body, Mach 0), with e^n transition (``n_crit``, default
+    ``params.VISCOUS.n_crit``) and forced trips ``trip_x_upper`` / ``trip_x_lower`` (x/c; ``None``
+    or 0 = free transition). A closed trailing edge is opened to ``params.closed_te_gap`` first
+    (recorded in ``corrections``; 0 keeps it sharp).
 
     real_body_index : with more than one body, the body whose loads are reported (None: all
         bodies together).
@@ -166,9 +173,11 @@ def solve_flow(
     if reynolds > 0:
         from . import viscous
         _check_viscous(len(bodies), mach)
-        vres = viscous.solve_point(bodies[0], float(alpha_deg), float(reynolds),
-                                   viscous_params(n_crit, params), trips_dict(trip_x_upper, trip_x_lower))
-        return solution_from_viscous(np.asarray(bodies[0], dtype=float), vres, mach, aspect_ratio)
+        prm = viscous_params(n_crit, params)
+        body, corr = viscous.open_closed_te(bodies[0], prm)
+        vres = viscous.solve_single(body, float(alpha_deg), float(reynolds), prm,
+                                    trips_dict(trip_x_upper, trip_x_lower))
+        return solution_from_viscous(body, vres, mach, aspect_ratio, corr)
 
     ps = core.PanelSet.from_bodies(bodies)
     sol = core.solve(ps, alpha_deg)
@@ -194,11 +203,13 @@ def solve_flow_sweep(coords: np.ndarray, alphas: Sequence[float], reynolds: floa
                      trip_x_lower: Optional[float] = None, n_crit: Optional[float] = None,
                      params: Optional[ViscousParams] = None) -> List[SolutionData]:
     """Viscous results at ``alphas`` (in that order) for one body, reached with warm starts
-    (:func:`foil_lab.viscous.sweep`); each result says how it was reached (``path``)."""
+    (:func:`foil_lab.viscous.sweep`); each result says how it was reached (``path``). A closed
+    trailing edge is opened as in :func:`solve_flow`."""
     from . import viscous
     bodies = geom_to_coords_list(coords)
     _check_viscous(len(bodies), mach)
-    body = np.asarray(bodies[0], dtype=float)
-    res = viscous.sweep(body, [float(a) for a in alphas], float(reynolds), viscous_params(n_crit, params),
+    prm = viscous_params(n_crit, params)
+    body, corr = viscous.open_closed_te(bodies[0], prm)
+    res = viscous.sweep(body, [float(a) for a in alphas], float(reynolds), prm,
                         trips_dict(trip_x_upper, trip_x_lower))
-    return [solution_from_viscous(body, r, mach, aspect_ratio) for r in res]
+    return [solution_from_viscous(body, r, mach, aspect_ratio, corr) for r in res]

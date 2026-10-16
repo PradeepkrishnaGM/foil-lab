@@ -21,7 +21,7 @@ A claim may appear in the README only if a test or a benchmark figure backs it.
 **In v2.0**
 
 - Reproducible benchmark against a locally installed XFOIL, plus exact-solution tests.
-- One inviscid solver and one coupled viscous solver, valid at Re from 5e5 to 6e6.
+- One inviscid solver and one coupled viscous solver, valid at Re from 1e5 to 6e6.
 - Geometry model with elements, arc-length repanelling and working transforms.
 - Plain flaps with hinge moment, and polars across flap angle.
 - Multi-element sections: inviscid, then a boundary layer per element.
@@ -34,7 +34,7 @@ A claim may appear in the README only if a test or a benchmark figure backs it.
 
 - v2.1: CST and Bezier parameterisation, multi-point optimisation, 360° polar extrapolation,
   export to QBlade and XFLR5 formats, new GUI features.
-- v2.2: low-Reynolds-number accuracy (laminar separation bubbles) and stall prediction, only if
+- v2.2: low-Reynolds-number accuracy below Re 1e5 (laminar separation bubbles) and stall prediction, only if
   the benchmark shows a method that works.
 
 **Not planned**
@@ -80,8 +80,8 @@ The benchmark always reports the measured numbers, whether or not a target is me
   - Sections: NACA 0012, 2412, 4412, 23012 (open trailing edge of NACA Report 460, thickness
     coefficient -0.1015), plus Clark Y and Eppler E387, downloaded by name from the UIUC Airfoil
     Coordinates Database.
-  - Validated range: Re = 5e5, 1e6, 3e6, 6e6. N_crit = 9. Mach = 0.
-  - Reported but outside the validated range: Re = 5e4, 1e5, 2e5.
+  - Validated range: Re = 1e5, 2e5, 5e5, 1e6, 3e6, 6e6. N_crit = 9. Mach = 0.
+  - Reported but outside the validated range: Re = 5e4.
   - Angle of attack from -4° to +20° in 1° steps. Every angle where XFOIL converges is kept. A
     skipped angle is retried once from a fresh start directly at that angle and flagged as
     retried; an angle that still fails is recorded as not converged and never interpolated.
@@ -94,7 +94,7 @@ The benchmark always reports the measured numbers, whether or not a target is me
   converge are excluded from the metrics and counted next to them.
 - Attached-flow filter: angles from -4° up to, but not including, the first positive angle at
   which XFOIL's `Cl` reaches 0.9 times its maximum over the positive-angle sweep.
-- Targets, for sections with an open trailing edge, Re 5e5 to 6e6, inside the attached-flow
+- Targets, for sections with an open trailing edge, Re 1e5 to 6e6, inside the attached-flow
   filter, met at every Reynolds number separately: at least 95 % of the points where XFOIL
   converged are converged; mean |ΔCl| ≤ 0.03 and max ≤ 0.10; mean relative |ΔCd| ≤ 10 % and
   max ≤ 30 %; mean |ΔCm| ≤ 0.01 and max ≤ 0.03.
@@ -229,7 +229,7 @@ Repair only. After v2.0 the GUI:
 ## 5. Limits to state in the README
 
 - Subsonic, attached or mildly separated flow. Not for transonic flow.
-- Validated at Re from 5e5 to 6e6. Lower Reynolds numbers are reported in the benchmark but
+- Validated at Re from 1e5 to 6e6. Lower Reynolds numbers are reported in the benchmark but
   not validated.
 - Maximum lift and post-stall behaviour are approximate.
 - Multi-element results exclude wake merging and slot separation.

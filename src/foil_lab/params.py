@@ -87,8 +87,8 @@ class BenchmarkParams:
 
     sections: tuple[str, ...] = ("NACA0012", "NACA2412", "NACA4412", "NACA23012",
                                  "CLARKY", "E387", "E387_GAP025")
-    reynolds_validated: tuple[float, ...] = (5e5, 1e6, 3e6, 6e6)
-    reynolds_low: tuple[float, ...] = (5e4, 1e5, 2e5)
+    reynolds_validated: tuple[float, ...] = (1e5, 2e5, 5e5, 1e6, 3e6, 6e6)
+    reynolds_low: tuple[float, ...] = (5e4,)
     pane_nodes: tuple[int, int] = (160, 240)
     num_panels: int = 160
     attached_fraction: float = 0.9
@@ -174,6 +174,25 @@ class ViscousParams:
         full residual; needs JAX). Both are tested against each other and finite differences.
         Default complex step (our choice: 0.08 s per Jacobian against 7.9 s for eager JAX at 161
         stations). Approved.
+    closed_te_gap:
+        Viscous analysis through the interfaces (``fl.analyze``, ``fl.polar``, ``solver.solve_flow``
+        and everything built on them) opens a closed (sharp) trailing edge to this gap, as a
+        fraction of the chord, with ``geometry.set_trailing_edge_gap``, and records it in the
+        result's corrections. The sharp-edge treatment is resolution-dependent and can converge to
+        wrong results; the open treatment converges as the gap goes to zero (first order: Cl
+        changes 0.0100, 0.0056, 0.0026 per halving from 0.002 c). 0.0005 c approved by the user
+        after report 11 (DECISIONS.md M3, "Sharp trailing edge, approved policy"). 0 keeps the sharp
+        edge; its result then carries the closed-edge drag warning. The benchmark solves the
+        canonical files unchanged (SPEC.md 4.1).
+    single_point_step:
+        A single operating point whose start from the march does not converge is reached by
+        continuation from 0 deg in steps of this size (deg), each warm-started from the last
+        converged angle, as a polar reaches its angles. 1 deg set by the user after report 11.
+    single_point_reach:
+        If 0 deg itself does not converge, the start is taken from the nearest angle (in steps of
+        ``single_point_step`` around the target) that converges from the march, at most this far
+        from the target (deg). 4 deg is our choice (the bound keeps the number of cold starts
+        finite); for the user's approval.
     """
 
     closure_set: str = "fidkowski2022"
@@ -186,6 +205,9 @@ class ViscousParams:
     init_hk_max_lam: float = 3.8
     init_hk_max_turb: float = 2.5
     jacobian: str = "complex_step"
+    closed_te_gap: float = 0.0005
+    single_point_step: float = 1.0
+    single_point_reach: float = 4.0
 
 
 XFOIL = XfoilParams()

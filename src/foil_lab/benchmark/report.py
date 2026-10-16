@@ -266,7 +266,7 @@ def build_markdown(cases: list[CaseResult], bench: BenchmarkParams, plots: bool)
             label = "XFOIL 240 vs 160 (paneling sensitivity)" if m == "sens" else METHOD_LABEL[m]
             verdict = ", ".join(f"{k} {'met' if ok else 'not met'}" for k, ok in met) or "-"
             rows.append([label] + _stats_cells(st, m != "inviscid") + [verdict])
-        lines += [f"Validated range pooled (Re 5e5 to 6e6), {group}:", "",
+        lines += [f"Validated range pooled (Re {min(res_valid):g} to {max(res_valid):g}), {group}:", "",
                   _md(["method"] + STAT_HEAD + ["provisional targets"], rows), ""]
     lines += ["## XFOIL convergence inside the attached-flow filter", "",
               _md(["section", "Re", "filter angles", "alpha cut-off (deg)",

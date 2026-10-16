@@ -98,7 +98,7 @@ def cmd_info(args):
     print(f"  PySide6 (GUI): {have('PySide6')}")
     print(f"  pyarrow:       {have('pyarrow')}")
     print("\nMethods: inviscid (no --re); coupled viscous-inviscid with e^n transition (--re, "
-          "one body, Mach 0; validated for Re 5e5 to 6e6).")
+          "one body, Mach 0; validated for Re 1e5 to 6e6).")
 
 
 def build_parser():
