@@ -2951,8 +2951,82 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
    15 deg from 10/20).
 5. **Fast suite:** if a change takes it over 55 s, the slowest new tests move to `slow`.
 
+### Step 5: full flap benchmark (docs/benchmark_m4.md; benchmark_output/m4_full, not in git)
+
+- 60 cases (NACA 0012 and 2412; 0, 5, 10, 15, 20 deg; Re 1e5, 2e5, 5e5, 1e6, 3e6, 6e6), 25 angles each:
+  5589 s wall time (XFOIL, 240 processes of polars and dumps, about 45 min; Foil-Lab 1500 points, 16207 s of
+  solver time, 10.8 s per point on 5 workers, about 50 min). Output 54 MB: surface dumps 6.5 MB (120
+  float32 files), references 0.5 MB, XFOIL logs 47 MB (the per-process logs the runner always keeps).
+- **Validated flap range (decision 1): 0 deg.** No deflection above 0 meets every target at every Re. The
+  first failures: 5 deg at Re 6e6 (Foil-Lab converges at 94.3 % of the filter points, target 95 %); 10 deg
+  at Re 2e5 (91.7 %, max dCl 0.1017 against 0.10) and Re 6e6 (87.9 %); 20 deg fails the mean dCl at
+  every Re (0.034-0.041 against 0.03); 15 deg fails it at Re 1e5 and 2e5 (0.032, 0.039) and fails the
+  convergence target at Re 5e5 (94.7 %) and 6e6 (77.4 %); 20 deg Re 6e6 converges at 78.6 %. 15 deg
+  passes at Re 1e6 and 3e6 only. 20 deg mean rel dCd 11.2 % at
+  Re 5e5. The Cm target is met everywhere. Table in docs/benchmark_m4.md. The unconverged points are at
+  low angles (-4 to 4 deg), mostly at Re 6e6 (the six at NACA 2412 F20 are -4 to 1 deg).
+- **Hinge moment**, filter points where both codes converged (docs/benchmark_m4.md, section 3):
+  - (a) Foil-Lab `ch` against XFOIL's Cp and Cf integrated with our definition: 767 points, mean 0.00036,
+    max 0.00228; quantiles 50 / 90 / 95 / 99 % 0.00018 / 0.00084 / 0.00107 / 0.00168. Per (deflection, Re)
+    cell mean 0.00006 (0 deg) to 0.00097 (20 deg), max 0.00228 (10 deg, Re 2e5). XFOIL's own 240-against-160
+    change of the same integral: mean 0.00003, 95 % 0.00009, max 0.00056.
+  - (b) against `-Chinge`: 781 points, mean 0.00077, max 0.00351; every cell meets the loose target (mean
+    <= 0.0025, max <= 0.004): cell means 0.00015-0.00181, cell maxima up to 0.00351 (20 deg, Re 5e5).
+    XFOIL's 240-against-160 change of `Chinge`: cell means 0.00001-0.00018, max 0.00146.
+  - Friction is 0.22 % of Foil-Lab's `ch` (mean absolute values).
+  - The definition gap is visible: the cell means of (b) are 2 to 3.5 times those of (a) at every
+    deflection (0 deg 0.0002 against 0.00007; 10 deg 0.0009 against 0.0002; 20 deg 0.0017 against 0.0008).
+  - **Proposed target for (a), from the full run, for the user's approval:** per (deflection, Re) cell mean
+    |d ch| <= 0.0012 and max <= 0.0030, inside the attached-flow filter. Basis: the worst cell mean is
+    0.00097 and the worst cell maximum 0.00228 (margins 1.24 and 1.3); XFOIL's own sensitivity (mean 0.00003,
+    max 0.00056) is well below, so the target tests the solver and not the reference's panelling. Absolute,
+    as the loose (b) target; the error grows with the deflection in step with |ch| (mean |ch| 0.003 at 0 deg
+    to 0.013 at 20 deg, (a) about 2-6 % of it).
+- Non-flap M3 benchmark unchanged: the full matrix (49 cases, 1225 rows, including Re 5e4) rerun with the
+  M4 code is bit-identical to the report 12 run (`benchmark_output/m3_r12`) in every column except the
+  run time and the new `ch` columns (0 cell differences); 66 min on 5 workers.
+
+### Step 6: `flap_polars` (`foil_lab/flap_polars.py`)
+
+- `fl.flap_polars(airfoil, hinge_x, deflections, alphas, re=None, hinge_y=0.5, **polar_kwargs)` returns a
+  `FlapPolarSet` (tables of Cl, Cd, Cm, ch over deflection and angle, the solved `Polar`s, NaN where not
+  converged). `.at(deflection, alphas=None)` returns a `FlapSlice` (arrays, `converged`, `interpolated`);
+  `.value(quantity, alpha, deflection)`; `.leave_one_out(deflection, use=None)`.
+- Interpolation: PCHIP (Fritsch & Carlson 1980) in the deflection, per angle; linear for two deflections;
+  a solved deflection returns its values; no extrapolation (`ValueError`); no interpolation in alpha; a point
+  is NaN if any node the interval's interpolant uses (the interval's two nodes and their neighbours)
+  did not converge; a warning for deflections more than 10 deg apart. `Polar.ch` added.
+- **Leave-one-out errors on the Foil-Lab benchmark data** (both sections pooled, mean / max over the
+  attached-flow angles of the left-out case; full table in docs/benchmark_m4.md, section 5):
+
+  | left out, from | Re | dCl | dCm | d ch | rel dCd |
+  |---|---|---|---|---|---|
+  | 10 from 0/5/15/20 | 1e5 | 0.0176 / 0.084 | 0.0030 / 0.011 | 0.00033 / 0.00075 | 1.8 % / 15 % |
+  | | 1e6 | 0.027 / 0.076 | 0.0045 / 0.012 | 0.00046 / 0.0015 | 4.1 % / 16 % |
+  | | 3e6 | 0.017 / 0.043 | 0.0032 / 0.008 | 0.00058 / 0.0013 | 3.8 % / 11 % |
+  | | 6e6 | 0.015 / 0.030 | 0.0030 / 0.006 | 0.00064 / 0.0010 | 3.2 % / 7 % |
+  | 15 from 10/20 | 1e5 | 0.017 / 0.080 | 0.0031 / 0.010 | 0.00038 / 0.0010 | 3.3 % / 21 % |
+  | | 1e6 | 0.046 / 0.198 | 0.0081 / 0.036 | 0.00070 / 0.0019 | 21 % / 93 % |
+  | | 3e6 | 0.024 / 0.117 | 0.0038 / 0.020 | 0.00049 / 0.00095 | 15 % / 77 % |
+  | | 6e6 | 0.022 / 0.088 | 0.0033 / 0.017 | 0.00050 / 0.00090 | 12 % / 42 % |
+
+  Over all converged angles (including stall) the maxima are larger (dCl up to 0.39). Reading: with 5 deg
+  spacing the interpolated Cl and Cm are good to about 0.02 / 0.004 on average, ch to 0.0005, Cd to a few
+  percent; with 10 deg spacing (15 from 10/20, linear) Cd and Cl errors are several times larger, near
+  separation up to 0.2 in Cl. The error is of the same size as the solver's own difference from XFOIL at
+  these deflections, so the interpolated polar is only as good as the 5 deg spacing and is not better
+  than the solved ones.
+
 ## Later
 
+- M4 (after the full run): Foil-Lab does not converge at several low angles (-4 to 4 deg) of the flap cases at
+  Re 6e6 (NACA 0012 F15: -4, -1, 0, 1; NACA 2412 F20: -4 to 1; in the filter 2-6 points per case) and at 10 deg
+  Re 2e5 (91.7 % of the pooled filter points). Find the cause (start from the march or the
+  continuation from 0 deg at a flapped section's hinge); this is what prevents 5 and 10 deg from
+  being validated.
+- M4 (after the full run): the Cl error of the flap cases grows with the deflection (mean dCl 0.002-0.008 at
+  0 deg, 0.021-0.040 at 15 deg, 0.034-0.041 at 20 deg) and is mostly Foil-Lab's lift being lower than
+  XFOIL's; the inviscid flow agrees to 0.003. Flap boundary layer and wake treatment.
 - M4 (after the pilot): flap at 20 deg, Foil-Lab's Cl is 0.04 and Cd 10 % below XFOIL's over the
   attached range (inviscid agrees to 0.003). Find the cause (flap boundary layer, wake, separation
   handling) before the 15 and 20 deg targets are set.
