@@ -122,6 +122,7 @@ def test_attached_filter_empty_without_positive_points():
     assert filt == [] and cut is None
 
 
+@pytest.mark.slow
 def test_report_command_never_writes_the_baseline_document(tmp_path, monkeypatch):
     """'report' writes only into the output folder; docs/baseline_v1.3.1.md is left alone."""
     from foil_lab.benchmark.__main__ import main

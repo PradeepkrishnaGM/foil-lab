@@ -22,7 +22,8 @@ gradient-based optimizer (SLSQP), with bounds and geometry constraints
 (thickness, trailing-edge closure) enforced directly.
 
 For purely inviscid objectives (target Cl, match Cp) the JAX core is used. For
-L/D, which needs viscous drag, the NumPy viscous path (``solve_flow``) is used.
+L/D, which needs viscous drag, the coupled viscous-inviscid solver (``solve_flow`` with a
+Reynolds number, :mod:`foil_lab.viscous`) is used.
 
 Trailing edge
 -------------
@@ -88,6 +89,7 @@ class DesignResult:
     n_evals: int
     message: str
     history: List[float] = field(default_factory=list)
+    n_failed: int = 0          # maximize_ld: candidates whose viscous solve did not converge
 
 
 def _vec_to_params(x: np.ndarray) -> Dict[str, float]:
@@ -213,7 +215,6 @@ def design_for_cl(target_cl: float, alpha_deg: float = 5.0,
 def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
                 num_panels: int = 120, min_thickness: float = 0.08,
                 max_thickness: float = 0.18, target_cl: Optional[float] = None,
-                use_vii: bool = True,
                 start: Optional[Dict[str, float]] = None,
                 bounds: Optional[Dict[str, Tuple[float, float]]] = None,
                 max_iter: int = 30, trailing_edge: Optional[str] = None) -> DesignResult:
@@ -221,11 +222,12 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
 
     Drag source
     -----------
-    By default uses the **VII** viscous drag (physically meaningful), which is
-    essential here: the one-way integral-BL drag is too optimistic and unstable
-    to optimize against (it rewards unrealistically thick/cambered shapes). With
-    ``use_vii=False`` the faster one-way drag is used, but the result should be
-    treated as illustrative only.
+    Lift and drag come from the coupled viscous-inviscid solver (``solve_flow`` with
+    ``reynolds``). During the search each candidate is solved from the direct start only (no
+    continuation, ``fallback=False``): a candidate that does not converge from it counts as a
+    failed candidate, is penalised and is never used for L/D (user, after report 12). The result
+    reports how many failed (``n_failed``). The final design is solved with the full single-point
+    logic (:func:`foil_lab.viscous.solve_single`); ``success`` needs it to converge.
 
     Constraint
     ----------
@@ -241,23 +243,27 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
     history: List[float] = []
     n_eval = [0]
 
-    def _solve(coords):
-        if use_vii:
-            from .vii import solve_vii
-            r = solve_vii(coords, alpha_deg, reynolds=reynolds,
-                          max_iter=120, tol=1e-3)
-            return r.solution.cl, max(r.cd_wake, 1e-5), r.converged
-        s = solve_flow(coords, alpha_deg, reynolds=reynolds)
-        return s.cl, max(s.cd_total, 1e-5), True
+    n_failed = [0]
+
+    def _solve(coords, final=False):
+        try:
+            s = solve_flow(coords, alpha_deg, reynolds=reynolds, fallback=final)
+        except (FloatingPointError, np.linalg.LinAlgError, ValueError):
+            s = None
+        if s is None or not s.converged:
+            if not final:
+                n_failed[0] += 1
+            return (np.nan, np.nan, False) if s is None else (s.cl, s.cd_total, False)
+        return s.cl, s.cd_total, True
 
     def neg_ld(x):
         n_eval[0] += 1
         coords = generate_parsec(space.params(x), num_panels)
         cl, cd, conv = _solve(coords)
-        # Guard against the optimizer exploiting non-converged VII cases (where
+        # Guard against the optimizer exploiting non-converged cases (where
         # cd can collapse to a meaningless tiny value, faking a huge L/D) and
         # against an unphysically small drag floor.
-        if not conv or cd < 1e-4:
+        if not conv or not cd >= 1e-4:
             history.append(0.0)
             return 1e3              # large penalty -> optimizer avoids these
         ld = cl / cd
@@ -271,8 +277,10 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
             generate_parsec(space.params(x), num_panels))},
     ]
     if target_cl is not None:
-        cons.append({"type": "ineq", "fun": lambda x: 0.03 - abs(
-            _solve(generate_parsec(space.params(x), num_panels))[0] - target_cl)})
+        def _cl_margin(x):
+            cl_x = _solve(generate_parsec(space.params(x), num_panels))[0]
+            return 0.03 - abs(cl_x - target_cl) if np.isfinite(cl_x) else -1.0   # failed: violated
+        cons.append({"type": "ineq", "fun": _cl_margin})
 
     res = minimize(neg_ld, x0, method="SLSQP",
                    bounds=blist, constraints=cons,
@@ -280,13 +288,13 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
 
     params = space.params(res.x)
     coords = generate_parsec(params, num_panels)
-    cl, cd, conv = _solve(coords)
+    cl, cd, conv = _solve(coords, final=True)
     return DesignResult(
-        params=params, coords=coords, success=res.success,
+        params=params, coords=coords, success=bool(res.success and conv),
         objective=float(cl / cd), n_evals=n_eval[0],
         message=f"L/D={cl/cd:.1f} (Cl={cl:.3f}, Cd={cd:.5f}, "
-                f"{'VII' if use_vii else '1-way'}{'' if conv else ', NOT converged'})",
-        history=history)
+                f"viscous{'' if conv else ', NOT converged'}; {n_failed[0]} candidates failed)",
+        history=history, n_failed=n_failed[0])
 
 
 # --------------------------------------------------------------------------- #

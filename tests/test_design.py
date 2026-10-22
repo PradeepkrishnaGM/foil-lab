@@ -66,3 +66,28 @@ def test_trailing_edge_type_fixed_within_one_optimisation():
     opened = design_for_cl(target_cl=0.8, alpha_deg=5.0, num_panels=80, max_iter=15,
                            trailing_edge="open")
     assert opened.params["dy_te"] >= DESIGN.min_te_gap
+
+
+@pytest.mark.slow
+def test_maximize_ld_runs_on_the_coupled_viscous_solver(monkeypatch):
+    """Design smoke test (C5): every L/D evaluation is the coupled viscous solver at the requested
+    Reynolds number, the search from the direct start only, and the returned design's final solve
+    (full single-point logic) converged. Reduced settings (60 panels, 2 optimiser iterations, one
+    angle) for about 2 minutes; the full demo is far slower (DECISIONS.md, Later, M7 speed)."""
+    from foil_lab import design
+    calls = []
+    real = design.solve_flow
+
+    def spy(*a, **kw):
+        s = real(*a, **kw)
+        calls.append((kw.get("reynolds"), bool(s.converged), s.iterations, kw.get("fallback")))
+        return s
+
+    monkeypatch.setattr(design, "solve_flow", spy)
+    r = design.maximize_ld(alpha_deg=4.0, reynolds=3e6, num_panels=60, max_iter=2)
+    assert calls and all(re == 3e6 and it > 0 for re, _, it, _ in calls)   # Newton iterations ran
+    assert calls[-1][3] is True and all(fb is False for *_, fb in calls[:-1])
+    assert calls[-1][1], "the returned design's final viscous solve did not converge"
+    assert r.n_failed == sum(not c for _, c, _, _ in calls[:-1])
+    assert "NOT converged" not in r.message
+    assert 20.0 < r.objective < 300.0                                   # a realistic 2D L/D

@@ -8,7 +8,10 @@ GUI.
 Design
 ------
 * A :class:`BatchJob` is a list of independent :class:`Case` dicts. Each case is
-  a fully-specified ``solve_flow`` call.
+  a fully-specified ``solve_flow`` call: inviscid without a Reynolds number, else the coupled
+  viscous-inviscid solver (one body, Mach 0), each case started from its starting march. A row's
+  ``converged`` is the solver's flag (the residual criteria were met), and a viscous row with
+  implausible drag is never converged (DECISIONS.md, M2 check 3).
 * Cases are embarrassingly parallel; we farm them out with a process pool.
 * Results are collected into a flat table (one row per case) and written with a
   pluggable writer (Parquet via pyarrow, or HDF5 via h5py). Both are optional
@@ -53,8 +56,7 @@ class Case:
     mach: float = 0.0
     reynolds: float = 0.0
     aspect_ratio: float = 0.0
-    roughness: int = 0
-    enable_post_stall: bool = False
+    n_crit: Optional[float] = None    # e^n N_crit (None: params.VISCOUS.n_crit), viscous only
     trip_x_upper: Optional[float] = None
     trip_x_lower: Optional[float] = None
     extra: Dict[str, Any] = field(default_factory=dict)   # passthrough metadata
@@ -71,8 +73,7 @@ def build_matrix(
     reynolds: Iterable[float] = (0.0,),
     mach: Iterable[float] = (0.0,),
     aspect_ratio: Iterable[float] = (0.0,),
-    roughness: Iterable[int] = (0,),
-    enable_post_stall: bool = False,
+    n_crit: Iterable[Optional[float]] = (None,),
     trip_x_upper: Iterable[Optional[float]] = (None,),
     trip_x_lower: Iterable[Optional[float]] = (None,),
 ) -> List[Case]:
@@ -82,14 +83,13 @@ def build_matrix(
     """
     register_airfoils(airfoils)
     cases: List[Case] = []
-    for name, a, re, m, ar, rough, tu, tl in itertools.product(
-        airfoils.keys(), alpha, reynolds, mach, aspect_ratio, roughness,
+    for name, a, re, m, ar, nc, tu, tl in itertools.product(
+        airfoils.keys(), alpha, reynolds, mach, aspect_ratio, n_crit,
         trip_x_upper, trip_x_lower
     ):
         cases.append(Case(
             airfoil=name, alpha_deg=float(a), reynolds=float(re), mach=float(m),
-            aspect_ratio=float(ar), roughness=int(rough),
-            enable_post_stall=enable_post_stall, trip_x_upper=tu, trip_x_lower=tl,
+            aspect_ratio=float(ar), n_crit=nc, trip_x_upper=tu, trip_x_lower=tl,
         ))
     return cases
 
@@ -101,26 +101,27 @@ def _solve_one(case: Case) -> Dict[str, Any]:
         sol = solve_flow(
             coords, case.alpha_deg, v_inf=case.v_inf, mach=case.mach,
             reynolds=case.reynolds, aspect_ratio=case.aspect_ratio,
-            roughness=case.roughness, enable_post_stall=case.enable_post_stall,
-            trip_x_upper=case.trip_x_upper, trip_x_lower=case.trip_x_lower,
+            trip_x_upper=case.trip_x_upper, trip_x_lower=case.trip_x_lower, n_crit=case.n_crit,
         )
         row = dict(
             airfoil=case.airfoil, alpha_deg=case.alpha_deg, mach=case.mach,
             reynolds=case.reynolds, aspect_ratio=case.aspect_ratio,
-            roughness=case.roughness, trip_x_upper=case.trip_x_upper or np.nan,
-            trip_x_lower=case.trip_x_lower or np.nan,
+            n_crit=np.nan if case.n_crit is None else case.n_crit,
+            trip_x_upper=case.trip_x_upper or np.nan, trip_x_lower=case.trip_x_lower or np.nan,
             cl=sol.cl, cd_ind=sol.cd_ind, cd_visc=sol.cd_visc,
             cd_total=sol.cd_total, cm_qc=sol.cm_qc, cm_le=sol.cm_le,
-            # one-way path has no iteration; a viscous row with absurd drag is not converged
-            converged=bool(np.isfinite(sol.cl)
+            cd_friction=sol.cd_friction, cd_pressure=sol.cd_pressure,
+            xtr_upper=sol.xtr_upper, xtr_lower=sol.xtr_lower, iterations=sol.iterations,
+            path=sol.path, warnings="; ".join(sol.warnings),
+            converged=bool(sol.converged and np.isfinite(sol.cl)
                            and (case.reynolds <= 0 or drag_is_plausible(sol.cd_total))),
         )
     except Exception as exc:  # never let one bad case kill the batch
         row = dict(
             airfoil=case.airfoil, alpha_deg=case.alpha_deg, mach=case.mach,
             reynolds=case.reynolds, aspect_ratio=case.aspect_ratio,
-            roughness=case.roughness, trip_x_upper=case.trip_x_upper or np.nan,
-            trip_x_lower=case.trip_x_lower or np.nan,
+            n_crit=np.nan if case.n_crit is None else case.n_crit,
+            trip_x_upper=case.trip_x_upper or np.nan, trip_x_lower=case.trip_x_lower or np.nan,
             cl=np.nan, cd_ind=np.nan, cd_visc=np.nan, cd_total=np.nan,
             cm_qc=np.nan, cm_le=np.nan, converged=False, error=str(exc),
         )
@@ -255,7 +256,7 @@ def run_batch_jax(airfoils, alphas_deg, mach=0.0):
         for a, cl, cm in zip(alphas_deg, cls, cms):
             rows.append(dict(
                 airfoil=name, alpha_deg=float(a), mach=float(mach),
-                reynolds=0.0, aspect_ratio=0.0, roughness=0,
+                reynolds=0.0, aspect_ratio=0.0, n_crit=_np.nan,
                 trip_x_upper=_np.nan, trip_x_lower=_np.nan,
                 cl=float(cl), cd_ind=0.0, cd_visc=0.0, cd_total=0.0,
                 cm_qc=float(cm), cm_le=_np.nan, converged=True,

@@ -1,40 +1,32 @@
-"""e^n transition demo: physical transition prediction vs the empirical Michel
-criterion, and the effect of the environment (N_crit) on drag via VII.
+"""Transition demo: e^n envelope transition and forced trips in the coupled viscous solver.
 
-Run from the repo root:  python examples/transition_demo.py
+NACA 2412 at 4 deg, Re 3e6. The critical amplification factor N_crit stands for the
+disturbance environment (about 9 for a clean wind tunnel, lower for a noisier one); a forced
+trip fixes transition on one surface.
+
+Run from the repo root:  python examples/transition_demo.py   (about a minute)
 """
-import numpy as np
+import foil_lab as fl
 
-from foil_lab.generators import generate_naca4
-from foil_lab.bl_integral import march_boundary_layer
-from foil_lab.vii import solve_vii
+
+def show(label, r):
+    status = "converged" if r.converged else "NOT converged"
+    print(f"  {label:24s} x_tr upper {r.xtr_upper:.3f}  lower {r.xtr_lower:.3f}  "
+          f"Cd {r.cd:.5f} (friction {r.cd_friction:.5f})  Cl {r.cl:.3f}  [{status}]")
 
 
 def main():
-    print("=== 1. Flat-plate transition: e^n vs Michel ===")
-    Re = 5e6
-    s = np.linspace(1e-4, 1.0, 500)
-    ue = np.ones_like(s)
-    for model in ("michel", "en"):
-        p = march_boundary_layer(s, ue, Re, transition_model=model)
-        print(f"  {model:7s}: x_transition = {s[p.transition_idx]:.3f}")
+    af = fl.Airfoil.naca("2412")
+    print("=== 1. N_crit (e^n envelope method), NACA 2412, 4 deg, Re 3e6 ===")
+    for nc in (5.0, 9.0, 12.0):
+        show(f"N_crit {nc:g}", fl.analyze(af, 4.0, re=3e6, n_crit=nc))
 
-    print("\n=== 2. e^n environment sensitivity (N_crit) on the flat plate ===")
-    print("  (N_crit ~9 clean, ~4-7 noisy/rough, ~11-13 very quiet)")
-    for nc in (5, 7, 9, 11, 13):
-        p = march_boundary_layer(s, ue, Re, transition_model="en", n_crit=nc)
-        print(f"  N_crit={nc:2d}: x_transition = {s[p.transition_idx]:.3f}")
-
-    print("\n=== 3. N_crit drives drag through VII (NACA 2412, a=4, Re=3e6) ===")
-    af = generate_naca4("2412", 200)
-    for nc in (5, 9, 12):
-        r = solve_vii(af, 4.0, reynolds=3e6, transition_model="en",
-                      n_crit=nc, max_iter=200, tol=1e-3)
-        env = {5: "noisy/dirty", 9: "clean", 12: "very quiet"}[nc]
-        print(f"  N_crit={nc:2d} ({env:11s}): Cl={r.solution.cl:.3f} "
-              f"Cd={r.cd_wake:.5f}  converged={r.converged}")
-    print("\n  Earlier transition (low N_crit) wets more turbulent area -> more drag.")
-    print("  This environment sensitivity is exactly what Michel cannot provide.")
+    print("\n=== 2. Forced trips (x/c) ===")
+    show("free", fl.analyze(af, 4.0, re=3e6))
+    show("upper tripped at 0.05", fl.analyze(af, 4.0, re=3e6, trip_upper=0.05))
+    show("both tripped at 0.05", fl.analyze(af, 4.0, re=3e6, trip_upper=0.05, trip_lower=0.05))
+    print("\n  A lower N_crit or an earlier trip moves transition forward and raises friction drag.")
+    print("  ('nan' transition: laminar to the trailing edge.)")
 
 
 if __name__ == "__main__":

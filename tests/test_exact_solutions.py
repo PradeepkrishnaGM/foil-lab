@@ -2,7 +2,7 @@
 
 Tests that fail on v1.3.1 are marked ``xfail(strict=True, raises=AssertionError)`` with the
 milestone that fixes them. The laminar (Blasius) and turbulent flat-plate checks of 4.2 are in
-``tests/test_vii.py``.
+``tests/test_bl_closures.py`` (the coupled solver's boundary layer).
 """
 
 from __future__ import annotations
@@ -172,6 +172,7 @@ def _farfield_cl(sol, alpha_deg, half=10.0, res=801):
     return 2.0 * (fy * np.cos(a) - fx * np.sin(a))
 
 
+@pytest.mark.slow
 def test_farfield_lift_equals_pressure_lift():
     """Within 0.5 %."""
     af = generate_naca4("2412", 200)
@@ -255,12 +256,13 @@ def test_numpy_and_jax_agree(make, alpha):
     assert abs(solve_flow(af, alpha).cl - jax_core.solve_numpy_compatible(af, alpha)[0]) <= 1e-6
 
 
+@pytest.mark.slow
 def test_deterministic_inviscid_and_viscous():
-    """Same input, bit-identical output (inviscid Cp, one-way drag, VII)."""
-    from foil_lab.vii import solve_vii
+    """Same input, bit-identical output (inviscid Cp; coupled viscous Cp, Cd, Cl, transition)."""
     af = generate_naca4("2412", 160)
+    i1, i2 = solve_flow(af, 4.0), solve_flow(af, 4.0)
+    assert np.array_equal(i1.cp_dist, i2.cp_dist)
     s1, s2 = solve_flow(af, 4.0, reynolds=1e6), solve_flow(af, 4.0, reynolds=1e6)
-    assert np.array_equal(s1.cp_dist, s2.cp_dist) and s1.cd_visc == s2.cd_visc
-    v1 = solve_vii(af, 4.0, reynolds=1e6, max_iter=200, tol=1e-3)
-    v2 = solve_vii(af, 4.0, reynolds=1e6, max_iter=200, tol=1e-3)
-    assert np.array_equal(v1.solution.cp_dist, v2.solution.cp_dist) and v1.cd_wake == v2.cd_wake
+    assert s1.converged and s2.converged
+    assert np.array_equal(s1.cp_dist, s2.cp_dist) and s1.cd_visc == s2.cd_visc and s1.cl == s2.cl
+    assert (s1.xtr_upper, s1.xtr_lower, s1.iterations) == (s2.xtr_upper, s2.xtr_lower, s2.iterations)

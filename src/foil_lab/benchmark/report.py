@@ -266,7 +266,7 @@ def build_markdown(cases: list[CaseResult], bench: BenchmarkParams, plots: bool)
             label = "XFOIL 240 vs 160 (paneling sensitivity)" if m == "sens" else METHOD_LABEL[m]
             verdict = ", ".join(f"{k} {'met' if ok else 'not met'}" for k, ok in met) or "-"
             rows.append([label] + _stats_cells(st, m != "inviscid") + [verdict])
-        lines += [f"Validated range pooled (Re 5e5 to 6e6), {group}:", "",
+        lines += [f"Validated range pooled (Re {min(res_valid):g} to {max(res_valid):g}), {group}:", "",
                   _md(["method"] + STAT_HEAD + ["provisional targets"], rows), ""]
     lines += ["## XFOIL convergence inside the attached-flow filter", "",
               _md(["section", "Re", "filter angles", "alpha cut-off (deg)",
@@ -375,16 +375,12 @@ def _tables_csv(cases: list[CaseResult], path: Path) -> None:
                             _mean(st.dcd_rel), _max(st.dcd_rel), _mean(st.dcm), _max(st.dcm)])
 
 
-#: The committed tables-only baseline document; written only by ``baseline-doc``.
-BASELINE_DOC = Path("docs/baseline_v1.3.1.md")
-
-
-def write_report(output_root: Path = Path("benchmark_output"), bench: BenchmarkParams = BENCHMARK,
-                 docs_path: Path | None = None) -> list[CaseResult]:
+def write_report(output_root: Path = Path("benchmark_output"), bench: BenchmarkParams = BENCHMARK
+                 ) -> list[CaseResult]:
     """Compare all cases and write plots, CSV tables and ``report.md`` under ``output_root``.
 
-    The committed tables-only document is written only when ``docs_path`` is given (the
-    ``baseline-doc`` command); ``report`` and ``all`` never touch it. Returns the case results.
+    The committed before picture ``docs/baseline_v1.3.1.md`` is never written: the v1.3.1 viscous
+    methods were deleted in M3 C5, so it can no longer be regenerated. Returns the case results.
     """
     cases = []
     for sec in bench.sections:
@@ -398,7 +394,4 @@ def write_report(output_root: Path = Path("benchmark_output"), bench: BenchmarkP
         plot_case(c, output_root, bench)
     _tables_csv(cases, output_root / "tables" / "case_metrics.csv")
     (output_root / "report.md").write_text(build_markdown(cases, bench, plots=True))
-    if docs_path is not None:
-        docs_path.parent.mkdir(parents=True, exist_ok=True)
-        docs_path.write_text(build_markdown(cases, bench, plots=False))
     return cases

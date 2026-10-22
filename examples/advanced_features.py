@@ -1,5 +1,6 @@
-"""Demonstrates the v0.5 feature set: roughness, post-stall, ground effect,
-Busemann sweep, constant wing loading, and the advanced generators.
+"""Demonstrates the coupled viscous solver, ground effect, Busemann sweep, constant wing
+loading, and the advanced generators. (Surface roughness and the empirical post-stall model were
+removed with the one-way boundary layer in M3.)
 
 Run from the repo root:  python examples/advanced_features.py
 """
@@ -13,20 +14,11 @@ from foil_lab.ground_effect import solve_ground_effect
 def main():
     af = generate_naca4("2412", num_panels=200)
 
-    print("=== Baseline (Re = 3e6) ===")
+    print("=== Coupled viscous solver (Re = 3e6) ===")
     for a in (0, 5, 10):
         s = solve_flow(af, a, reynolds=3e6)
-        print(f"  a={a:2d}  Cl={s.cl:+.3f}  Cd={s.cd_total:.4f}  Cm={s.cm_qc:+.3f}")
-
-    print("\n=== Surface roughness at a=5 ===")
-    for r in range(4):
-        s = solve_flow(af, 5.0, reynolds=3e6, roughness=r)
-        print(f"  roughness={r}  Cd_visc={s.cd_visc:.5f}")
-
-    print("\n=== Post-stall sweep ===")
-    for a in (8, 12, 14, 16, 18, 20):
-        s = solve_flow(af, float(a), reynolds=3e6, enable_post_stall=True)
-        print(f"  a={a:2d}  Cl={s.cl:+.3f}  Cd={s.cd_total:.4f}")
+        print(f"  a={a:2d}  Cl={s.cl:+.3f}  Cd={s.cd_total:.4f}  Cm={s.cm_qc:+.3f}  "
+              f"converged={s.converged}")
 
     print("\n=== Ground effect (a=5) ===")
     free = solve_flow(af, 5.0).cl

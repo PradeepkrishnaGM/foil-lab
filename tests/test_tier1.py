@@ -40,7 +40,8 @@ def test_overlap_detection():
     assert not bodies_overlap([a, c])
 
 
-# --- Trip wires ------------------------------------------------------------- #
+# --- Trip wires (coupled viscous solver) ------------------------------------ #
+@pytest.mark.slow
 def test_trip_wire_increases_drag():
     af = generate_naca4("2412", 200)
     natural = solve_flow(af, 5.0, reynolds=3e6).cd_visc
@@ -49,6 +50,7 @@ def test_trip_wire_increases_drag():
     assert tripped > natural
 
 
+@pytest.mark.slow
 def test_trip_wire_monotonic():
     af = generate_naca4("2412", 200)
     cds = [solve_flow(af, 5.0, reynolds=3e6, trip_x_upper=t, trip_x_lower=t).cd_visc
@@ -58,6 +60,7 @@ def test_trip_wire_monotonic():
 
 
 # --- Batch ------------------------------------------------------------------ #
+@pytest.mark.slow
 def test_batch_matrix_and_run():
     from foil_lab.batch import build_matrix, run_batch
     afs = {"a": generate_naca4("2412", 120), "b": generate_naca4("0012", 120)}

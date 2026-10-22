@@ -1,12 +1,13 @@
 """Foil-Lab: 2D panel-method analysis of single and multi-element airfoil sections.
 
-Public interface (inviscid in this version; viscous analysis follows in M3)::
+Public interface::
 
     import foil_lab as fl
 
     af = fl.Airfoil.naca("2412")
-    res = fl.analyze(af, alpha=4.0)
-    pol = fl.polar(af, alphas=range(-4, 15))
+    res = fl.analyze(af, alpha=4.0)                       # inviscid
+    res = fl.analyze(af, alpha=4.0, re=3e6)               # coupled viscous-inviscid (one element)
+    pol = fl.polar(af, alphas=range(-4, 15), re=3e6)
 
 The submodules (``geometry``, ``inviscid``, ``solver``, ``generators``, ...) stay importable.
 """

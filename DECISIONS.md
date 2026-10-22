@@ -1474,15 +1474,1358 @@ the wrong thing), each recorded above:
 3. `E387_GAP025` built by applying the gap tool after repanelling, so both codes read the same
    points and the shape ahead of 0.8 c is identical to E387 (step 5).
 
+## M3: Viscous solver at high Reynolds number
+
+Branch `m3-viscous` from `main` (0c55826). Plan in progress; nothing implemented yet.
+
+### Diagnosis (before any rewrite)
+
+NACA 2412 (canonical file), Re 1e6, N_crit 9, against XFOIL's boundary-layer `DUMP` (XFOIL run
+as an external program). Diagnostic committed in `tests/diagnostics/` with the 0 and 5 deg dumps.
+
+- The inviscid side and transpiration are right: our core driven by XFOIL's delta* gives Cl
+  0.2406 / 0.8089 (XFOIL 0.2410 / 0.8101), Cm within 2e-4; XFOIL's wake delta* adds only
+  0.0004 / 0.002 in Cl.
+- XFOIL's dumped Cf is relative to the freestream dynamic pressure, ours to the local edge value;
+  divided by ue^2 the laminar Cf agree (2-8 %). (Report 1 called the laminar Cf "2x low"; that
+  was a normalisation artefact.)
+- Our coupled state at 5 deg is a solution of our own equations on the upper surface (one
+  uncapped march on its edge velocity: trailing-edge delta* within 0.8 %); on the lower surface
+  the laminar model has no solution beyond laminar separation (Thwaites lambda < -0.09 from x/c
+  0.898) and the package forces transition at H = 3.5. At "convergence" the unrelaxed update
+  still differs by 5.1 % of max delta* (the test compares relaxed iterates).
+- Started from XFOIL's 5 deg state, the package iteration reaches our thick trailing-edge state
+  within 20 iterations (Cl 0.758, upper TE H 2.40); without limiters it diverges. The thick state
+  belongs to our model; the edge-velocity-prescribed march is too sensitive near the trailing
+  edge to run without limiters.
+- At 10 and 14 deg our model cannot separate (H cap 2.8 hit; trailing-edge H collapses to about
+  1.2): Cl 1.483 / 1.913 against XFOIL 1.268 / 1.495, Cm -0.086 / -0.090 against -0.037 / -0.012,
+  not converged in 300 iterations.
+
+### Answers (2026-10-09)
+
+- Q1: diagnosis extended to 10 and 14 deg (above).
+- Q2: the wake is not a requirement up front; the formulation keeps room for it and "add the
+  wake" is a named checkpoint, taken if the Cd or Cm targets are not met without it.
+- Q3: diagnostics committed under `tests/diagnostics/` (slow; regeneration in the xfoil group)
+  with the two XFOIL dumps and provenance headers.
+
+### Plan approved (2026-10-09) with changes
+
+Sources supplied in `review-gui/`: Drela & Giles 1987 (DG87), Drela 1989 AIAA-89-2200 (BTE89),
+Green et al. R&M 3791, Squire & Young R&M 1838 (SY38); Drela 1989 LNE 54 (LNE89) already at hand.
+All equations were read from page images (the OCR text layers garble formulae).
+Fidkowski's mfoil paper may be used as a secondary published source; it has not been supplied
+and is not used so far. Neither mfoil's nor XFOIL's code is read.
+
+Answers:
+- Q2: Michel's criterion dropped. SPEC.md 4.3 changed (approved): "Transition by the e^n envelope
+  method, with forced trip locations per surface."
+- Q3: `solve_flow` with a Reynolds number moves to the new solver; `enable_post_stall` and
+  `viscous_mods.py` are deleted.
+- Q4: viscous results are Mach 0 only in M3.
+- Q5: benchmark adapter gets one "viscous" method plus inviscid; the two existing benchmark
+  documents stay as the before pictures.
+- Q6: convergence defaults approved as starting values (scaling below). If C2 shows points that
+  stall just above the tolerance, the residual histories are shown before any change.
+
+Changes to the plan (user): Jacobian from JAX automatic differentiation (JAX path) and from
+complex-step of the local station residuals with the chain rule through the edge-velocity
+relation (NumPy path), never hand-derived; a test that the two agree and match finite
+differences of the full residual. C1 also run in the inverse direction (prescribed delta*,
+compare ue). Solver structured for several bodies with two branches each (single body tested in
+M3). Stops after C0+C1, after C2, after C3; C4 (wake) taken without asking if C3 misses Cd or Cm.
+
+### Formulation details fixed before C1, with sources
+
+Equations (Mach 0): momentum DG87 (4) = LNE89 (21); shape parameter DG87 (5) = LNE89 (22);
+amplification DG87 (35) = LNE89 (24); lag LNE89 (23) (decision below). Closures DG87 (10)-(13)
+laminar, (14)-(19) turbulent, (20)-(24) dissipation, slip velocity, delta, C_tau,EQ; DG87
+(29)-(30) and (33)-(35) amplification; wake BTE89 (13)-(18) (checkpoint C4 only); drag SY38 (3),
+(13)-(14).
+
+1. **Initialisation of the Newton iteration.**
+   - A polar point starts from the previous converged angle (DG87 p. 1353: "a good initial guess
+     was available for each point from the previous angle of attack").
+   - A first point is started from a station-by-station march of the same discrete equations on
+     the inviscid edge velocity. At stations where the prescribed-ue march has no solution (near
+     separation), the march switches to prescribing a small increase of H_k and solves for ue.
+   - No published source at hand describes the cold start: this is my own procedure, and its only
+     role is to supply a starting state (the converged answer does not depend on it, which C2
+     checks with two different starts).
+2. **Transition inside the Newton system.**
+   - DG87 pp. 1351-1352 and Fig. 5: the interval containing transition is split into a laminar and
+     a turbulent subinterval.
+   - The onset xi_tr is defined implicitly by the discrete amplification equation reaching N_crit
+     on the laminar subinterval, so it is a smooth function of the neighbouring variables.
+   - The interval's equations are weighted averages of the two subintervals.
+   - C_tau^(1/2) at xi_tr is 0.7 times its equilibrium value.
+   - Forced transition: xi_tr set to the trip location (DG87 p. 1352).
+   - Mine: the weights are the subinterval length fractions (xi_tr - xi_1)/(xi_2 - xi_1) and its
+     complement; the amplification rate on the laminar subinterval is the trapezoidal average of
+     the end values; which interval holds transition is re-identified after each Newton update.
+3. **Stagnation point.**
+   - On the surface ue = +-gamma (LNE89 eq. 30).
+   - The stagnation point is where the nodal sheet strength changes sign on a body, located by
+     linear interpolation between the two nodes; xi on each branch is measured from it.
+   - It is re-located after each Newton update. A node that changes branch keeps its variables
+     (they are small and nearly symmetric there); this is mine.
+   - The first station of each branch uses the Falkner-Skan stagnation (Hiemenz) similarity
+     relations of DG87: m(H_k) = 1 in eq. (34) gives H_k, and eq. (33) gives
+     theta^2 = l(H_k) xi / (Re ue) (DG87 eqs. 33-34).
+4. **States outside a closure's valid range.**
+   - The DG87 closures contain (H_k - 1) and l(H_k) = (6.54 H_k - 14.07)/H_k^2 (positive only for
+     H_k > 2.151) and log10 Re_theta.
+   - Mine: amplification is zero where Re_theta < Re_theta0 (DG87 eq. 36 integrates from that
+     point) or l(H_k) <= 0.
+   - A Newton update is scaled down so that H_k stays above `ViscousParams.hk_min` (laminar and
+     turbulent) and Re_theta above `ViscousParams.re_theta_min`; every such scaling is counted in
+     the result.
+   - A solution that ends on a bound is reported `converged=False` with the reason. No closure is
+     clipped silently.
+
+Other decisions (mine, recorded):
+
+- **Stations at the panel nodes**, where the sheet strength is the surface speed (LNE89 eq. 30),
+  so the source of each panel is sigma = dm/dxi between its two nodes (LNE89 eq. 32).
+  Unknowns per station: theta, m = ue delta*, and n or C_tau^(1/2) (LNE89 eq. 34). ue is
+  eliminated by ue = ue_inv + D m (LNE89 eq. 33), with D built exactly from our core.
+- **Lag equation:** LNE89 eq. (23), the later form Drela describes as giving better lift and drag
+  near stall. DG87 eq. (22) and BTE89 eq. (3) print the original 4.2 form.
+- **DG87 eq. (18)** is printed with "H_k" on the left; the text says it is the relation between
+  H*, H_k and Re_theta, so it is read as H* = ....
+- **Its "log"** has no base. DG87 writes log10 explicitly in eqs. (14) and (30), so plain "log" is
+  read as the natural logarithm. (BTE89 Fig. 4's H*-H_k curve is closer to the natural-log
+  version.) To verify in M9.
+- **Discretisation:** two-point central (trapezoidal) differences (DG87 p. 1351), written in
+  logarithmic form for theta, H* and C_tau, so each residual is dimensionless. DG87's downstream
+  bias of the shape equation at high Re is a parameter (`shape_eq_bias`, 0.5 = central),
+  changed only if C1/C2 show the stiffness DG87 describes.
+- **Squire-Young** (before the wake checkpoint): theta_1 = theta_upper + theta_lower (SY38 p. 4),
+  H_1 = (delta*_upper + delta*_lower)/theta_1, U_1 = theta-weighted mean of the two trailing-edge
+  edge speeds; C_D = 2 theta_1 (U_1)^((H_1 + 5)/2) (SY38 eqs. 3, 13-14, U_0 = 1). Friction drag
+  = SY38 eq. (4); pressure drag = total - friction.
+
+Residual scaling (Q6), exact form at every station interval (i-1, i) of each branch:
+
+- momentum: R1 = ln(theta_i/theta_{i-1}) + (2 + H_avg) ln(ue_i/ue_{i-1}) - (xi_i - xi_{i-1})
+  (Cf/2)_avg / theta_avg
+- shape: R2 = ln(H*_i/H*_{i-1}) + (2H**/H* + 1 - H)_avg ln(ue_i/ue_{i-1}) - (xi_i - xi_{i-1})
+  (2C_D/H* - Cf/2)_avg / theta_avg
+- lag: R3 = ln(C_tau,i/C_tau,i-1) - (xi_i - xi_{i-1}) [rate of LNE89 eq. 23]_avg
+- amplification: R3 = n_i - n_{i-1} - (xi_i - xi_{i-1}) (dn/dxi)_avg
+- edge velocity: R4 = ue_i - ue_inv,i - sum_j D_ij m_j, in units of the freestream speed.
+
+All residuals are dimensionless and O(1) per interval. Converged: max |R| <= 1e-8 over all
+residuals and the last Newton update <= 1e-6 relative on theta and m, within 50 iterations
+(`ViscousParams`).
+
+### C0 and C1 (2026-10-09): small decisions, results, stop
+
+Small numerical definitions (decided under the M2 rule, no tolerance involved):
+
+- **March start.** The first station of a branch takes the local Falkner-Skan similarity state
+  (DG87 eqs. 33-34) with m = (xi/ue) due/dxi from the first two stations, clipped to [-0.05, 1]
+  (m = 1 at a stagnation point, m = 0 on a flat plate). A fixed Hiemenz start put the flat plate
+  6 % above Blasius; with the local m it is 1.1 % above.
+- **Transition onset fraction w.** For a provisional Newton state with no root of the onset
+  quadratic in [0, 1], w is taken at the nearer end of the interval (1 if N_crit is not reached,
+  0 if already exceeded). Without this the first Newton step at onset produced NaN.
+- **Inverse march (C1 only).** Started from a given state part-way along a branch
+  (`start_state`), because ue = l xi/(Re theta^2) with delta* prescribed is ill-conditioned near
+  the stagnation point (ue came out 1e5 at 5 deg).
+- **Closure derivative test.** The test points avoid H_0 = 3 + 400/Re_theta, where the turbulent
+  H* (DG87 eq. 18) has a continuous slope but an unbounded second derivative, so a central
+  difference is inaccurate there. My test was mis-measuring, not the closure.
+
+C0: all closure, Jacobian (JAX = complex step = finite differences) and flat-plate tests pass at
+the SPEC 4.2 tolerances (laminar theta, delta* within 1.1 % of Blasius at x = 0.1; turbulent Cf
+within 1.4 % of 0.0592 Re_x^-0.2).
+
+C1 misses the targets of the plan (TE delta*, theta within 5 %, transition within 0.02 c, the 5 deg
+lower-surface laminar separation). Cause located: on XFOIL's own dumped states, DG87 eq. (11)
+(laminar Cf, transcription checked against the page image) gives Cf 1 % above XFOIL's at H 2.2-2.5,
+3-4 % at 2.5-2.8, 12-15 % at 2.8-3.1 and 43 % at 3.1-3.5. Laminar H* (eq. 10) agrees within 0.6 %,
+turbulent Cf (eq. 14) exactly, turbulent H* within 1 %. Our amplification closure integrated on
+XFOIL's states gives XFOIL's transition (0.657 vs 0.657; 0.312 vs 0.293). LNE89 section 3.1 says
+XFOIL's formulation is that of ISES [DG87] and gives no other laminar closure. So the installed
+XFOIL 6.99 uses a laminar Cf that is not in the supplied sources. Stopped for the user's decision.
+
+### Laminar closure choice on physics (2026-10-09): option B, Fidkowski paper
+
+User's decision: option B with the Fidkowski paper (FID; paper only, never mfoil's or XFOIL's
+code); choose on physics: adopt a FID laminar closure only where it is at least as close to the
+exact Falkner-Skan relations as DG87 over H 2.2-4.0, otherwise stop. C1 targets unchanged.
+FID transcribed from the page images (appendix pp. 17-19; equations pp. 5-8).
+
+Exact reference: `tests/diagnostics/falkner_skan.py` (Hartree form, shooting; reproduces Blasius
+f''(0) 0.4696, H 2.591 and Hiemenz 1.2326, 2.216; tested). Comparison:
+`tests/diagnostics/laminar_closure_compare.py`. Max |error| against Falkner-Skan:
+
+| quantity | closure | H 2.2-2.6 | 2.6-3.0 | 3.0-3.5 | 3.5-4.0 (absolute) |
+|---|---|---|---|---|---|
+| Re_theta Cf/2 | DG87 eq. 11 | 0.0106 (2.9 %) | 0.0022 (1.7 %) | 0.0060 (12 %) | 0.0072 |
+| | FID eq. 56 | 0.0062 (2.8 %) | 0.0145 (11 %) | 0.0177 (36 %) | 0.0171 |
+| | XFOIL dump | 0.0067 (3.1 %) | 0.0150 (12 %) | 0.0178 (31 %) | 0.0169 |
+| H* | DG87 eq. 10 | 0.1 % | 0.05 % | 0.03 % | 0.03 % |
+| | FID eq. 47 | 0.2 % | 0.4 % | 0.7 % | 0.9 % |
+| | XFOIL dump | 0.2 % | 0.5 % | 0.7 % | 0.9 % |
+| Re_theta 2C_D/H* | DG87 eq. 12 = FID eq. 61 (identical for H < 4) | 0.1 % | 0.3 % | 0.5 % | 0.4 % |
+
+Result: FID's laminar Cf and H* are further from Falkner-Skan than DG87 above H 2.6 (FID's Cf
+crosses zero at H 3.83, DG87's at 4.14, Falkner-Skan at 4.03); XFOIL's dumped values follow FID. By the rule, no
+FID laminar closure is adopted; DG87 eqs. (10)-(12) stay. Stopped for the user before items 4-6
+(item 6, the M9 README note, is added under Later).
+
+### Two closure sets (user's decision, 2026-10-09)
+
+**The rule of the previous section (adopt a FID closure only where it is at least as close to
+Falkner-Skan as DG87) is replaced by the user.** Why: the comparison showed that XFOIL 6.99's
+laminar fits (= FID eqs. 47, 56) are further from the Falkner-Skan similarity solutions than DG87
+in adverse pressure gradient (Cf error 11-36 % against 2-12 % for H 2.6-3.5; zero Cf at H 3.83
+against 4.14 for DG87 and 4.03 exact), yet XFOIL is the reference of SPEC 4.1 and can be compared
+station by station only with the closures it uses. Neither physics nor agreement with XFOIL alone
+decides, so both sets are kept, named and documented:
+
+- `"fidkowski2022"`: everything as published in FID (laminar, turbulent, lag constants,
+  amplification, state at transition, guards; wake at C4). Where FID says a term is the author's
+  own (eqs. 58, 74, 76), it is implemented as published and marked. C1 and C2 targets and the
+  SPEC 4.1 targets are judged with this set. Implemented and verified first.
+- `"drela1987"`: DG87 with LNE89, as published. Run through the same C1, C2 and benchmark; no
+  targets against XFOIL; numbers reported side by side.
+- The equations, discretisation and Newton solver exist once; a set is a module with a fixed
+  interface (`foil_lab.bl.closure_sets.INTERFACE`), selected by name. No formulas are mixed.
+- The default set is the user's decision after C3, with both benchmark results. Until then the
+  code's default is `"fidkowski2022"` (provisional, the set the targets are judged with).
+- The Falkner-Skan table and the laminar closure comparison stay as committed diagnostics and as a
+  test (`test_laminar_closures_against_falkner_skan_as_recorded`, errors recorded as measured, not
+  targets); they go into the M9 validation document.
+
+**Where the sets need a different form of an equation, and how one solver is kept:**
+
+1. Lag equation. Written once in FID's form (FID eq. 8),
+   (delta/C_tau) dC_tau/dxi = K (C_tau,EQ^1/2 - eta_D C_tau^1/2) + 2 delta (u_q - (1/ue) due/dxi).
+   LNE89 eq. (23) is exactly the case K = 5.6, eta_D = 1, u_q = (1/(0.75 delta*)) [Cf/2 -
+   ((H_k - 1)/(6.7 H_k))^2] (4/3 = 1/G_beta, 6.7 = G_A). Each set supplies K(U_s), eta_D, u_q.
+2. Turbulent dissipation: FID's max(wall + outer + stress, laminar) (eqs. 62-65) and DG87 eq. (20)
+   behind one function signature `cd_turb(hk, ret, cf, us, ctau, hstar)`.
+3. Amplification: FID's rate depends on n (eq. 76). The onset is therefore defined for both sets
+   as the root of the amplification residual on the laminar subinterval with the state
+   interpolated to xi_t and n = N_crit there (FID eq. 18; DG87 p. 1351 states the same
+   definition). This replaces my earlier closed form with the rate interpolated linearly in xi.
+   Solved by 40 bisections (state-independent) plus one Newton correction, so derivatives follow
+   the implicit function theorem (FID eq. 19) in NumPy, complex step and JAX alike.
+4. State at transition: one function `ctau_transition(hk, ctau_eq)` (DG87: C_tau^1/2 = 0.7
+   C_tau,EQ^1/2; FID eq. 17: 1.8 exp(-3.3/(H_k - 1)) C_tau,EQ^1/2).
+5. Start of a branch: the local similarity form of the momentum and shape equations written with
+   the set's own laminar closures, G [(1 - m)/2 + (2 + H) m] = Re_theta Cf/2 and G (1 - H) m =
+   Re_theta (2C_D/H* - Cf/2), G = Re ue theta^2/xi, m from the first two stations clipped to
+   [-0.05, 1]. At m = 1 these are FID's stagnation equations (p. 7); this replaces the DG87 eqs.
+   (33)-(34) start for both sets (each set then starts consistently with its own closures).
+
+Discretisation differences of FID not adopted (the discretisation exists once and stays the
+central log form of DG87 p. 1351): the xi-weighted source terms (FID eqs. 9-10), the H_k-dependent
+upwinding (eq. 13), the midpoint evaluation of cf xi/theta, the stagnation state extrapolated to
+xi = 0 with a quadratic ue fit (p. 7). With the FID set, C1 agrees with XFOIL to about 1 % at the
+trailing edge, so these are not needed for agreement; revisit only if C2 shows otherwise.
+(Later reversed: eqs. 9-10 in C2, the quadratic ue fit in C2, the upwinding of eq. 13 after report 7.)
+
+**Every difference between the sources (item 4), equation numbers, and evaluation on the dumps**
+(`tests/diagnostics/closure_set_compare.py`; ratio closure/XFOIL on the dumped (H, Re_theta),
+mean (max deviation)):
+
+| quantity | drela1987 | fidkowski2022 | on XFOIL's dumped states |
+|---|---|---|---|
+| laminar H* | DG87 eq. 10 | FID eqs. 47-48 | DG87 0.999-0.995 (0.7 %); FID 1.0000 |
+| laminar Cf | DG87 eq. 11 | FID eq. 56 | DG87 1.016 / 1.082 / 1.305 (H 2.2-2.6 / 2.6-3.0 / 3.0-3.5); FID 1.000 (0.6 %) |
+| laminar C_D | DG87 eq. 12 | FID eq. 61 (same below H_k 4; -0.0016 vs -0.003 above) | not dumped |
+| turbulent Cf | DG87 eq. 14 | FID eqs. 57-60 (eq. 14 with guards A_cf (58, author's own), B_cf >= 1.303) | both 1.000 |
+| turbulent H* | DG87 eqs. 18-19 | FID eqs. 49-54 (other fit; Re_theta >= 200 inside) | DG87 0.990-0.998 (1.1 %); FID 1.0000 |
+| U_s | DG87 eq. 21 | FID eq. 68 (same, max 0.98) | not dumped |
+| delta | DG87 eq. 23 | FID eq. 55 (same, max 12 theta) | not dumped |
+| C_tau,EQ | DG87 eq. 24 ((H_k-1)^3, 0.015) | FID eqs. 78-79 ((H_k-1) H_kc^2, 1/(2 G_A^2 G_beta) = 0.01485, H_kc = H_k - 1 - 18/Re_theta) | via the march, below |
+| turbulent C_D | DG87 eq. 20 | FID eqs. 62-65 (low-Re wall factor, 0.995 - U_s, stress term, max with laminar) | via the march |
+| lag | LNE89 eq. 23 (K = 5.6) | FID eqs. 8, 77 (K = 5.6/(0.75 (1 + U_s)): 5.74 / 4.98 / 4.39 at U_s 0.3 / 0.5 / 0.7; H_kc in u_q) | via the march |
+| amplification rate | DG87 eqs. 29, 33-35 | FID eqs. 69-71, 75 | theta dn/dxi equal within 4 % for H_k 2.6-4 |
+| critical Re_theta | DG87 eq. 30 (step) | FID eqs. 72-74 (smooth ramp over +-0.1 decades; eq. 74 author's own), eq. 76 (author's own) | transition on XFOIL's states: DG87 0.657 / none / 0.312, FID 0.658 / 0.684 / 0.296 (XFOIL 0.657 / 0.681 / 0.293) |
+| C_tau at transition | DG87 p. 1351 (0.7 C_tau,EQ^1/2) | FID eq. 17 (0.23 C_tau,EQ^1/2 at H_k 2.6) | via the march |
+| H_k limit | none in DG87 | FID p. 18: 1.05 on the airfoil | - |
+| wake | BTE89 eqs. 13-18, 20-32 | FID eqs. 14-15, 66-67, eta_D 0.9 | C4 only |
+
+March on XFOIL's ue with transition forced at XFOIL's location (the turbulent part, where the
+lag, C_D, C_tau,EQ and transition-state differences act): TE delta*/XFOIL = 1.006, 1.004, 1.009
+with fidkowski2022 against 1.056, 1.048, 1.131 with drela1987 (0 deg upper, lower, 5 deg upper):
+the 5-13 % excess of report 3 came from the turbulent and transition closures of the DG87 set,
+not from the solver.
+
+**C1 with "fidkowski2022"** (targets unchanged): transition 0.657 / 0.682 / 0.294 / laminar (XFOIL
+0.657 / 0.681 / 0.293 / laminar); TE delta* ratio 1.006, 1.001, 1.009; theta 1.007, 1.002, 1.007;
+H diff -0.002, -0.002, +0.004; inverse max |ue diff| 0.0046, 0.0082, 0.0048, 0.0001. 5 deg lower:
+laminar separation reproduced (H 3.98 against 3.96 at x/c 0.99); the direct problem has no root at
+the last station (x/c 0.9999; residual floor 3.8e-5 at H 4.12; roots exist for ue 0.05 % higher),
+so the direct TE values there (delta* 1.053, H +0.21) are those of a non-converged station; the
+inverse check (plan change 3) gives theta 1.000, H -0.001, ue within 0.0001 there. Counted as
+passed under the planned inverse check; flagged to the user.
+
+March fix found by C1: a laminar step without a solution now also triggers the transition interval
+(accepted only if the onset lies inside the interval). Before, transition at 0 deg lower was
+missed when XFOIL's ue was already transitional (0.714 instead of 0.682).
+
+### C2: coupled Newton solver (2026-10-09), decisions and results; stopped
+
+`foil_lab/viscous.py`, `ViscousParams` in `params.py`. Changes against the formulation fixed
+before C1, each forced by a C2 failure (histories in the report), each from FID unless marked:
+
+1. **Augmented state** (FID p. 6, eq. 27) instead of my earlier choice of m = ue delta* with ue
+   eliminated: unknowns (theta, delta*, n or C_tau, ue) per station, residuals the three BL
+   equations and R_u = ue - ue_inv - D (ue delta*). With m as unknown, delta* = m/ue is
+   ill-conditioned at the stations next to the stagnation point (ue -> 0): cold starts at 0, -4,
+   10 deg stalled at residuals 50-600. With the augmented state they converge.
+2. **Stagnation point** from the two adjacent speeds, s_stag = s_k + ds ue_k/(ue_k + ue_k+1)
+   (FID p. 6), its derivative in the Jacobian (FID eq. 28). First interval: the stagnation
+   equations (ue = K xi) on the state extrapolated linearly to xi = 0, K from a quadratic fit
+   (FID p. 7), replacing the similarity relations at the first station (which gave an odd-even
+   H oscillation behind the stagnation point, as FID describes for XFOIL).
+3. **Source terms integrated in ln xi** (FID eqs. 9-10) for momentum and shape, for both sets,
+   replacing dxi times the average. When the stagnation point comes close to a station, Cf and C_D
+   grow like 1/xi and the old form became inconsistent on the first interval (a residual jump to
+   90 when the stagnation point moved one panel). This reverses the "not adopted" entry of the
+   two-sets section for these two terms; the lag and amplification equations keep dxi (FID eqs.
+   11-12). C0 and C1 rerun after the change: all pass (C1 TE delta* ratios 1.007, 1.000, 1.009,
+   1.011; transition 0.657 / 0.682 / 0.294 / laminar).
+4. **Step limits** of FID p. 11 (theta, delta* not below half; n up <= 2, n > 0.2 down <= 80 %;
+   C_tau^1/2 up <= 0.05, down <= 80 % where C_tau^1/2 > 0.1 max; ue <= 20 %), then halving for
+   positivity, H_k >= hk_min and turbulent Re_theta >= re_theta_min. Mine: the ue limit and the
+   H_k check are not applied at the two stations next to a stagnation point where ue changes sign
+   (a sign change only moves the stagnation point). Each scaled step and its binding limit is
+   counted in the result (`step_limits`).
+5. **Branch change** (mine): a station that changes branch keeps its speed (sign with d) and takes
+   theta and delta* of its downstream neighbour on the new branch, n = 0 (Hiemenz: theta, delta*
+   nearly uniform at a stagnation point). Replaces "keeps its values" of the plan.
+6. **Transition re-identification** after each update by marching n (FID p. 8); the implicit
+   trapezoid of that march is iterated to round-off. With 8 fixed-point iterations it left n
+   1e-7 off the Newton solution and 7 deg stalled at a residual 8.3e-8 (> 1e-8) with full steps
+   (history in the report); a bug, fixed, no tolerance changed.
+7. **Angle-of-attack continuation** (FID section VIII.C): a warm-started point that fails is
+   reached through intermediate angles (increment halved, at most three times); iterations of
+   the intermediate solves are counted in the point's iterations.
+8. **Starting march** (FID section V.A, eqs. 20-21; `march_init`): direct, inverse with prescribed
+   H_k where the direct Newton fails or H_k > 3.8 (laminar) / 2.5 (turbulent), else scaling. Mine:
+   the H_k switch is not applied on the transition interval itself (its downstream station still
+   carries the laminar H_k; applying it corrupted the start at 5 deg), and the fallback sets
+   C_tau from the set's transition value when the station turns turbulent. The first station of
+   the starting march uses m = 1 (next to a stagnation point).
+9. New parameters (proposed defaults, awaiting approval): `hk_min` 1.02, `re_theta_min` 20 (FID
+   eq. 59 guard: log10 Re_theta >= 1.303), `init_hk_max_lam` 3.8, `init_hk_max_turb` 2.5 (FID
+   p. 9), `jacobian` "complex_step" (0.08 s per Jacobian against 7.9 s for eager JAX at 161
+   stations; both tested). `shape_eq_bias` stays 0.5: 0.6 and 1.0 did not help the stagnation
+   oscillation, which item 2 removed.
+
+Tests (`tests/test_viscous.py`): complex-step Jacobian = central finite differences of the full
+residual (1e-5 of each column), JAX = complex step (1e-8; measured 2e-9), cold start at 5 deg
+converges in under 20 iterations with quadratic tail, 4 deg from the march and from 2 deg give the
+same Cl, Cd, Cm, transition (1e-7).
+
+**C2 results, NACA 2412, Re 1e6, "fidkowski2022"** (`tests/diagnostics/c2_polar.py`): converged at
+every angle -4 to 15 deg (16 deg not; attached range per the benchmark filter: below 12 deg).
+Against the C2 targets: iterations < 20 missed at -2 (180, continuation), -1 (65, continuation),
+0 (22, cold start), 14 (116, continuation); |dCl| <= 0.02 at 0-10 deg missed at 1-4 deg (-0.021 to
+-0.047) and 8-10 deg (-0.054 to -0.151); Cl_max 1.24 against XFOIL 1.52 (missed); |dCm| <= 0.01
+missed at 3 deg and from 8 deg; Cd within 15 % up to 9 deg (-1 to -14 %), missed from 10 deg
+(-18 to -24 %).
+
+Cause located: the missing wake. With XFOIL's own delta*, our core gives XFOIL's Cl to 0.002, and
+the wake adds only 0.006 (10 deg) and 0.019 (14 deg) directly; but it raises the upper edge
+speed near the trailing edge by 0.02 at x/c 0.95 and 0.04-0.08 at 0.995 (5-14 deg). Without it the
+trailing-edge deceleration thickens the coupled layer over the last 10 % of chord: at 0 deg
+delta* is within 2 % at x/c 0.5 and 4 % at 0.9 but 34-39 % high at the trailing edge, with TE ue
+0.838 against 0.887; at 10 deg the upper layer separates at the trailing edge (H 4.6 against
+2.7), which lowers circulation and Cl. Proposed: take C4 ("add the wake") before C3.
+
+"drela1987" (no targets): C1 as in the two-sets section; C2 converged -4 to 5 deg, not from 6 deg;
+at 0-5 deg dCl -0.014 to -0.070, Cd +1 to +13 %.
+
+### C4: the wake (2026-10-10), decisions and results
+
+**Why the wake is required (user's decision after report 5).** Not for its direct share of lift
+(0.002 at 5 deg, 0.006 at 10 deg with XFOIL's delta*) but for its effect on the edge velocity near
+the trailing edge: with the same delta*, the wake raises the upper-surface ue by 0.015 at x/c 0.95
+and 0.04-0.08 at 0.995 (5-14 deg). Without it the trailing-edge deceleration thickened the coupled
+layer over the last 10 % of chord (TE delta* +34-39 % at 0 deg, upper-surface separation at 10 deg).
+With the wake the C2 trailing-edge delta* is +7-9 % at 0 deg, +5 % at 5 and 10 deg (upper surface).
+
+**Formulation, with sources** (`foil_lab/wake.py`, `foil_lab/viscous.py`, `foil_lab/bl/march.py`):
+
+- Wake line, node count, offset, length and source distribution: FID p. 3 (Fig. 1, eq. 2), p. 7;
+  LNE89 pp. 7-8. Edge velocity over airfoil and wake stations: FID eqs. 23-27, rebuilt per angle.
+- First wake station: FID eq. 14 (BTE89 eqs. 16-18 / LNE89 eqs. 28-29 for "drela1987"); a laminar
+  trailing edge enters with the set's C_tau at transition (FID p. 7). Dead-air thickness: FID eq. 15
+  (dt/dxi clipped to +-3/f_w) and BTE89 eqs. 20-22 (no clip); closures of delta* - h_w, integral
+  equations with the full delta* (FID p. 7; BTE89 p. 62). Wake closures in each set's module.
+- Starting march along the wake: FID p. 9 (direct; inverse with eq. 22; extrapolation).
+- Drag: Squire-Young at the last wake station (FID p. 12); the trailing-edge Squire-Young value is
+  kept as `cd_te` and reported as a cross-check.
+
+Our choices (not stated in the sources):
+
+1. The first wake half-panel starts at the trailing-edge midpoint (FID Fig. 1 draws the sheet from
+   the trailing edge), not at the first wake node eps_w c downstream: starting it at the node puts
+   a logarithmic singularity of the tangential velocity there (with XFOIL's delta* at 5 deg: ue 0.82
+   at the first wake node against XFOIL's 0.91; with the midpoint start 0.93; downstream nodes
+   unchanged and within 0.001 of XFOIL's from x/c 1.05).
+2. First wake spacing = mean length of the two trailing-edge panels (0.0004 c on the canonical
+   160-panel files). FID gives the node count and total length only. **Open, see below.**
+3. Eq. 14 written as ratios minus one (dimensionless residuals, as the rest of the system); the
+   C_tau residual as (C_tau,w/C_tau,start)^1/2 - 1 for both sets.
+4. In the wake xi continues the upper surface (FID p. 3: the wake extends the upper surface):
+   xi = xi_TE,upper + distance along the wake; it enters only the ln xi source terms (FID eqs. 9-10).
+5. Starting march in the wake: inverse mode above `init_hk_max_turb` (FID gives no wake value); the
+   extrapolation fallback applied to delta* - h_w.
+6. The velocity of one body's wake sources at another body's wake is not included (one body in M3;
+   to add in M5).
+
+Changes forced by C4 failures:
+
+- **H_k and C_tau clipped after the update, as FID p. 11 does** (delta* raised so that H_k >=
+  `hk_min`, in the wake the closures' H_k; negative C_tau^1/2 set to 0.1 max C_tau^1/2), replacing
+  the step halving for these two of C2 item 4. With halving, cold starts with the wake stalled at
+  step factors of 1e-15 (2 deg drela1987, 4 deg fidkowski2022: the Newton direction is right but its
+  full length drives H_k below the bound at the trailing-edge stations). Halving remains for theta,
+  delta* > 0 and Re_theta >= `re_theta_min`. Every clip is counted in `step_limits`.
+- **Polar continuation from the last converged state** after a failed point (FID VIII.C: "a solution
+  ... initializes ...", "different starting angles of attack and fixed or adaptive increments"),
+  instead of a new starting march. Cold starts fail more often with the wake (fidkowski2022 cold:
+  converged at -4, -3, -1..6, 10 deg; not at -2, 7-9, 11, 12 deg) because the march on the inviscid
+  edge velocity meets the blunt-base deceleration at the finely panelled trailing edge (inviscid ue
+  0.86 -> 0.74 over the last 0.6 % of chord). A segregated re-march was tried and rejected (it
+  converged -2 and 4 deg but broke 0 deg).
+
+**Approved ViscousParams defaults (user, after report 5), with sources:**
+
+| parameter | default | source |
+|---|---|---|
+| `hk_min` | 1.02 | FID p. 11: H_k,min 1.02 in the wake (1.00005 on the airfoil) after the update; one value everywhere is our choice |
+| `re_theta_min` | 20 | FID eq. 59 (log10 Re_theta limited to 1.303 in the turbulent Cf); applying it as a bound on the Newton step is our choice |
+| `init_hk_max_lam` | 3.8 | FID p. 9 |
+| `init_hk_max_turb` | 2.5 | FID p. 9 (also used in the wake: our choice) |
+| `jacobian` | "complex_step" | our choice (0.08 s per Jacobian against 7.9 s for eager JAX at 161 stations; both tested) |
+
+**Iterations (user's decision):** a point is judged by the Newton iterations of its final solve; the
+total including failed attempts and intermediate continuation solves is always reported
+(`ViscousResult.iterations`, `iterations_total`).
+
+**C2 rerun with the wake ("fidkowski2022"): passed, targets unchanged.** Converged at every
+attached angle (-4..11 deg), at most 16 iterations per final solve (totals up to 286 with
+continuation); abs(dCl) max 0.0133 at 0-10 deg; Cl_max 1.502 vs 1.525 at 16 deg; abs(dCm) max
+0.0068 (0.0030 attached); Cd -9.9..+9.6 % (Cd TE -11.8..-0.2 %). The 2-5 deg lower-surface
+transition now matches XFOIL (0.963 / 0.990 / laminar / laminar against 0.966 / 0.994 / 1.000 /
+1.000) and dCl there is -0.004..+0.012 (was -0.023..-0.047). Tables in the M3 report 6.
+
+**Open decisions (for the user; C3 is run with the current choices and reports both drag values):**
+
+1. *First wake spacing and the wake-end drag.* The wake-end Cd depends on the first wake spacing: at
+   0 deg, +12.0 / +9.5 / +3.4 / -5.5 / -25 % against XFOIL for 0.0001 / 0.0004 / 0.002 / 0.005 /
+   0.01 c, and on panel refinement of the same section (+9.5 / +10.8 / +11.4 % at 160 / 240 / 320
+   panels), while `cd_te` stays within -0.5..-2.6 % of XFOIL's Cd throughout. Cause: our edge speed
+   at the first wake node differs from that at the trailing-edge nodes (0.899 against 0.874 at 0
+   deg); FID eq. 14 carries theta across that jump without a momentum term, and the following
+   deceleration adds about 9 % to the far-wake theta. Our wake equations on XFOIL's own wake edge
+   speed reproduce XFOIL's wake theta to 0.6 %, and XFOIL's own wake-end Cd exceeds its trailing-edge
+   Squire-Young value by only 0.5 / 2.6 / 4 % (0 / 5 / 10 deg).
+2. *drela1987 in the wake.* With the DG87 closures the far wake (x > 1.45 c) wants H_k < 1.02 and
+   ends on the approved `hk_min` clip; no point of that set converges with the wake (every other
+   residual is ~0).
+
+### C3: full benchmark with the wake (2026-10-10), results; stopped
+
+`python -m foil_lab.benchmark viscous` (`foil_lab/benchmark/viscous_run.py`; one "viscous" method per
+closure set, Q5); tables with `viscous-report` in `benchmark_output/m3_viscous/report.md`. Sweeps as
+the XFOIL reference (0 deg up to 20, 0 deg down to -4, each angle from the last converged one with
+continuation), same canonical files, metrics and attached-flow filter as the baseline report; both
+the wake-end Cd and the trailing-edge Squire-Young value are compared.
+
+Change made during C3 (a failure of the formulation, not a tolerance):
+
+- **Stagnation point on a node** (FID p. 7, "in the unlikely case that the stagnation point
+  coincides, to machine precision, with a panel node, the stagnation equations apply to that node").
+  A symmetric section at 0 deg puts the stagnation point on the leading-edge node to round-off; ue = 0
+  there, the starting march raised "similarity start failed" and the log-form interval from that
+  node is singular. Now (our reading of FID p. 7): when a branch's first node has a sheet strength
+  below 1e-9 of the next node's (`STAG_NODE_TOL`), the stagnation equations apply at the next node
+  (state extrapolated to xi = 0 as before) and the node on the stagnation point carries that node's
+  theta and delta* (Hiemenz flow) with n = 0. NACA 0012 at 0 deg now converges at every Reynolds
+  number but 5e5 (8-10 iterations, Cl = 0 exactly, symmetric layers; test added).
+
+Results ("fidkowski2022", the set the targets are judged with; open trailing edges, attached-flow
+filter, per Reynolds number; targets: converged >= 95 %, mean |dCl| <= 0.03 / max <= 0.10, mean rel
+|dCd| <= 10 % / max <= 30 %, mean |dCm| <= 0.01 / max <= 0.03):
+
+| Re | converged | mean / max dCl | mean / max rel dCd (wake end) | (TE value) | mean / max dCm |
+|---|---|---|---|---|---|
+| 5e5 | 69/83 = 83.1 % (missed) | 0.0040 / 0.0188 | 4.7 % / 9.6 % | 2.4 % / 5.9 % | 0.0008 / 0.0028 |
+| 1e6 | 78/91 = 85.7 % (missed) | 0.0054 / 0.0196 | 5.8 % / 10.5 % | 1.8 % / 9.7 % | 0.0011 / 0.0032 |
+| 3e6 | 74/102 = 72.5 % (missed) | 0.0068 / 0.0312 | 7.2 % / 12.4 % | 1.4 % / 12.7 % | 0.0013 / 0.0051 |
+| 6e6 | 41/110 = 37.3 % (missed) | 0.0040 / 0.0144 | 8.9 % / 14.2 % | 1.5 % / 6.5 % | 0.0008 / 0.0031 |
+
+All accuracy targets are met on the converged points at every validated Reynolds number; the
+convergence target is missed at all four. Where it fails (diagnosed cases): the transition location
+moves far between neighbouring angles (XFOIL's too: NACA 4412 lower surface 0.40 / 0.67 / 0.98 at
+2 / 3 / 4 deg, Re 6e6; 0.80 / 0.35 at 0 / -1 deg, Re 5e5), and the transition re-identification
+inside the Newton iteration does not survive it even with continuation down to 0.125 deg; the
+iterate ends with a clipped station (H_k = hk_min, a local ue spike) or oscillates. At Re 3e6-6e6
+mid-to-high angles also fail where transition is near the leading edge (NACA 0012 Re 3e6 from 10
+deg: the turbulent station after a laminar-separated transition station is clipped at H_k 1.02 at
+every update; FID's airfoil value 1.00005 does not change this).
+
+E387 (sharp trailing edge, no targets): converged 9/13, 7/13, 4/14, 1/16 at Re 5e5-6e6. At Re 1e6,
+-4 and -3 deg are reported converged (residual criteria met) on a non-physical solution (Cl 0.19 and
+0.18 against XFOIL -0.063 and 0.046; wake-end Cd 0.20 with a trailing-edge value of 0.0001), reached
+by a down sweep whose 0 to -2 deg points failed. The flag is truthful by its definition; the
+solution is not.
+
+"drela1987" (no targets): converged 2/83, 1/91, 1/102, 0/110 at Re 5e5-6e6 (open trailing edges).
+With the DG87/BTE89 closures the far wake drives H_k to 1 within one chord behind the trailing
+edge; with `hk_min` 1.02 the last wake stations end on the clip; with 1.00005 (tried, not adopted)
+only the last station does. Its numbers are not usable until the user decides how this set treats
+the far wake.
+
+Stopped here for the user (C3 instruction): the convergence target is missed for "fidkowski2022"
+at every validated Reynolds number, with every accuracy target met on the converged points; open
+decisions in C4 and above.
+
+### Decisions after report 6 (user, 2026-10-10)
+
+1. **Wake drag.** The drag definition (Squire-Young at the end of the wake) and the first wake
+   spacing rule stay unchanged for now. First the airfoil/wake source interface is checked against
+   FID (below, "Airfoil/wake source interface").
+2. **"drela1987" parked.** "Not converged with the wake" is accepted as this set's current state. The
+   set, its laminar Falkner-Skan comparison and its tests are kept; it is excluded from benchmark
+   runs (`viscous_run.CLOSURE_SETS = ("fidkowski2022",)`; `run_matrix` refuses a parked set and the
+   report ignores old rows of it). Its wake treatment is decided after v2.0 (Later). No more M3 time
+   is spent on it.
+3. **Convergence of "fidkowski2022".** Non-converged attached-flow points are classified by cause;
+   the largest class is compared with XFOIL's boundary-layer dump before anything changes. Measures
+   that only change how a solution is reached (limiting how far transition moves per Newton
+   iteration, finer or adaptive continuation, restarting from the starting march after a failed
+   warm start) may be implemented without asking, provided every point that converged before
+   converges to the same Cl, Cd, Cm and transition within 1e-6, tolerances and the definition of
+   converged are unchanged, each measure is recorded here with its source or "our choice", and the
+   result records how it was reached. Anything that changes a converged solution (closures, clips
+   or limits on H_k or C_tau, the transition formulation, the discretisation) needs the user's
+   approval first.
+4. E387 (sharp trailing edge) at Re 1e6, -4 and -3 deg converges to a non-physical solution (Cl
+   0.19 against XFOIL -0.063): looked at at the end of M3, after the convergence work (Later).
+
+### Airfoil/wake source interface against FID (decision 1 after report 6; open)
+
+What FID specifies (page images, pp. 3, 7, 16): (a) the source strength at the first wake node is
+the sum of the first and last airfoil panel sources, "in order to avoid a velocity spike at the
+trailing edge" (p. 3); the strength is linear over each wake half-panel (eq. 2), i.e. from
+sigma_1 + sigma_N-1 at the first wake node to sigma_1^w at the first panel's midpoint (Fig. 1); (b)
+the wake nodes, the first eps_w c = 1e-5 c behind the trailing-edge midpoint, are the panel ends,
+so the first half-panel starts at the first wake node (p. 7, Fig. 1); (c) when an evaluation point
+lies on a panel endpoint, the ln r of that endpoint is set to zero (appendix p. 16; stated for the
+streamfunction, and the velocity follows the same paragraph); (d) the wake edge speed sums the
+freestream and all vortex and source sheets (eq. 24). The paper says nothing more about the
+interface.
+
+What we do (`wake.py`): (a) and (d) as FID. (b) and (c) differ: the first half-panel starts at the
+trailing-edge midpoint (C4 our choice 1), so the first wake node lies 1e-5 c inside the sheet, and
+velocities are evaluated 1e-9 off the sheet (never on an endpoint).
+
+FID read literally ((b) and (c)) was implemented in a diagnostic (`tmp`, not committed) and is
+worse: with XFOIL's own delta* the first-node speed is 1.014 / 1.071 / 1.152 (0 / 5 / 10 deg; ours
+0.936 / 0.939 / 0.947; XFOIL 0.887 / 0.907 / 0.936); coupled (NACA 2412, Re 1e6) it does not
+converge at 0 and 10 deg and gives Cd -41 % at 5 deg with TE ue 0.944 against 0.907. It fails C2,
+so it was not adopted, and ours stays until the user decides.
+
+Cause of the jump at the first wake node, from a decomposition on XFOIL's delta*: the dead-air
+closure (FID eq. 15) enters the wake mass flow, so the first wake half-panel carries a sink of
+about ue dh_w/dxi ~ -0.25 while the first-node strength (rule (a)) holds only the airfoil
+boundary-layer sources; the strength ramps over one half-panel, which raises ue near its start
+(+0.05 over the trailing-edge value on XFOIL's delta*), and the finer the first spacing, the more
+of that ramp the first nodes see. XFOIL's own dump shows the first wake point (1e-4 c behind the
+trailing edge) with exactly the trailing-edge speed and its next point 0.0083 c downstream.
+
+Coupled, ours (NACA 2412, Re 1e6, 1 deg steps; trailing-edge ue / first wake node, XFOIL equal at
+both): 0.874 / 0.899 (XFOIL 0.887), 0.904 / 0.917 (0.907), 0.935 / 0.938 (0.936) at 0 / 5 / 10 deg;
+TE delta* ratio upper / lower 1.087 / 1.074, 1.051 / 1.274, 1.056 / 1.035; theta ratio 1.057 /
+1.053, 1.030 / 1.003, 1.016 / 1.014. Wake-end Cd against XFOIL at 0 / 5 / 10 deg:
+
+| first wake spacing | 0.0001 c | 0.0004 c (rule) | 0.002 c | 0.005 c | 0.01 c |
+|---|---|---|---|---|---|
+| Cd | +12.0 / +8.8 / +3.5 % | +9.5 / +5.3 / +0.4 % | +3.4 / -1.7 / -5.8 % | -5.5 / -9.8 / -12.6 % | -25.4 / -25.9 / -24.6 % |
+
+| panels (generated, open TE) | 160 | 240 | 320 |
+|---|---|---|---|
+| Cd | +9.5 / +5.3 / +0.4 % | +10.8 / +7.4 / +2.8 % | +11.4 / +8.7 / +4.2 % |
+
+Cd TE stays within -0.5..-4.9 % in all of these. The sensitivity remains: stopped for the user (the
+drag definition and the spacing rule are unchanged).
+
+### Convergence of "fidkowski2022" (decision 3 after report 6)
+
+**3a. Classification** (`tests/diagnostics/c3_failures.py`: replays C3 exactly through
+`viscous_run.run_case`, observing, not changing, the clip and transition steps after every Newton
+update; classes judged on the last 15 iterations of the failed direct attempt; thresholds are the
+diagnostic's own). The first pass reproduced C3's 14 / 13 / 28 / 69 failures at Re 5e5 / 1e6 / 3e6
+/ 6e6 exactly. Its "other" class (39 of 124) turned out to be mostly one mechanism, added as a
+class: an **isolated H_k clip in the turbulent layer** (one turbulent airfoil station, 6-27
+stations behind transition, held at H_k = 1.02 between neighbours at H 1.38-1.48; the iterate is a
+fixed point, unchanged to 1e-10 between iterations: the Newton step drives that station below the
+clip and the clip puts it back). Counts: report 7.
+
+**3b. Comparison with XFOIL**, NACA 4412, Re 5e5, -1 deg (dump in `tests/diagnostics/data`,
+`transition_compare.py`): the failed iterate equals XFOIL's state within about 1 % from the leading
+edge to x/c 0.80 (transition 0.356 against 0.354; H 1.465 against 1.466 at x/c 0.60) except one
+station at x/c 0.85 (H_k 1.02 against 1.471, theta 4.48e-3 against 2.07e-3, ue 0.693 against 0.933,
+ue overshoots to 0.99 on both sides). x/c 0.85 is where the warm start (0 deg) was finishing its
+transition (0.796); XFOIL's transition also jumps from 0.80 to 0.35 between 0 and -1 deg. The
+defect is a remnant of the previous solution held by the clip, not another physical state.
+NACA 0012, Re 3e6, 10 deg (the class "H_k clip after laminar-separated transition"): the laminar
+separation bubble is reproduced (H 4.68 against 4.60 at x/c 0.014); our onset falls at a node
+(0.0187, node 0.01877), so the whole reattachment from H 4.6 lies in one fully turbulent interval
+whose downstream station is clipped at every iteration (XFOIL: H 3.03 and 1.80 on its first two
+turbulent stations); transition does not move. Changing this touches the discretisation or the
+clip (decision 3d): not done, for the user.
+
+**3c. Measures (only how the solution is reached; `viscous.solve_point`, used by `polar`):** after
+the existing warm start with continuation fails,
+
+1. *repair restart* (our choice): restart Newton from the failed iterate with every isolated
+   station on the H_k clip (`isolated_clips`: turbulent, both neighbours turbulent and above the
+   clip) replaced by the mean of its two neighbours (theta, delta*, C_tau; ue kept), at most twice
+   in a row;
+2. *restart from the starting march* (user's list; FID section V.A for the march), followed by
+   repair restarts of it.
+
+The equations, `hk_min` and the clip, the tolerances and the definition of converged are
+unchanged. `ViscousResult.path` records how a point was reached ("warm start", "continuation",
+"march", "repair restart", "march restart", "march restart + repair restart"); `iterations` are
+the converged attempt's, `iterations_total` all of them; the benchmark CSV has a `path` column and
+full-precision floats. Experiments before adopting them (from the stuck iterates): smoothing the
+clipped station converged in 4-5 iterations at E387 gap Re 5e5 7 deg, NACA 23012 Re 1e6 -3 deg and
+NACA 4412 Re 5e5 -1 deg, to the cold-march solution where that converges (equal Cl, Cd,
+transition); NACA 0012 Re 6e6 3 deg did not (a period-2 oscillation of the lag residual of the
+transition interval, no clip involved). Tests: `test_isolated_clips_finds_one_station_spikes`,
+`test_restart_reaches_the_cold_start_solution` (slow; to 1e-6).
+
+**C3 rerun with the measures** (`c3_failures --write-benchmark`, i.e. `run_case` itself; 49 cases,
+about 58 min on 6 workers, 5.04 h summed over the cases against 5.83 h before): all 868 points that
+converged before converge again, to the same Cl, Cd, Cm and transition within 2.4e-11 (condition:
+1e-6); 162 points converge that did not. SPEC.md 4.1 table (open trailing edges, attached filter):
+
+| Re | converged | mean / max dCl | mean / max rel dCd (wake end) | (Cd TE) | mean / max dCm |
+|---|---|---|---|---|---|
+| 5e5 | 81/83 = 97.6 % (met) | 0.0037 / 0.0188 | 7.6 % / 147.7 % (max missed) | 5.2 % / 152.0 % | 0.0008 / 0.0028 |
+| 1e6 | 87/91 = 95.6 % (met) | 0.0051 / 0.0196 | 5.9 % / 11.9 % | 2.0 % / 9.7 % | 0.0010 / 0.0032 |
+| 3e6 | 90/102 = 88.2 % (missed) | 0.0071 / 0.0312 | 7.2 % / 14.3 % | 1.5 % / 12.7 % | 0.0014 / 0.0051 |
+| 6e6 | 84/110 = 76.4 % (missed) | 0.0074 / 0.0240 | 8.2 % / 14.6 % | 2.0 % / 10.8 % | 0.0014 / 0.0041 |
+
+The max Cd miss at 5e5 comes from two points that converge for the first time, E387 with the
+0.25 % gap at -3 and -4 deg (Cd 0.01107 / 0.01313 against XFOIL 0.00447 / 0.00714; Cl within
+0.0035), reached by a plain warm start from -2 deg (now converged by a repair restart). XFOIL's Cd
+there depends strongly on its paneling (0.00447 / 0.00714 at 160 PANE nodes, 0.00616 / 0.01611 at
+240; -2 deg 0.00965 / 0.00961). Reported as measured; nothing excluded.
+
+Failures after, by class (Re 5e5 / 1e6 / 3e6 / 6e6): cold start 2 / 3 / 2 / 2; H_k clip after
+laminar-separated transition 0 / 1 / 10 / 16; transition relocation 0 / 0 / 0 / 1; isolated clip
+0 / 0 / 0 / 4; other 0 / 0 / 0 / 3. The remaining main class (27 of 44) is the one 3b showed needs
+a discretisation or clip change (3d): for the user.
+
+### Decisions after report 7 (user, 2026-10-10)
+
+1. **Wake drag** stays the wake-end value. First test the explanation (open trailing edge: the
+   first wake stations lie in the dead-air region behind the base, where the wake-line velocity is
+   not an edge velocity; the edge velocity jumps across the trailing edge, 0.874 to 0.899 at 0 deg,
+   with no momentum term for the jump): (a) the same spacing and panel tables on the closed NACA
+   2412, where the sensitivity should then be much smaller, with the edge velocity across the
+   trailing edge; (b) if confirmed, a rule (continuous edge velocity across the trailing edge, no
+   wake station sampling the wake-line velocity inside the dead-air length of FID eq. 15, the
+   current treatment for a sharp edge), recorded as our choice; (c) accepted if the wake-end Cd
+   changes by at most 2 % over 160-320 panels and reasonable spacings beyond the dead-air region at
+   0, 5, 10 deg, with C2 still met; (d) otherwise stop and show; never tune the spacing to XFOIL.
+2. **FID eq. 13 upwinding** adopted as published in the shared discretisation; C0, C1, C2 rerun
+   (targets unchanged); the movement of the previously converged C3 points and the failure
+   classification reported. If the "clip after laminar-separated transition" class stays above 5
+   points: FID's airfoil H_k limit for "fidkowski2022" next; anything beyond the paper needs approval.
+3. **Repair restart** accepted as our choice; the `path` column stays; the benchmark report shows the
+   error metrics separately for points reached directly and by a restart.
+4. **Reference reliability**, proposed SPEC.md 4.1 addition, applied in the report now (SPEC.md is
+   edited only after the user confirms): "A reference point where XFOIL's own result at 240 nodes
+   differs from 160 nodes by more than the target for a quantity is reported but not counted
+   towards that quantity's targets. The number of such points is shown per case." Applied to all
+   sections; tables with and without the rule.
+
+### H_k-dependent upwinding, FID eq. 13 (decision 2 after report 7)
+
+Implemented in `bl/equations.py` as FID p. 6 states it (page image): eta_up = 1 - (1/2) exp(-(ln
+|f_Hu|)^2 C_up/H_k2^2), f_Hu = (H_k2 - 1)/(H_k1 - 1), C_up = 5 on the airfoil and 1 in the wake (taken
+from the downstream station), q_u = (1 - eta_up) q1 + eta_up q2; 0.5 (central) for equal H_k, towards 1
+(backward Euler) where H_k changes strongly. Which terms (FID p. 6): momentum all averaged; shape
+equation: the Cf and C_D source terms upwinded, the coefficient of ln(ue2/ue1) averaged; lag equation:
+C_tau^1/2 and C_tau,EQ^1/2 upwinded, delta averaged, u_q from the upwinded Cf and H_k with the averaged
+delta* and Re_theta; dn/dxi averaged. Our reading where FID is silent: K_lag and eta_D averaged (FID:
+"quantities without a subscript are averaged"); the lag equation is FID eq. 12 divided by the averaged
+delta; both subintervals of a transition interval use the same rule. Not part of eq. 13 and not
+adopted: FID's additional midpoint evaluation of cf xi/theta in the momentum equation, and its
+ln(ue2/ue1) form of the due/dxi term of the lag equation (ours stays 2 dxi (due/dxi)(1/ue)_avg). The
+`shape_eq_bias` parameter (0.5, central, never changed) is replaced by eq. 13 and removed. Test
+`test_upwind_factor_fid_eq13`; the interval Jacobian tests (JAX = complex step = finite differences)
+pass unchanged.
+
+- C0: passes. C1 (targets unchanged), trailing-edge delta* / theta ratio against XFOIL: 0 deg upper
+  1.001 / 1.001 (before 1.007 / 1.008), lower 0.997 / 0.997 (1.000 / 1.001), 5 deg upper 1.000 / 1.000
+  (1.009 / 1.007), 5 deg lower (laminar separation) 1.001 / 1.000, H +0.002 (1.011, H +0.042);
+  transition 0.657 / 0.682 / 0.294 / laminar unchanged.
+- C2 (NACA 2412, Re 1e6): converged at every angle -4..16 deg (15 deg now too); final-solve iterations
+  <= 18; |dCl| <= 0.0132 at 0-10 deg; Cl_max 1.530 at 16 deg (XFOIL 1.525); |dCm| <= 0.0028; Cd
+  -3.1..+8.9 % over the attached range (-4..11 deg), -15.1 % at 16 deg (beyond it; before -9.9 %):
+  flagged to the user, as "Cd within 15 %" was judged over all angles in report 6.
+- `test_solution_does_not_depend_on_the_start`: the 3 deg start from the march now stalls on an
+  isolated H_k clip; the test takes the 3 deg solution as a polar point (`solve_point`, repair
+  restart); 5 deg from it converges directly and equals the cold 5 deg solution to 1e-14 (assertion
+  1e-7 unchanged).
+- C3 replay (`c3_failures --write-benchmark`): previously converged points move (open trailing edge,
+  validated Re, attached filter, 335 points converged before and after): Cl mean 0.0019 / max 0.019
+  (NACA 4412 Re 6e6 13 deg); Cd (wake end) relative mean 1.7 % / max 7.4 % (NACA 0012 Re 3e6 13
+  deg), Cd TE 1.8 % / 7.4 %; Cm mean 0.0003 / max 0.0027; transition mean 0.0006 c / max 0.022 c.
+  7 points converged before and not now (NACA 23012 Re 1e6 0, 1 deg; E387 gap Re 1e6 0, 1 deg; Re
+  6e6 0, 4, 5 deg), 40 converge that did not.
+- Failure classes after (Re 5e5 / 1e6 / 3e6 / 6e6, attached, open): not converged 0 / 5 / 0 / 6
+  (report 7: 2 / 4 / 12 / 26); cold start 0 / 5 / 0 / 3; H_k clip after laminar-separated
+  transition 0 / 0 / 0 / 0 (report 7: 0 / 1 / 10 / 16); transition relocation 0; isolated clip 0;
+  other 0 / 0 / 0 / 3. The class is below 5, so FID's airfoil H_k limit was not tried.
+
+### Wake drag: test of the explanation (decision 1 after report 7); stopped at (a)
+
+Test (a), on the eq. 13 state, NACA 2412, Re 1e6, 0 / 5 / 10 deg; closed edge = `generate_naca4('2412',
+N, 'closed')`, its XFOIL reference run with the same recipe for this test (PANE 160: Cd 0.00555,
+0.00824, 0.01546; PANE 240: 0.00556, 0.00820, 0.01540; not committed). Wake-end Cd against XFOIL:
+
+| first wake spacing | 0.0001 c | 0.0004 c (rule) | 0.002 c | 0.005 c | 0.01 c |
+|---|---|---|---|---|---|
+| open | +11.4 / +8.0 / +1.7 % | +8.9 / +4.6 / -1.3 % | +2.8 / -2.3 / -7.2 % | -6.0 / -10.3 / -13.9 % | -25.8 / -26.3 / -25.7 % |
+| closed | -42.3 / -39.9 / -6.6 % | -40.7 / -39.5 / -4.5 % | -50.6 / -46.6 / -14.5 % | +292.6* / -57.5 / -34.3 % | +214.5* / -63.3 / -48.6 % |
+
+| panels | 160 | 240 | 320 |
+|---|---|---|---|
+| open | +8.9 / +4.6 / -1.3 % | +10.6 / +7.1 / +2.0 % | +11.3 / +8.5 / +3.7 % |
+| closed | -40.7 / -39.5 / -4.5 % | -29.6 / -34.1 / -4.9 % | -25.1 / -31.7 / -4.6 % |
+
+(*) another solution (Cl 0.13 below XFOIL, TE ue 0.76). Edge velocity, trailing edge (equal on both
+sides) / first wake station, 160 panels: open 0.874 / 0.899, 0.904 / 0.917, 0.933 / 0.936; closed
+0.902 / 0.772, 0.918 / 0.810, 0.931 / 0.922.
+
+Result: without a dead-air region the sensitivity is larger, not smaller, so (a) does not confirm
+the explanation; per (d) no rule was implemented and nothing was tuned. What the data support: in
+both cases Cd_wake/Cd_TE = (ue_wake1/ue_TE)^k with k = 3.2-3.6 wherever |jump| >= 0.02 (except open
+5 deg, k 4.8-5.1), i.e. Squire-Young's (H + 5)/2 applied to a theta carried unchanged across the
+edge-velocity jump at the first wake station (FID eq. 14); spacing and panel count act through that
+jump, whose sign differs (open: wake-line speed above the TE value; closed, finite TE angle: below).
+Open for the user.
+
+### Reference reliability in the report (decision 4 after report 7; SPEC.md not edited)
+
+`viscous_run.unreliable_quantities`: "differs by more than the target for a quantity" is read as the
+per-point (max) target, |dCl| > 0.10, |dCd|/Cd > 30 %, |dCm| > 0.03 (our reading; for the user to
+confirm with the SPEC.md wording); no 240-node result at that angle: nothing excluded; the
+convergence count is unaffected. The report shows every table with and without the rule, the
+number of such points per case and quantity, and the direct/restart split (decision 3).
+
+### Decisions after report 8 (user, 2026-10-10)
+
+1. **Wake drag.** The dead-air explanation of decision 1 after report 7 was wrong (the user's
+   statement; test (a) showed the closed edge more sensitive, not less). Accepted finding: the
+   wake-end drag error follows the edge-velocity jump between the trailing edge and the first wake
+   station, across which FID eq. 14 carries the trailing-edge state without a momentum term. Rule
+   to implement on open and closed edges, recorded as our choice: the edge velocity is continuous
+   across the trailing edge; the first wake station is at the trailing edge with the trailing-edge
+   edge velocity; eq. 14 applies there at equal edge velocity; the change of edge velocity down the
+   wake is crossed by ordinary wake intervals (with their momentum term). Acceptance (NACA 2412, Re
+   1e6, 0 / 5 / 10 deg, open and closed): wake-end Cd varies by at most 2 % of its value over 160 /
+   240 / 320 panels and first wake spacings 0.0001-0.002 c; wake-end Cd, the trailing-edge
+   Squire-Young value and their ratio against XFOIL's reported before and after; closed section
+   |dCl| <= 0.02 and |dCm| <= 0.01 at 0-10 deg; C1 and C2 still met on the open section. Otherwise
+   stop and show; the spacing is never tuned to XFOIL.
+2. **C2 drag expectation** ("Cd within 15 %") is judged over the attached range, as in SPEC.md 4.1;
+   beyond it, reported only.
+3. **"How reached" measure:** a point whose start from the march fails is reached from the nearest
+   converged angle of its sweep, under the rules of decision 3 after report 6; recorded in `path`.
+   The three "other" failures at Re 6e6 are to be looked at.
+4. **Reference reliability confirmed** with the per-point (maximum) reading. SPEC.md 4.1 edited
+   (approved wording): "A reference point where XFOIL's own result at 240 nodes differs from 160
+   nodes by more than the per-point (maximum) target for a quantity is reported but not counted
+   towards that quantity's targets. The number of such points is shown per case."
+
+Then C3; C5 only if every SPEC.md 4.1 target is met at every Reynolds number.
+
+### Continuous edge velocity across the trailing edge (decision 1 after report 8); stopped
+
+Implemented (not committed to `m3-viscous`; kept on branch `m3-te-tie-wip`):
+
+- The first wake station stays FID's first wake point, eps_w c = 1e-5 c behind the trailing-edge
+  midpoint (at the trailing edge to 1e-5 c; no geometry change).
+- Its edge-velocity relation R_u = ue - ue_inv - D (ue delta*) is replaced by R_u = ue_w1 -
+  (ue_TE,lower + ue_TE,upper)/2 (the two trailing-edge speeds are equal by the Kutta condition of the
+  core, so this is either of them; the mean keeps the row symmetric). Its rows of ue_inv and D are
+  zero; the wake-line velocity at that point is no longer used. The Jacobian (complex step: R_u rows
+  exact; JAX: automatic) carries the tie; the Jacobian tests pass.
+- Eq. 14 (theta, delta* + h_TE, C_tau) is unchanged and now holds at equal edge velocity; the change
+  of ue to the second wake station is crossed by the first ordinary wake interval.
+- Wake source strengths: still sigma = d(ue delta*)/ds per wake panel from the station values, so the
+  first wake panel's source now uses m_w1 = ue_TE (delta*_u + delta*_l + h_TE) and carries the mass
+  flow change from the trailing-edge speed to the second station's speed; the first-node strength
+  rule (FID p. 3, sum of the first and last airfoil panel sources) is unchanged.
+- The starting march starts the wake at the trailing-edge speed.
+
+Results (scripts and logs in the job scratch `tmp/d3/`): see report 9. In short, open edge: wake-end
+Cd within 0.4 / 0.3 / 0.8 % (0 / 5 / 10 deg) over 160-320 panels and spacings 0.0001-0.002 c (before:
+spread 2.4-15 points); ratio wake-end / TE value 1.00 / 1.013 / 1.025 against XFOIL's 1.009 / 1.027 /
+1.040 (dumps). C2: accuracy met with margin (Cd -4.4..+0.6 % over all angles), but the iteration
+target (< 20 per final solve) is missed at 0 deg (49, cold start reached by a repair restart) and 4 deg
+(40, warm start). Closed edge: not one point converges at 0 / 5 / 10 deg with any panel count or
+spacing. Continuation in the weight of the tie (diagnostic only), from report 8's converged closed
+solutions: the solution is lost at weight 0.55 / 0.65 / 0.85 (0 / 5 / 10 deg); along the way the
+trailing-edge speed rises and the wake-line speed just behind the sharp edge falls (implied 0.58 at
+0 deg, weight 0.5), i.e. with the trailing-edge mass flow carried to the first wake station, the first
+wake panel becomes a sink behind the sharp edge that lowers the speed there further. Per decision 1,
+stopped and shown; nothing tuned.
+
+### Decisions after report 9 (user, 2026-10-10)
+
+Track A (open trailing edges), then Track B (sharp trailing edge, diagnosis only):
+
+1. **Continuity rule on open trailing edges only: interim state.** The rule of decision 1 after report
+   8 is adopted for bodies with an open trailing edge. Bodies with a closed (sharp) edge keep the
+   report 8 treatment (the first wake station on the wake-line velocity) for now. Reason: on the sharp
+   edge our edge velocity is 0.90 at the trailing edge and 0.77 just behind it, where XFOIL has 0.835
+   rising to 0.867; the kinematics at a sharp edge are wrong, and the rule cannot be applied there until
+   that is fixed (Track B).
+2. **Warning, no substitution.** Until Track B is resolved, a viscous result on a closed trailing edge
+   carries a warning that its wake drag is unreliable. No other drag value is substituted.
+3. **Decision 3 after report 8** (`reach_from_nearest`): proceed, with tests, under the same "how
+   reached" rules; the three "other" failures at Re 6e6 are looked at.
+4. **Tests of the side branch:** the change of `test_converges_quadratically_at_5deg` is accepted as
+   described in report 9. `test_restart_reaches_the_cold_start_solution` gets another case in which a
+   restart is actually exercised, with the same assertion; the change is recorded.
+5. **Iterations:** "under 20" was a plan expectation, not a requirement. C3 reports the median and
+   maximum final-solve iterations per Reynolds number. If a Reynolds number converges below 95 %,
+   residual histories of two failing points are shown before anything changes.
+6. Merge into `m3-viscous` when the full suite passes, rerun C3, write the SPEC.md 4.1 table; stop
+   before C5.
+
+### Track A, steps 1-2: the rule on open trailing edges; closed-edge drag warning
+
+- `viscous.make_structure`: the first wake station's tie to the trailing-edge speed (and the zeroed
+  rows of ue_inv and D) only where the core treats the body's trailing edge as open
+  (`PanelSet.open_te`, the same switch as the inviscid trailing-edge panel: gap above
+  `inviscid.CLOSED_GAP_FRACTION` of the body size). A closed body keeps R_u = ue - ue_inv - D (ue
+  delta*) at that station. The starting march uses the trailing-edge speed there only where the tie
+  applies.
+- `ViscousResult.warnings`: a result on a body with a closed trailing edge carries
+  `viscous.WARN_CLOSED_TE_DRAG` ("wake drag unreliable: closed (sharp) trailing edge; ..."); `cd` stays
+  the wake-end Squire-Young value and `cd_te` the trailing-edge cross-check. The benchmark CSV has a
+  `warning` column.
+- Check (NACA 2412, Re 1e6; the report 9 variants: 0..10 deg at 160 panels, 0 / 5 / 10 deg for first
+  wake spacings 0.0001-0.002 c and 240 / 320 panels): every closed point equals report 8 (c773602) and
+  every open point equals report 9 (the rule everywhere) bit for bit in Cl, Cd, Cd TE, Cm and
+  transition, with the same converged flags.
+- Tests: `test_edge_velocity_tie_only_on_an_open_trailing_edge`,
+  `test_closed_trailing_edge_result_warns_about_wake_drag` (slow).
+
+### Track A, step 3: reaching failed cold starts from the nearest converged angle
+
+- `viscous.reach_from_nearest` (our choice; decision 3 after report 8; FID section VIII.C), called by
+  `viscous_run.run_case` after each sweep: a point whose start from the starting march failed is
+  reached from the nearest converged angle of the same sweep, one sweep angle at a time, each angle a
+  polar point (`solve_point`) started from the last one reached; the walk stops at the first angle
+  that fails. Equations, tolerances and the definition of converged are unchanged. A point reached
+  this way has `path` "from <angle> deg: <path>" and its `iterations_total` includes the failed
+  attempts; the benchmark report counts it with the restarts ("restart" subset). The C3 diagnostic
+  (`c3_failures`) takes such points from the benchmark row.
+- Test: `test_reach_from_nearest_walks_from_the_nearest_converged_angle` (walking order, stop at the
+  first failure, points that failed from a warm start are not walked to, path and totals).
+- In the C3 run on the Track A code it reached no point: it was tried at the three cold-start failures
+  at Re 6e6 (Clark Y 0 deg from 1 deg; E387 0.25 % gap 1 deg from 2 deg, which also stops the walk to
+  0 deg) and failed there. "Of its sweep" is read literally: E387 gap 0 deg (up sweep) is not reached
+  from -1 deg, which converged in the down sweep.
+- The three "other" failures at Re 6e6 of report 8, on the Track A code: E387 0.25 % gap at 4 and 5 deg
+  now converge directly from the warm start (10 and 12 iterations; the continuity rule changed the
+  solution path). NACA 2412 at 1 deg still fails from the warm start (0 deg) and from a cold start:
+  the largest residual is the lag equation of one lower-surface station at x/c 0.48, the first
+  station behind the transition interval, held on the H_k clip (H = 1.020); the residual falls
+  monotonically but slowly (2.0 after 50 iterations, about 10 % per iteration), i.e. a clipped
+  station behind transition, not an oscillation. Classified "transition relocation" in this run.
+
+### Track A, step 4: the two side-branch tests
+
+- `test_converges_quadratically_at_5deg`: accepted as described in report 9 (the step into the
+  residual tolerance is judged; bounds unchanged).
+- `test_restart_reaches_the_cold_start_solution`: case changed, assertion unchanged (restart in
+  `path`, `iterations_total > iterations`, Cl, Cd, Cm and transition equal to the cold start within
+  1e-6). Old case NACA 4412, Re 5e5, -1 deg from 0 deg: with the continuity rule it converges without
+  a restart and its cold start no longer converges. New case E387 with the 0.25 % gap, Re 1e6, -1 deg
+  from 0 deg (found in the C3 run): the warm start fails, a repair restart converges (5 iterations, 205
+  in total), and the cold start at -1 deg converges independently (27 iterations); they agree to
+  1e-15. Candidates checked and not taken: Clark Y Re 6e6 6 and 9 deg (also agree to 1e-15, but need a
+  7-10 point polar); NACA 23012 Re 5e5 -3 deg, Re 6e6 -1 deg and E387 gap Re 6e6 -1 deg (their cold
+  starts do not converge). The test skips when the UIUC E387 file is not cached and cannot be
+  downloaded, as the benchmark tests do.
+
+### Track A, step 5: iterations (C3 on the Track A code)
+
+Final-solve iterations of the converged points (open trailing edges, validated Re, attached filter,
+XFOIL converged): median / max 8 / 37 (Re 5e5), 9 / 49 (1e6), 9 / 40 (3e6), 10 / 43 (6e6). Every
+Reynolds number converges at 95 % or more, so no residual histories were required.
+
+### Track A, step 6: merged into m3-viscous; C3 and the SPEC.md 4.1 table
+
+`m3-te-tie-wip` merged into `m3-viscous` after the full suite passed (404 passed, 3 xfailed, 1 xpassed;
+the xpass is the non-strict xfail of the old VII tests, as in report 8). C3 = `c3_failures
+--write-benchmark` (= `viscous_run.run_case`), run on 168343b, whose `src/` and diagnostics equal the
+merged commit; repeated on the merged commit as a check (below). SPEC.md 4.1 table ("fidkowski2022",
+open trailing edges, attached-flow filter, validated Re; reference-reliability rule of SPEC.md 4.1
+applied; Cd at the end of the wake):
+
+| Re | converged | mean / max dCl | mean / max rel dCd | (Cd TE) | mean / max dCm | met |
+|---|---|---|---|---|---|---|
+| 5e5 | 83/83 = 100 % | 0.0017 / 0.0119 | 1.6 % / 5.7 % | 2.8 % / 7.3 % | 0.0004 / 0.0022 | all |
+| 1e6 | 91/91 = 100 % | 0.0020 / 0.0161 | 1.7 % / 7.3 % | 2.7 % / 12.2 % | 0.0004 / 0.0032 | all |
+| 3e6 | 100/102 = 98.0 % | 0.0026 / 0.0242 | 1.5 % / 6.1 % | 2.7 % / 16.0 % | 0.0005 / 0.0045 | all |
+| 6e6 | 106/110 = 96.4 % | 0.0026 / 0.0240 | 1.6 % / 6.0 % | 2.7 % / 16.9 % | 0.0005 / 0.0045 | all |
+
+The rule excludes 2 points from the Cd metrics (E387 with the 0.25 % gap, Re 5e5, -3 and -4 deg; XFOIL
+Cd 0.00447 / 0.00714 at 160 PANE nodes, 0.00616 / 0.01611 at 240). Without the rule, Re 5e5 misses max
+rel dCd (150.8 %, those two points; mean 4.6 %); everything else is the same. Sharp E387 (no targets):
+converged 13/13, 13/13, 14/14, 15/16 at Re 5e5-6e6; every result carries the wake-drag warning.
+Final-solve iterations: step 5. Report text: the reliability paragraph now cites SPEC.md 4.1 (it said
+"proposed ... not yet edited"). Stopped before C5 (user).
+
+### Track B: sharp trailing edge, diagnosis only (no package code changed); stopped for the user
+
+Closed NACA 2412 (`generate_naca4('2412', 160, 'closed')`), Re 1e6, 0 and 5 deg. XFOIL's boundary-layer
+dumps of report 9 (PANE 160) plus an inviscid DUMP and the PANE nodes (SAVE) of the same file, run here
+(external program; job scratch, not committed). Our relation ue = ue_inv + D (ue delta*) (the solver's
+own, `make_structure`) driven by XFOIL's delta* on airfoil and wake. Scripts: job scratch
+`tmp/e1/trackb.py`, `eq9_check.py`.
+
+1. **Edge velocity driven by XFOIL's delta*** (our 160 panels, rule spacing): within about 0.003 of
+   XFOIL's from x/c 0.95 to 0.99 (one odd-even pair of -0.02 / -0.036 at x/c 0.990, where XFOIL's
+   coarser delta* is interpolated onto our nodes) and from 0.007 c behind the edge on. Over the last
+   0.6 % of chord ours rises to 0.951 / 1.203 at the trailing-edge node (XFOIL 0.835 / 0.899, 0 / 5
+   deg); on the first 0.007 c of the wake ours is 0.06-0.29 high.
+2. **Parts** (on XFOIL's own PANE nodes, so that geometry and node spacing are identical and the rule
+   gives XFOIL's first wake spacing, 0.0083 c):
+   - inviscid surface speed at the trailing-edge nodes (eq. 9 extrapolation): ours 0.835 / 0.829,
+     XFOIL 0.757 / 0.752 (+0.078); one node upstream they agree to 0.002-0.008. XFOIL 6.99's dump does
+     not satisfy LNE89 eq. 9 as printed (residual -0.135 at both angles with the Kutta condition met
+     exactly); eq. 9 applied to XFOIL's own neighbouring nodes gives 0.825 / 0.819;
+   - source contribution on the surface: at the trailing-edge node ours -0.031 / -0.024, XFOIL
+     (viscous minus inviscid) +0.078 / +0.147; upstream ours is 0.01-0.06 below XFOIL's from x/c 0.97;
+   - inviscid wake-line velocity: 0.59 at 1e-5 c, 0.851 / 0.846 at 0.0083 c, the same on our panels
+     and on XFOIL's nodes. It follows the exact local corner flow behind a sharp edge with the Kutta
+     condition, |u| ~ r^k, k = tau/(2 pi - tau): tau = 16.5 deg from the NACA thickness slope gives k =
+     0.048; our values give 0.050 (1e-5 to 4e-4 c) and 0.048 (4e-4 to 9e-4 c). XFOIL dumps no
+     inviscid wake;
+   - source contribution on the wake line: +0.035 / +0.087 at 0.0083 c (total 0.887 / 0.933 against
+     XFOIL 0.867 / 0.896); at the first wake station (on the edge) XFOIL carries the trailing-edge
+     speed, ours the wake-line value 0.74 / 0.88.
+   On our own 160 panels (trailing-edge panels 0.0004 c, 20 times shorter than XFOIL's) the source
+   contribution at the trailing-edge node is +0.249 / +0.506, half from airfoil and half from wake
+   sources, growing by a nearly constant step each time the distance to the edge halves: a
+   logarithmic spike from the jump between the airfoil sources (delta* growing) and the near-wake
+   sinks (delta* falling) at the edge, regularised only over the first wake half-panel. Both
+   trailing-edge parts therefore depend on the panel size at a sharp edge (eq. 9 node value 0.70 on
+   our panels, 0.835 on XFOIL's).
+3. **First wake spacing 0.001 c and 0.008 c** (second wake station at that distance; first station at
+   eps_w c as always): trailing-edge node 0.932 / 1.165 and 0.832 / 0.966 (rule 0.951 / 1.203; XFOIL
+   0.835 / 0.899); first wake station 0.837 / 1.062 and 0.728 / 0.844. With every spacing the wake-line
+   disagreement is confined to the first ~0.008 c behind the edge; from 0.011 c on ours is within 0.003
+   (0.0004 and 0.001 c spacing) and 0.008 / 0.015 (0.008 c) of XFOIL's.
+4. **Published sources:** LNE89 gives eq. 9 (inviscid node extrapolation), eqs. 28-29 (wake initial
+   state) and two-piece linear wake sources against the log singularity at wake nodes (pp. 7-8); FID
+   p. 3 gives the first-wake-node source strength (sum of the first and last airfoil panel sources, "to
+   avoid a velocity spike at the trailing edge") and eq. 9; BTE89 treats the blunt edge (dead air,
+   zero for a sharp edge); DG87 nothing on this. None says how the edge velocity is defined at and just
+   behind a sharp, finite-angle trailing edge in the coupled problem, and the installed XFOIL departs
+   from the printed eq. 9. Options for the user (report 10); none implemented.
+
+### Decisions after report 10 (user, 2026-10-11)
+
+1. **M3 accuracy and convergence criteria met.** Track A met every SPEC.md 4.1 target at Re 5e5, 1e6,
+   3e6 and 6e6 (table in "Track A, step 6"). M3's accuracy and convergence criteria are recorded as
+   met with closure set "fidkowski2022", which is **confirmed as the default set**
+   (`ViscousParams.closure_set`; the docstring no longer says "provisional"). "drela1987" stays parked.
+2. **Slow marks.** `test_farfield_lift_equals_pressure_lift` and
+   `test_report_command_never_writes_the_baseline_document` are marked `slow`; the fast suite runs in
+   42.6 s again (370 passed, 1 xfailed). The full suite runs before every merge.
+3. **`reach_from_nearest` across sweeps.** A point whose start from the march failed may be reached from
+   the nearest converged angle of either sweep of the same case. Implemented as a second pass in
+   `viscous_run.run_case` after the per-sweep walks (which are unchanged, so every earlier result is
+   unchanged): over the combined, sorted angles, a still-failed cold point is walked to from a converged
+   angle of the other sweep where that angle is at least as near as the nearest converged angle of its
+   own sweep (that one has already been tried) (`reach_from_nearest(..., group=...)`; our reading).
+   Test: `test_reach_from_nearest_uses_the_other_sweep_when_it_is_nearer`.
+4. **Sharp trailing edge.** Option (b) of report 10 (the sharp edge as the small-gap limit of the open
+   treatment) is the route for v2.0, with (c) (the interim state: warning, no substitution) as the
+   fallback. Option (a), a resolution-independent sharp-edge treatment, is a Later item after v2.0,
+   starting from the Track B findings.
+
+### Step 1 after report 10: sharp edge as the small-gap limit; rule not met, interim state kept
+
+User's rule: between gaps 0.001 c and 0.0005 c, if Cd changes by less than 1 % and Cl by less than 0.005
+at every point (closed NACA 2412 and sharp E387, Re 1e6 and 3e6, alpha 0 / 5 / 10 deg), a closed trailing
+edge gets `DESIGN.min_te_gap` by default in viscous analysis; otherwise the interim state stays.
+
+Study on e9d54fc (no package code changed): `generate_naca4('2412', 160, 'closed')` and the canonical
+E387, up sweep 0..10 deg as in the benchmark (march, warm starts, `reach_from_nearest`), at the sharp
+original (closed treatment) and with the gap tool at 0.002 / 0.001 / 0.0005 / 0.00025 c (open treatment).
+XFOIL 6.99 as the external program on the same coordinate files, PANE 160 and 240. Scripts and tables
+are generated output, not committed.
+
+| case (0 / 5 / 10 deg) | max rel dCd, 0.001 -> 0.0005 c | max dCl | met |
+|---|---|---|---|
+| NACA 2412, Re 1e6 | 0.26 % (5) | 0.0036 (10) | yes |
+| NACA 2412, Re 3e6 | 0.23 % (5) | **0.0056 (5)** | no |
+| E387, Re 1e6 | 0.42 % (5) | 0.0020 (5) | yes |
+| E387, Re 3e6 | 0.37 % (10) | 0.0041 (10) | no: 5 deg does not converge at 0.001 or 0.0005 c (50 iterations; unconverged values differ by 0.81 % / 0.0028) |
+
+- Over all eleven angles the maxima are 0.34 / 0.57 / 0.47 / 0.58 % in Cd and 0.0036 / 0.0056 / 0.0029
+  / 0.0041 in Cl. The changes roughly halve with each halving of the gap (NACA 2412 Re 3e6, 5 deg, dCl:
+  0.0100, 0.0056, 0.0026 for the steps 0.002 -> 0.001 -> 0.0005 -> 0.00025 c).
+- **Decision (by the rule): not met; no policy implemented.** Closed edges keep report 8's treatment
+  and `WARN_CLOSED_TE_DRAG`; nothing is substituted.
+- Ours against XFOIL (PANE 160) on the same 0.001 c geometry, 0 / 5 / 10 deg, the 10 points where both
+  converged (E387 Re 3e6: XFOIL fails at 0 deg, ours at 5 deg): |dCl| <= 0.009, |dCm| <= 0.0015, rel dCd
+  -8.9 to +1.4 % (9 of 10 between -2.2 and +1.4 %; E387 Re 1e6 10 deg -8.9 %, where XFOIL itself moves
+  6.8 % between PANE 160 and 240).
+- XFOIL's sharp result differs from its own 0.001 c result by up to 0.042 in Cl (NACA 2412 Re 1e6
+  5 deg: 0.8564 sharp, 0.8141 gapped). Inviscid, the two geometries differ by <= 0.0008 in Cl (XFOIL and
+  ours agree to 0.0013), so the jump comes from XFOIL's viscous sharp-edge treatment.
+- The missing XFOIL polar (sharp NACA 2412, Re 3e6, PANE 240) was generated again in the foreground:
+  25 of 25 converged, data identical to the earlier run.
+
+### C5: one viscous solver behind every interface; the v1.3.1 viscous code deleted
+
+As planned (Q3 of the plan; user's step 2 after report 10). Viscous numerics unchanged: the coupled
+solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sources`, `residual`).
+
+- **Deleted** with their tests: `boundary_layer.py`, `bl_integral.py`, `transition.py`, `vii.py`,
+  `vii_newton.py`, `vii_qs.py`, `viscous_mods.py` (one-way drag, Michel transition, roughness, the
+  empirical post-stall model, transpiration VII, Newton VII, quasi-simultaneous VII);
+  `tests/test_vii.py`, `test_vii_newton.py`, `test_vii_qs_experimental.py`, `test_transition.py`, the
+  roughness and post-stall tests of `test_features.py`, `examples/vii_demo.py`. A test checks that none
+  of the seven modules can be imported. The SPEC.md 4.2 flat-plate checks were already in
+  `tests/test_bl_closures.py` on the new boundary layer.
+- **Routed to the coupled solver** (one body, Mach 0; anything else with a Reynolds number raises
+  `NotImplementedError` instead of returning a result without viscous drag):
+  - `solver.solve_flow(reynolds > 0)` -> `viscous.solve_point` (from the starting march), with `n_crit`
+    and the trips; `SolutionData` gains `converged`, `cd_friction`, `cd_pressure`, `xtr_upper/lower`,
+    `iterations`, `residual`, `path`, `warnings`. New `solver.solve_flow_sweep` -> `viscous.sweep`.
+  - `fl.analyze` / `fl.polar` accept `re` (plus `n_crit`, `trip_upper`, `trip_lower`, `params`); the
+    solver receives `re / ref_chord` (it works per unit length) and the result reports `re` and Cd on
+    the reference chord. `fl.polar` reaches the angles as the benchmark does (`viscous.sweep`: up from
+    the angle nearest 0 deg, then down from it, then failed starts from the nearest converged angle of
+    either sweep).
+  - `analysis.run_alpha_sweep` (GUI polar) -> `solve_flow_sweep`; roughness and post-stall arguments
+    removed, `n_crit` and trips added.
+  - Command line: `--vii` removed; `--re` runs the coupled solver (`analyze`: `solve_flow`; `polar`:
+    `solve_flow_sweep`), with `--ncrit`, `--trip-upper`, `--trip-lower`; every viscous line prints the
+    convergence status and warnings; invalid input gives an `error:` message, not a traceback.
+  - Batch: `Case` loses `roughness` and `enable_post_stall`, gains `n_crit`; a row's `converged` is the
+    solver's flag (and, as before, false for implausible drag); rows carry friction and pressure drag,
+    transition, iterations, path and warnings.
+  - `design.maximize_ld`: every L/D evaluation is `solve_flow` with the Reynolds number; `use_vii` (and
+    the one-way alternative) removed; a candidate that did not converge is penalised as before, the Cl
+    constraint of a failed candidate counts as violated, and `success` also needs the final solve to
+    have converged.
+  - `advanced`: unchanged calls (through `solve_flow`); a wing-loading point is converged only if the
+    final viscous solve converged. `ground_effect` with a Reynolds number raises (viscous ground effect
+    is M6).
+  - GUI (routing only; repair is M8): the roughness, post-stall and VII controls are removed; single case
+    and polar call `solve_flow` / `run_alpha_sweep` with N_crit and the trip spin boxes; the status line
+    shows converged, iterations and warnings, and the polar the number of converged points.
+- **Benchmark adapter of M1** (`baseline_v131.py`): its viscous methods called the deleted modules and
+  are removed; `run` now writes the inviscid rows only. The committed before pictures
+  (`docs/baseline_v1.3.1.md`, `docs/benchmark_m2.md`) stay unchanged (Q5); the `baseline-doc` command,
+  which rewrote the first of them, is removed because it can no longer reproduce it. `BenchmarkParams`
+  loses the fields of the deleted solvers (`newton_*`, `vii_max_iter`, `vii_tol`); no other default
+  changed.
+- `tests/diagnostics/bl_compare.py` keeps the XFOIL dumps and the inviscid check (core driven by XFOIL's
+  delta*); its two comparisons of the deleted v1.3.1 VII and marcher are removed.
+- SPEC.md 4.3 already reads "Transition by the e^n envelope method, with forced trip locations per
+  surface." (approved with the plan, commit f83b237); no edit.
+- **Tests:** fast routing tests with a stand-in for the solver (`tests/test_viscous_interfaces.py`:
+  `solve_flow`, the API, command line, batch, `maximize_ld`, the errors) and slow end-to-end smoke
+  tests with the real solver (API, closed-edge warning, `run_alpha_sweep` and batch, the GUI headless).
+  Tests that now run the coupled solver (trip wires, viscous batch, wing loading, determinism) are
+  marked slow: a cold-started point takes 10-24 s here.
+- **Single points started from the march do not always converge** (found by the full suite; open for
+  the user). At Re 1e6, NACA 0012 (120 panels) 5 deg and NACA 2412 (160 panels) 4 deg stop at 50
+  iterations (residual 7.6 and 3.4) with `converged` False. Both converge when reached by a warm start
+  in a polar. NACA 2412 at 0 and 5 deg (120 panels) and at 5 deg (160), and NACA 0012 at 0 deg,
+  converge. This touches every single-point interface (`fl.analyze`, `solve_flow`, command line
+  `analyze`, GUI single case, batch, `maximize_ld`). How single points are reached is not changed
+  here (a "how reached" measure is the user's decision). Two tests were changed accordingly, for the
+  user to check:
+  - the determinism test runs its viscous point at 5 deg instead of 4;
+  - `test_batch_matrix_and_run` no longer asserts that all four cold-started cases converge; it
+    asserts that each row carries the solver's own flag and values, and that at least 3 of 4
+    converge (the measured count).
+- **Design path** (Later item "M3 cleanup (C5)"): `maximize_ld` uses the coupled solver (fast
+  routing tests). The design example with `--ld` was stopped after 48 min (Later, M7 speed). It is
+  replaced by a slow smoke test (`test_maximize_ld_runs_on_the_coupled_viscous_solver`: 60 panels,
+  2 optimiser iterations, 4 deg, Re 3e6; 124.6 s). Measured: 12 viscous solves of about 10 s each,
+  10 converged; the returned design's final solve converged with L/D 106.3 (Cl 0.678, Cd 0.00638),
+  and the NACA 2412 reference at the same point gives 118.2 (Cl 0.678, Cd 0.00573). `success` is
+  False because SLSQP stops at its iteration limit. The demo's `--ld` section now uses the same
+  reduced settings. The batch example uses the coupled solver through `solve_flow` (not run: 153
+  cold-started cases at about 10 s each).
+- **Fast suite** after C5: 360 passed, 1 xfailed (the M6 aspect-ratio test), 35.6 s on an idle CPU;
+  the slowest fast test takes 2.4 s.
+- **Step 3: low-Re targets, proposal only (not applied; SPEC.md not edited; for the user).** The
+  figures are measured on the C5 run (open trailing edges, attached filter, reference-reliability
+  rule; the rule excludes no point at Re 1e5 or 2e5):
+
+  | Re | converged | mean / max dCl | mean / max rel dCd | mean / max dCm |
+  |---|---|---|---|---|
+  | 2e5 | 83/83 (100 %) | 0.0029 / 0.0146 | 2.0 % / 19.9 % | 0.0006 / 0.0026 |
+  | 1e5 | 81/81 (100 %) | 0.0062 / 0.0275 | 3.0 % / 26.3 % | 0.0011 / 0.0040 |
+
+  - **Proposal (A):** the SPEC.md 4.1 targets, unchanged, also at Re 1e5 and 2e5 (validated range
+    1e5 to 6e6). Both Reynolds numbers meet every target today.
+  - **The tight margin** is max rel dCd at 1e5: 26.3 % against 30 %. It comes from a single point,
+    E387 with the 0.25 % gap at -4 deg (Cd 0.02735 against 0.03713), where XFOIL itself moves 17.7 %
+    between 160 and 240 nodes. The next largest is 10.0 % (Clark Y, -4 deg); 9 of 81 points are over
+    5 %. At 2e5 the maximum is 19.9 %, from the same section and angle (XFOIL 160 vs 240: 11.0 %),
+    and only 1 of 83 points is over 5 %.
+  - **Alternative (B):** validate down to 2e5 only, and keep 1e5 reported without a claim.
+  - **Re 5e4 stays reported without a claim:** 72/78 converged (92.3 %), max dCl 0.138, max rel dCd
+    35.9 %, max dCm 0.056 (three per-point targets missed).
+  - **Caveats:** the agreement is with XFOIL, not with experiment; one benchmark run per Reynolds
+    number; the seven sections of the matrix.
+  - **SPEC.md text that would change (wording for approval):**
+    - 2 "valid at Re from 5e5 to 6e6" -> "from 1e5 to 6e6";
+    - 4.1 "Validated range: Re = 1e5, 2e5, 5e5, 1e6, 3e6, 6e6" and "Reported but outside the
+      validated range: Re = 5e4";
+    - 5 "Validated at Re from 1e5 to 6e6";
+    - 2 Later, v2.2: "low-Reynolds-number accuracy below Re 1e5 (laminar separation bubbles)".
+- **C3 on the C5 code** (`docs/benchmark_m3.md`): all 1167 points that converged in both runs are
+  bit-identical to report 10, with none gained or lost. So the second `reach_from_nearest` pass
+  (after report 10) reached no new point. Every SPEC.md 4.1 target is still met at Re 5e5-6e6.
+- **`viscous.sweep` against the benchmark's `run_case`** (the two reach the angles the same way): on
+  NACA 2412 Re 1e6, all 25 points are identical (flag, Cl, Cd, Cm, path) with one BLAS thread, as the
+  benchmark workers run. With the default multi-threaded BLAS, values differ by up to 1.4e-10 in Cl
+  (NACA 2412 Re 1e6 and E387 0.25 % gap Re 6e6, 50 points); flags and paths are the same.
+
+### Decisions after report 11 (user, 2026-10-15)
+
+1. **Cold start (blocking).** Loosening the tests is not accepted. Both test changes of C5 are
+   reverted: the determinism test is back at 4 deg, and `test_batch_matrix_and_run` again asserts
+   that all 4 cases converge.
+   - Single points (`fl.analyze`, `solve_flow`, and through it the command line, GUI, batch and
+     `maximize_ld`) are solved by `viscous.solve_single`, in this order: the direct start; else
+     continuation from 0 deg in steps of `single_point_step` (1 deg), warm-started as `fl.polar`
+     reaches angles; else, only if 0 deg fails, the start from the nearest angle that converges,
+     as `reach_from_nearest` does.
+   - The result's `path` says how the point was reached ("direct: ...", "continuation from 0 deg:
+     ...", "from <angle> deg: ..."), or what was tried when it failed. `converged` stays
+     residual-only.
+   - The search for that nearest angle is bounded by `ViscousParams.single_point_reach` = 4 deg.
+     This bound is our choice, for the user's approval.
+   - **Measurement.** Every benchmark point at Re 1e5 to 6e6 (7 sections x 25 angles x 6 Re = 1050)
+     as an independent `solver.solve_flow` call (the single-point path of `fl.analyze`, which only
+     adds the reference-chord scaling of Re; same canonical file, closed edge kept sharp so that the
+     geometry is the benchmark's). 6 worker processes, one BLAS thread each, on an otherwise idle
+     CPU (an XFOIL run in parallel for part of it). Compared with the polar (all 25 angles, C3 run on
+     the C5 code):
+
+     | Re | points | polar converged | single converged | single via continuation / nearest angle | max dCl / max rel dCd, both converged | run time per point mean / max (s) |
+     |---|---|---|---|---|---|---|
+     | 1e5 | 175 | 173 | 172 | 63 | 3.6e-5 / 0.012 % | 66 / 229 |
+     | 2e5 | 175 | 172 | 172 | 41 | 2.3e-5 / 0.013 % | 36 / 181 |
+     | 5e5 | 175 | 169 | 168 | 39 | 1.6e-5 / 0.008 % | 34 / 297 |
+     | 1e6 | 175 | 173 | 173 | 44 | 0.456 / 59.6 % (sharp E387, 11 deg) | 25 / 119 |
+     | 3e6 | 175 | 173 | 173 | 43 | 0.712 / 35.6 % (sharp E387, 19 deg) | 34 / 197 |
+     | 6e6 | 175 | 170 | 170 | 43 | 0.663 / 75.1 % (sharp E387) | 31 / 146 |
+
+     - How the 1028 converged single points were reached: 755 direct, 236 continuation from 0 deg,
+       37 from another angle.
+     - **Target not met at 2 points** (converged in the polar, not as single points):
+       - E387 Re 1e5, 20 deg: 0 deg fails from the march and no angle within 4 deg converges from
+         it;
+       - Clark Y Re 5e5, 11 deg: 0 deg fails; the nearest angle that converges from the march is
+         12 deg, and the walk from 12 to 11 fails.
+
+       No point converged as a single point but not in the polar.
+     - **Measured option (diagnostic, not implemented):** continue past a failed walk to the next
+       nearest converged start, without the 4 deg bound. This reaches both points, with the polar's
+       solution (Cl equal to 1e-4):
+       - Clark Y from 8 deg, after 5 cold starts (266 s); 12 and 13 deg converge but their walks
+         fail;
+       - E387 from 15 deg, after 9 cold starts (187 s).
+     - **Different solutions, all on the sharp E387** (kept sharp here). 7 points converge in both
+       but to different solutions, |dCl| > 1e-3:
+       - 6 outside the attached-flow filter: 1e6 11 deg; 3e6 19 deg; 6e6 12, 16, 18 and 20 deg.
+         The single-point Cl is the closer one to XFOIL at these, except 1e6 11 deg (polar 1.164,
+         single 1.621, XFOIL 1.326).
+       - 1 inside the filter: 6e6, -1 deg; Cl 0.2739 polar, 0.2700 single, XFOIL 0.274.
+
+       Every open-edge point agrees to 3.6e-5 in Cl and 0.013 % in Cd. Through the interfaces, a
+       closed edge is now opened by default (item 2).
+     - **Labelling fix found by this comparison:** `reach_from_nearest` reported a walked point to
+       `on_result` before adding its "from <angle> deg:" prefix and earlier iterations. Benchmark
+       rows of walked points therefore showed the bare path (5 rows), and the report counted them
+       as reached directly. Fixed; the numbers are unchanged.
+2. **Sharp trailing edge, approved policy.** For viscous analysis through the interfaces, a closed
+   trailing edge is opened to `ViscousParams.closed_te_gap` = 0.0005 c (new parameter) with the gap
+   tool, and the result's `corrections` record it. `closed_te_gap` = 0 keeps the sharp edge, with
+   `WARN_CLOSED_TE_DRAG`.
+   - **The rule as set was not met** (step 1 after report 10): between 0.001 and 0.0005 c, NACA 2412
+     at Re 3e6, 5 deg changes Cl by 0.0056 (limit 0.005), and E387 at Re 3e6, 5 deg does not
+     converge at either gap.
+   - **Why 0.0005 c (user's decision):** the changes are first order in the gap (NACA 2412 Re 3e6,
+     5 deg, dCl per halving: 0.0100, 0.0056, 0.0026). The sharp path also gives converged but
+     wrong results (sharp NACA 2412 at Re 3e6, 0 deg: Cl 0.059 against XFOIL 0.234). 0.0005 c is
+     the smallest gap of the study at which the step to the next halving was measured.
+   - **Measured 0.0005 -> 0.00025 c**, over 0..10 deg: max rel dCd 0.15 / 0.32 / 0.27 / 0.15 % and
+     max dCl 0.0019 / 0.0034 / 0.0034 / 0.0011 (NACA 2412 Re 1e6 / 3e6, E387 Re 1e6 / 3e6); E387
+     Re 3e6 5 deg does not converge at either gap.
+   - The default trailing edge of `fl.Airfoil.naca` and of `generate_naca4` is **open** (unchanged).
+   - The benchmark solves the canonical files unchanged (SPEC.md 4.1), so its sharp E387 rows stay
+     sharp; the rerun through the new default is reported separately (below).
+   - **Rerun through the new default** (`solve_flow_sweep`, -4..20 deg; attached-flow filter of each
+     XFOIL polar, PANE 160). The XFOIL polars at Re 5e5 and 6e6 were generated for this; E387 at
+     0.001 c, Re 5e5 converges at 18 of 25 angles in XFOIL.
+
+     | section | Re | vs XFOIL sharp: conv., mean / max dCl, mean / max rel dCd, mean / max dCm | vs XFOIL 0.001 c: same |
+     |---|---|---|---|
+     | NACA 2412 closed | 5e5 | 15/15, 0.0192 / 0.0651, 2.4 / 6.7 %, 0.0041 / 0.0139 | 15/15, 0.0034 / 0.0125, 1.6 / 2.5 %, 0.0007 / 0.0023 |
+     | NACA 2412 closed | 1e6 | 14/14, 0.0207 / 0.0689, 1.5 / 5.1 %, 0.0045 / 0.0146 | 15/15, 0.0042 / 0.0126, 1.5 / 2.8 %, 0.0009 / 0.0025 |
+     | NACA 2412 closed | 3e6 | 18/18, 0.0196 / 0.0625, 1.0 / 2.9 %, 0.0043 / 0.0132 | 18/18, 0.0057 / 0.0218, 1.5 / 2.9 %, 0.0012 / 0.0041 |
+     | NACA 2412 closed | 6e6 | 18/19, 0.0209 / 0.0608, 1.1 / 2.8 %, 0.0047 / 0.0128 | 18/19, 0.0060 / 0.0185, 1.6 / 3.6 %, 0.0012 / 0.0036 |
+     | E387 | 5e5 | 13/13, 0.0113 / 0.0329, 1.8 / 16.3 %, 0.0025 / 0.0071 | 13/13, 0.0022 / 0.0067, 2.5 / 15.6 %, 0.0005 / 0.0019 |
+     | E387 | 1e6 | 13/13, 0.0114 / 0.0306, 1.3 / 5.7 %, 0.0025 / 0.0066 | 13/13, 0.0020 / 0.0062, 2.3 / 7.8 %, 0.0004 / 0.0012 |
+     | E387 | 3e6 | 13/14, 0.0118 / 0.0292, 1.1 / 5.3 %, 0.0026 / 0.0065 | 12/13, 0.0021 / 0.0064, 1.6 / 4.0 %, 0.0004 / 0.0014 |
+     | E387 | 6e6 | 16/16, 0.0142 / 0.0326, 1.5 / 6.6 %, 0.0032 / 0.0071 | 16/16, 0.0027 / 0.0104, 2.4 / 6.8 %, 0.0006 / 0.0023 |
+
+     - Against XFOIL at 0.001 c, every SPEC.md 4.1 target holds in every case.
+     - Against XFOIL sharp, the mean dCl is 0.011-0.021. That is XFOIL's own sharp-vs-gapped jump
+       (up to 0.042 in Cl, step 1).
+     - For E387 the old sharp path gave mean / max dCl 0.0054-0.0155 / up to 0.110 and max rel dCd
+       up to 34.6 % (`docs/benchmark_m3.md`); the new default gives max dCl 0.033 and max dCd 16.3 %.
+     - Not converged:
+       - NACA 2412: Re 5e5 20 deg; Re 6e6 1 deg (inside the filter);
+       - E387: Re 5e5 18-20 deg; Re 1e6 19 deg; Re 3e6 5 deg (inside the filter, the point that
+         also fails at 0.001 and 0.0005 c in step 1).
+     - Every result carries the correction.
+     - New test: sharp NACA 2412, Re 3e6, 0 deg is within 0.03 in Cl of XFOIL at 0.001 c (0.2425),
+       or reported not converged.
+3. **Low Re, proposal A approved.** SPEC.md 2, 4.1 and 5 and the v2.2 line are edited with the wording
+   of "C5", Step 3. `BenchmarkParams.reynolds_validated` is now (1e5, 2e5, 5e5, 1e6, 3e6, 6e6) and
+   `reynolds_low` is (5e4,), so that the reports follow SPEC.md (user's approval of A).
+   `docs/benchmark_m3.md` is updated. Later (M9) item added.
+4. **`run_case` calls `viscous.sweep`.** `viscous.sweep` now has the benchmark's per-point loop: a
+   point whose solve raises is recorded as not converged (reason "exception") and never walked to,
+   and an `on_result(alpha, result, seconds, walked, error)` hook reports every solve.
+   `run_case` only builds the rows and run times from that hook, so the angle-reaching logic exists
+   once. The Later item on the duplicate is closed. C3 run again on this code
+   (`benchmark_output/m3_r12`): all 1225 rows identical to the C5 run (converged, Cl, Cd, Cd TE, Cm,
+   transition). The only changes are the 5 path labels of the labelling fix; so the benchmark
+   tables are unchanged.
+5. **Decisions after report 12 (user, 2026-10-22).**
+   - **Single-point starts.** After a failed walk, the next start angle is tried, with no bound on
+     its distance (`single_point_reach` removed). Cap: `ViscousParams.single_point_max_cold` = 10
+     cold starts per point (new parameter; the direct start and 0 deg not counted). The search also
+     follows a failed continuation from 0 deg, which is itself a failed walk (our reading of "after
+     a failed walk"). When the cap is reached, the result is not converged and its `path` lists
+     every attempt ("<angle> deg: no start", "from <angle> deg failed", "cap of 10 cold starts
+     reached").
+   - **`maximize_ld`.** No fallback during the optimiser's search: each candidate is solved from the
+     direct start only (`solve_flow(..., fallback=False)`), and one that does not converge counts as
+     a failed candidate (penalised, never used for L/D). `DesignResult.n_failed` and the message
+     report how many failed. The final design is solved with the full single-point logic, and
+     `success` needs it to converge.
+   - **Rerun after report 12** of the single points that needed continuation (273) plus the 2
+     missed points:
+     - all 275 converge;
+     - both missed points converge with the polar's solution:
+       - E387 Re 1e5 20 deg: "from 15 deg", Cl 0.5339, 238 s;
+       - Clark Y Re 5e5 11 deg: "from 8 deg", Cl 1.3854, 253 s;
+     - the other 273 equal the previous single-point results to 2.2e-13 in Cl and 1.3e-11 relative
+       in Cd;
+     - run time mean 89 s, max 253 s.
+   - **Over all 1050 points:** 1030 converge in the polar and all 1030 converge as single points; the
+     other 20 converge in neither, and none converges only as a single point. On open edges, the
+     single points agree with the polar to 3.6e-5 in Cl and 0.017 % in Cd. **Target met.**
+   - **Design smoke test re-timed:** 383 s on an idle CPU (target near 125 s; **not met**).
+     Measured: 23 viscous solves, 16 s each on average; 13 of 22 candidates failed; the final design
+     (full logic) converged in 91 s, L/D 88.7.
+     - Cause: the PARSEC shapes have a closed trailing edge, which the default of item 2 now opens to
+       0.0005 c. The default start shape then fails from the direct start: 50 iterations, against
+       converged in 43 when kept sharp (60 panels, 4 deg, Re 3e6).
+     - The optimiser therefore starts from a penalised point and needs 22 evaluations instead of 11.
+       In report 11 (edge kept closed), 10 of 12 solves converged.
+     - Not changed; for the user.
+
 ---
 
 ## Later
 
+- End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver
+  converges on essentially every point at Re 1e5 and 2e5 with mean |dCl| 0.010 and 0.005 and drag
+  within 5 to 6 %. Propose targets for Re 1e5 and 2e5 and report Re 5e4 as it is. This moves
+  low-Reynolds validation from v2.2 into v2.0 and needs a SPEC.md change (for the user's approval).
+- After M3 (candidate for M7; user, 2026-10-10): solver speed. Reuse the coupling between angles, a
+  faster starting march, a compiled JAX path. Golden values recorded first; results must not change.
+  Time per point reported before and after; the target is set from measurements.
+- M3 cleanup (C5; user, 2026-10-10): confirm that `design.maximize_ld` and the batch example use the
+  new viscous solver, and rerun the design example to show that its lift-to-drag values are now
+  realistic.
+- v2.1 (user, 2026-10-10): multi-point optimisation and CST or Bezier shapes, as in SPEC.md. Also
+  evaluate whether a target-velocity (inverse) design mode is worth adding on top of the optimiser,
+  or whether Cp matching covers it.
+- M3 (after report 8): convergence at Re 1e6 and 6e6 is 94.5 % (target 95 %); 8 of the 11
+  non-converged attached points are cold starts at 0 or 1 deg, the first angles of an up sweep
+  started from the march (the H_k clip after a laminar-separated transition, report 7's main
+  class, is gone with the eq. 13 upwinding). A "how reached" measure (e.g. reaching such points
+  from the nearest converged angle of the sweep) is for the user to decide.
+- M3 (after report 8): wake drag. The wake-end Cd follows the edge-velocity jump between the
+  trailing edge and the first wake station on open and closed trailing edges (decision 1 after
+  report 7, test (a)); open for the user.
+- M3/M9 (after report 8): with a closed (sharp) trailing edge, NACA 2412 at Re 1e6 shows dCl -0.053
+  and dCm +0.011 at 5 deg and +0.048 / -0.010 at 10 deg (open edge within 0.01 / 0.002), with the
+  same edge-velocity jump; sharp sections are reported without targets (SPEC 4.1).
+- M5: the velocity of one body's wake sources at another body's wake (not included in M3).
+- M3 (end of M3, after the convergence work; user's decision after report 6): E387 sharp at Re 1e6,
+  -4 and -3 deg converges to a non-physical solution (Cl 0.19 against XFOIL -0.063).
+- After v2.0: decide the wake treatment of the parked closure set "drela1987" (its far wake drives
+  H_k below the 1.02 clip; not converged with the wake; excluded from benchmark runs until then).
 - `requires-python = ">=3.10"` is declared but only Python 3.14 is available and tested here.
   Decide the supported versions and test them in M7.
 - `examples/basic_alpha_sweep.py` opens `naca2412.dat` relative to the current directory, so it
   only works when run from `examples/`. Fix with the M7 example rework.
 - README and TESTING.md still describe `PYTHONPATH=src` and older test counts; rewrite in M9.
+- M7 speed (after C5; user): design/maximize_ld with the viscous solver is too slow for interactive
+  use. `examples/inverse_design_demo.py --ld` (NACA 2412 reference, 4 deg, Re 3e6, `target_cl` 0.8,
+  `max_iter` 3, 120 panels) ran 48 min 25 s of wall time and was stopped unfinished by the user's
+  instruction. About 47 min of that was `maximize_ld`; when stopped it was inside SLSQP's
+  finite-difference Jacobian of the Cl constraint, and how many optimiser iterations had finished is
+  not known (the demo prints only at the end). A cold-started viscous point takes 10-24 s here. Each
+  SLSQP iteration needs finite-difference gradients over 11 PARSEC parameters for the objective and
+  for the Cl constraint, and the constraint solves again the candidates the objective already solved
+  (no caching). Candidates for M7: cache solves by design vector, warm-start each candidate from the
+  previous solution, fewer finite-difference solves.
+- M7 speed (user, after report 12): single-point run time is 25-66 s mean, up to 297 s with
+  continuation (1050 benchmark points, one BLAS thread per process, report 12); a typical point
+  should take a few seconds.
+- M9 (user, after report 11): Validation statements say 'agreement with XFOIL', not experiment.
+  Consider comparing E387 at Re 1e5 to 3e5 with the NASA Langley wind-tunnel data (McGhee et al.,
+  NASA TM-4062, 1988); verify the citation and data licence before use, and do not bundle the data.
+- M9 (after C5): the README still describes the deleted v1.3.1 viscous paths (`vii.solve_vii`,
+  `--vii`, one-way drag, roughness, post-stall); rewrite with the M9 README.
+- (Closed after report 11: `run_case` now calls `viscous.sweep`.)
 - M2: decide which NACA trailing edge (open or closed) is the default in v2.0.
 - M3: transpiration VII shows a panel-to-panel Cp oscillation over the last panels of the
   upper surface at 10 deg (NACA 2412, Re 1e6), with either trailing edge.
@@ -1528,3 +2871,27 @@ the wrong thing), each recorded above:
 - M7: the farthest-point leading edge gives a generated NACA 2412 a chord of 1.00008, so its
   coefficients differ from the nominal unit chord by about 8e-5. Decide then whether generated
   sections keep their nominal chord.
+
+- M9: the README states that the viscous model follows the published formulation of Drela (1989)
+  and Drela & Giles (1987).
+- M9: verify the reading of DG87 eq. (18) (left side H*, natural logarithm) against the source.
+- M9: the README names both viscous sources, Drela (1989) / Drela & Giles (1987) and Fidkowski
+  ("A Coupled Inviscid-Viscous Airfoil Analysis Solver, Revisited"), and says that the closure set
+  "fidkowski2022" follows the later published forms (close to later XFOIL versions).
+- After v2.0: compare both closure sets ("fidkowski2022", "drela1987") with wind-tunnel data,
+  downloaded on demand (not committed).
+- After v2.0 (user, after report 10): option (a) for the sharp trailing edge, a resolution-independent
+  treatment of the edge velocity at and just behind a sharp edge in the coupled problem (our choice, not
+  published). Starting point, the Track B findings (M3, "Track B"): with XFOIL's delta* our edge velocity
+  agrees to about 0.003 except over the last ~0.6 % of chord and the first ~0.008 c of wake; two parts
+  depend on the panel size there, the LNE89 eq. 9 trailing-edge node value (0.835 on XFOIL's nodes, 0.70
+  on ours) and a logarithmic source spike at the airfoil/wake junction (+0.04 per halving of the
+  distance to the edge; +0.249 / +0.506 at 0 / 5 deg on our 160 panels); the inviscid wake-line velocity
+  follows the exact corner flow (|u| ~ r^k, k = tau/(2 pi - tau) = 0.048). Candidate forms: the TE speed
+  extrapolated from the attached flow upstream (as eq. 9 does for gamma, applied to the total ue), and
+  a source strength ramped across the edge over a length set by the layer (a few delta*), each chosen
+  by convergence under panel refinement (160 / 320 / 640), never tuned to XFOIL.
+- After v2.0: a converged but wrong result on a sharp edge. Closed NACA 2412, Re 3e6, 0 deg converges
+  (march, 13 iterations) at Cl 0.059, Cd 0.0272 against XFOIL 0.234, 0.00537 (step 1 after report 10);
+  the 0.001 c gapped section gives 0.243, 0.00530 there. The closed-edge warning is the only guard;
+  option (a) must remove it.
