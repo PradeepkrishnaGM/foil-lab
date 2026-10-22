@@ -93,11 +93,12 @@ class _Local:
         self.nrm = np.array([-e[1], e[0]])
         self.frame = (le, e, self.nrm, chord)
         self.mirror = mirror
-        self.length = self.sp.length
-        self.s_le = self.length - self.sp.s_le if mirror else self.sp.s_le
+        # arc-length parameter in chords of the section, so sizes in chords need no scaling
+        self.length = self.sp.length / chord
+        self.s_le = self.length - self.sp.s_le / chord if mirror else self.sp.s_le / chord
 
     def _raw(self, s):
-        d = self.sp.point(s) - self.le
+        d = self.sp.point(np.asarray(s) * self.chord) - self.le
         return np.column_stack([d @ self.e, d @ self.nrm]) / self.chord
 
     def point(self, s) -> np.ndarray:
@@ -111,7 +112,7 @@ class _Local:
     def tangent(self, s) -> np.ndarray:
         """Unit tangent in the direction of increasing ``s``."""
         s = np.atleast_1d(np.asarray(s, dtype=float))
-        ss = self.length - s if self.mirror else s
+        ss = (self.length - s if self.mirror else s) * self.chord
         d = np.column_stack([self.sp.x(ss, 1), self.sp.y(ss, 1)])
         t = np.column_stack([d @ self.e, d @ self.nrm])
         t /= np.hypot(t[:, 0], t[:, 1])[:, None]
@@ -354,7 +355,7 @@ def _sample_surface(pieces: list[_Piece], zones: list[tuple[int, int]], n: int,
     s0 = np.concatenate(([0.0], np.cumsum(plen)))
     total = float(s0[-1])
     # hinge zones: (S start, S end, target spacing)
-    zlist = []
+    zlist0 = []
     for a, b in zones:
         za, zb = s0[a], s0[b + 1]
         arc = sum(plen[q] for q in range(a, b + 1) if pieces[q].kind == "arc")
@@ -362,8 +363,7 @@ def _sample_surface(pieces: list[_Piece], zones: list[tuple[int, int]], n: int,
         ds_h = zl / prm.flap_zone_panels
         if arc > 0.0:
             ds_h = min(ds_h, arc / prm.flap_arc_min_panels)
-        ds_h = max(ds_h, zl / (4.0 * prm.flap_zone_panels))
-        zlist.append((za, zb, ds_h))
+        zlist0.append((za, zb, max(ds_h, prm.flap_min_panel_length)))
     g = prm.flap_grading - 1.0
     smid = [s0[i] + 0.5 * (tb[1][:-1] + tb[1][1:]) for i, tb in enumerate(tabs)]
     dl = [np.diff(tb[1]) for tb in tabs]
@@ -374,9 +374,7 @@ def _sample_surface(pieces: list[_Piece], zones: list[tuple[int, int]], n: int,
             out = np.minimum(out, dh + g * np.maximum(np.maximum(za - S, S - zb), 0.0))
         return out
 
-    dz = [ds_zone(s) for s in smid]
-
-    def counts(k):
+    def counts(k, dz):
         out = []
         for s, d, z in zip(smid, dl, dz):
             u = s / total
@@ -384,16 +382,24 @@ def _sample_surface(pieces: list[_Piece], zones: list[tuple[int, int]], n: int,
             out.append(np.concatenate(([0.0], np.cumsum(d / ds))))
         return out
 
-    lo, hi = 1e-9, 1e3
-    if sum(c[-1] for c in counts(hi)) > n:
+    # if the zones alone need more than n panels (few panels), the zone spacing is relaxed
+    relax = 1.0
+    for _ in range(40):
+        zlist = [(za, zb, dh * relax) for za, zb, dh in zlist0]
+        dz = [ds_zone(s) for s in smid]
+        if sum(c[-1] for c in counts(1e3, dz)) <= n:
+            break
+        relax *= 1.25
+    else:
         raise ValueError(f"{n} panels per surface are too few for the hinge zones")
+    lo, hi = 1e-9, 1e3
     for _ in range(200):
         mid = np.sqrt(lo * hi)
-        if sum(c[-1] for c in counts(mid)) > n:
+        if sum(c[-1] for c in counts(mid, dz)) > n:
             lo = mid
         else:
             hi = mid
-    cum = counts(np.sqrt(lo * hi))
+    cum = counts(np.sqrt(lo * hi), dz)
     real = np.array([c[-1] for c in cum])
     cnt = np.maximum(1, np.rint(real).astype(int))
     while cnt.sum() != n:
@@ -410,7 +416,7 @@ def _sample_surface(pieces: list[_Piece], zones: list[tuple[int, int]], n: int,
         nodes.append(p.f(tpos))
         zone_codes += [p.zone] * m
     nodes.append(pieces[-1].f(np.array([1.0])))
-    return np.vstack(nodes), np.array(zone_codes, dtype=np.int8), (pieces, plen, cnt)
+    return np.vstack(nodes), np.array(zone_codes, dtype=np.int8), relax
 
 
 def _check_simple(c: np.ndarray) -> None:
@@ -507,8 +513,8 @@ def make_flap(coords: np.ndarray, hinge_x: float, deflection_deg: float, hinge_y
     delta = np.radians(abs(deflection_deg))
     upper, lower, zu, zl, H, diag = _build_down(L, hinge_x, hy, delta, params)
     h = n // 2
-    nu, zu_codes, (pu, plu, cu) = _sample_surface(upper, zu, h, params)
-    nl, zl_codes, (pl, pll, cl) = _sample_surface(lower, zl, n - h, params)
+    nu, zu_codes, relax_u = _sample_surface(upper, zu, h, params)
+    nl, zl_codes, relax_l = _sample_surface(lower, zl, n - h, params)
     local = np.vstack([nu, nl[1:]])
     zones = np.concatenate([zu_codes, zl_codes])
     if mirror:
@@ -516,6 +522,12 @@ def make_flap(coords: np.ndarray, hinge_x: float, deflection_deg: float, hinge_y
         local[:, 1] = -local[:, 1]
         zones = zones[::-1].copy()
         H = np.array([H[0], -H[1]])
+    relaxed = max(relax_u, relax_l)
+    if relaxed > 1.0:
+        import warnings
+        warnings.warn(f"{n} panels are few for the hinge zone: the zone spacing was relaxed by "
+                      f"{relaxed:.2f}; results can be inaccurate (use 160 panels or more)",
+                      stacklevel=3)
     out = geo._from_chord_frame(local, L.frame)
     _check_simple(out)
     hinge_abs = geo._from_chord_frame(H[None, :], L.frame)[0]
@@ -524,7 +536,8 @@ def make_flap(coords: np.ndarray, hinge_x: float, deflection_deg: float, hinge_y
     narc = int(np.sum(zones == ZONE_ARC))
     diagn = {"deflection": float(deflection_deg), "hinge_y_effective": diag["hinge_y_effective"]
              if not mirror else 1.0 - diag["hinge_y_effective"], "arc_radius": diag["arc_radius"],
-             "arc_length": diag["arc_length"], "arc_panels": narc, **dev}
+             "arc_length": diag["arc_length"], "arc_panels": narc,
+             "zone_spacing_relaxed": relaxed, **dev}
     info = FlapInfo(_ro(c), float(hinge_x), float(hinge_y), float(deflection_deg), _ro(hinge_abs),
                     zones, params, diagn)
     return out, info

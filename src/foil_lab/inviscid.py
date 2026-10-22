@@ -615,6 +615,40 @@ def pressure_loads(ps: PanelSet, cp, alpha_deg, bodies=None, ref_chord: float = 
     return cl, cd, cm
 
 
+def hinge_moment(ps: PanelSet, cp, body: int, flap_mask, hinge, ref_chord: float = 1.0,
+                 shear=None) -> tuple[float, float]:
+    """Hinge-moment coefficient of the panels of one body flagged in ``flap_mask``.
+
+    Returns ``(pressure part, friction part)``. ``flap_mask`` has one entry per panel of the body
+    in the order of the input nodes (Selig); ``hinge`` is the hinge point; ``shear`` is the wall
+    shear force per panel (``(N, 2)``, solver order, normalised by the dynamic pressure, as the
+    viscous solver returns it) or ``None`` (friction part 0). The moment about the hinge point is
+    divided by the dynamic pressure and ``ref_chord`` squared. It is positive when it tends to
+    rotate the flap trailing edge down (clockwise, the direction of positive deflection and the same
+    sense as nose-up ``Cm``), so lift on the flap at positive angle of attack gives a negative value.
+    Panel forces act at the panel midpoints.
+    """
+    sl = ps.body_panels[body]
+    mask = np.asarray(flap_mask, dtype=bool)
+    if mask.size != sl.stop - sl.start:
+        raise ValueError(f"flap_mask has {mask.size} entries, the body has {sl.stop - sl.start} panels")
+    if ps.reversed_input[body]:
+        mask = mask[::-1]
+    idx = np.arange(sl.start, sl.stop)[mask]
+    nx, ny = (np.asarray(v)[idx] for v in ps.normal)
+    ln = np.asarray(ps.lengths)[idx]
+    c = np.asarray(cp)[idx]
+    rx = np.asarray(ps.mid_x)[idx] - hinge[0]
+    ry = np.asarray(ps.mid_y)[idx] - hinge[1]
+    fx, fy = -c * nx * ln, -c * ny * ln
+    ch_p = -float(np.sum(rx * fy - ry * fx)) / ref_chord ** 2
+    ch_f = 0.0
+    if shear is not None:
+        sx, sy = np.asarray(shear)[idx, 0], np.asarray(shear)[idx, 1]
+        ch_f = -float(np.sum(rx * sy - ry * sx)) / ref_chord ** 2
+    return ch_p, ch_f
+
+
 def body_loads(sol: InviscidSolution, body: int, ref_chord: float = 1.0,
                ref_point: tuple[float, float] = (0.25, 0.0)) -> BodyLoads:
     """Integrate the surface pressure of one body into lift, pressure drag and moment."""

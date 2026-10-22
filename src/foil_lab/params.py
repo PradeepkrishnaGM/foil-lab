@@ -124,7 +124,11 @@ class GeometryParams:
     flap_zone_panels:
         Panels placed across each hinge zone (fairings plus arc; the fillet).
     flap_arc_min_panels:
-        Panels placed on the hinge arc itself, as far as the zone spacing allows.
+        Panels placed on the hinge arc itself, as far as ``flap_min_panel_length`` and the panel
+        count allow.
+    flap_min_panel_length:
+        Smallest panel length (in chords) the hinge refinement asks for. With few panels the zone
+        spacing is relaxed until the panels suffice; ``FlapInfo.diagnostics`` records the factor.
     flap_grading:
         Largest ratio of neighbouring panel lengths when the spacing grows away from a hinge zone.
     """
@@ -138,6 +142,7 @@ class GeometryParams:
     flap_min_arc_radius: float = 0.002
     flap_zone_panels: int = 6
     flap_arc_min_panels: int = 2
+    flap_min_panel_length: float = 0.002
     flap_grading: float = 1.3
 
 

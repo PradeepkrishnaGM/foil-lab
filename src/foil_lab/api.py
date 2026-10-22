@@ -42,6 +42,12 @@ class ElementResult:
     cp: np.ndarray
     surface: np.ndarray            # "upper" or "lower" per panel
     num_panels: int
+    #: flapped elements only (``None`` otherwise): hinge-moment coefficient about the hinge point,
+    #: from the pressure on the flap panels and, for a viscous result, the wall friction on them;
+    #: positive when it tends to deflect the flap trailing edge down (SPEC.md 3 and 4.5)
+    ch: Optional[float] = None
+    ch_pressure: Optional[float] = None
+    ch_friction: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,26 @@ class Result:
     def num_panels(self) -> Tuple[int, ...]:
         return tuple(e.num_panels for e in self.elements)
 
+    def _flap_value(self, name: str):
+        vals = [getattr(e, name) for e in self.elements if e.ch is not None]
+        if len(vals) > 1:
+            raise ValueError("several flapped elements: read the hinge moments from result.elements")
+        return vals[0] if vals else None
+
+    @property
+    def ch(self) -> Optional[float]:
+        """Hinge-moment coefficient of the (single) flap; ``None`` without a flap."""
+        return self._flap_value("ch")
+
+    @property
+    def ch_pressure(self) -> Optional[float]:
+        return self._flap_value("ch_pressure")
+
+    @property
+    def ch_friction(self) -> Optional[float]:
+        """Friction part of ``ch``; ``None`` without a flap or for an inviscid result."""
+        return self._flap_value("ch_friction")
+
     def to_dict(self) -> dict:
         """Scalar summary (per-element loads included; Cp arrays left out)."""
         d = dict(alpha=self.alpha, cl=self.cl, cm=self.cm, cd=self.cd, ref_chord=self.ref_chord,
@@ -89,7 +115,9 @@ class Result:
                  iterations_total=self.iterations_total, residual=self.residual, path=self.path,
                  warnings=list(self.warnings), n_crit=self.n_crit,
                  trips=None if self.trips is None else list(self.trips))
-        d["elements"] = [dict(name=e.name, cl=e.cl, cm=e.cm, cd=e.cd) for e in self.elements]
+        d["elements"] = [dict(name=e.name, cl=e.cl, cm=e.cm, cd=e.cd, ch=e.ch,
+                              ch_pressure=e.ch_pressure, ch_friction=e.ch_friction)
+                         for e in self.elements]
         return d
 
 
@@ -127,13 +155,22 @@ class Polar:
 def _prepare(geometry: Geometry, repanel: bool, num_panels: Optional[int]):
     config = Configuration.of(geometry)
     n = GEOMETRY.num_panels if num_panels is None else int(num_panels)
-    bodies, names = [], []
+    bodies, names, flaps = [], [], []
     for el in config.elements:
         placed = el.placed
-        coords = placed.repanelled(n).coords if repanel else placed.coords
-        bodies.append(np.asarray(coords))
+        placed = placed.repanelled(n) if repanel else placed
+        bodies.append(np.asarray(placed.coords))
         names.append(placed.name)
-    return config, bodies, names
+        flaps.append(placed.flap)
+    return config, bodies, names, flaps
+
+
+def _hinge(ps, cp_all, k, flap, chord, shear=None):
+    """(ch, ch_pressure, ch_friction) of body ``k`` if it has a flap, else three ``None``."""
+    if flap is None:
+        return None, None, None
+    ch_p, ch_f = core.hinge_moment(ps, cp_all, k, flap.flap_panels, flap.hinge, chord, shear)
+    return ch_p + ch_f, ch_p, (None if shear is None else ch_f)
 
 
 def _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params):
@@ -147,7 +184,7 @@ def _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params):
 
 
 def _viscous_result(vres, body, names, config, repanel: bool, prm, trip_upper, trip_lower,
-                    corrections=()) -> Result:
+                    corrections=(), flap=None) -> Result:
     """``Result`` of one viscous solution on ``body``, the geometry that was solved (a closed
     trailing edge already opened, see ``corrections``)."""
     from . import __version__
@@ -164,8 +201,10 @@ def _viscous_result(vres, body, names, config, repanel: bool, prm, trip_upper, t
     le = int(np.argmax(np.hypot(*(b - te_mid).T)))
     surface = np.where(np.arange(len(mid)) < le, "upper", "lower")
     cd = float(vres.cd) / chord
+    ch, ch_p, ch_f = _hinge(ps, cp_all, 0, flap, chord,
+                            None if vres.shear is None else np.asarray(vres.shear))
     el = ElementResult(names[0], float(cl), float(cm), cd, mid[:, 0].copy(), mid[:, 1].copy(),
-                       np.asarray(cp).copy(), surface, len(mid))
+                       np.asarray(cp).copy(), surface, len(mid), ch, ch_p, ch_f)
     return Result(float(vres.alpha), float(cl), float(cm), cd, (el,), chord, point,
                   bool(vres.converged), METHOD_VISCOUS, tuple(corrections), repanel, __version__,
                   float(vres.reynolds) * chord,
@@ -176,7 +215,7 @@ def _viscous_result(vres, body, names, config, repanel: bool, prm, trip_upper, t
                   n_crit=prm.n_crit, trips=(trip_upper or None, trip_lower or None))
 
 
-def _result(ps, asm, bodies, names, config, alpha: float, repanel: bool) -> Result:
+def _result(ps, asm, bodies, names, config, alpha: float, repanel: bool, flaps=()) -> Result:
     from . import __version__
     sol = core.solve(ps, alpha, assembly=asm)
     cp_all = np.asarray(sol.cp)
@@ -185,13 +224,15 @@ def _result(ps, asm, bodies, names, config, alpha: float, repanel: bool) -> Resu
     cl_t = cm_t = 0.0
     for k, (b, name) in enumerate(zip(bodies, names)):
         cl, _, cm = core.pressure_loads(ps, cp_all, alpha, k, chord, point)
+        ch, ch_p, ch_f = _hinge(ps, cp_all, k, flaps[k] if flaps else None, chord)
         cp = core.to_selig_order(sol, cp_all, k)
         mid = 0.5 * (b[:-1] + b[1:])
         te_mid = 0.5 * (b[0] + b[-1])                  # leading edge: node farthest from it
         le = int(np.argmax(np.hypot(*(b - te_mid).T)))
         surface = np.where(np.arange(len(mid)) < le, "upper", "lower")
         elements.append(ElementResult(name, float(cl), float(cm), None, mid[:, 0].copy(),
-                                      mid[:, 1].copy(), np.asarray(cp).copy(), surface, len(mid)))
+                                      mid[:, 1].copy(), np.asarray(cp).copy(), surface, len(mid),
+                                      ch, ch_p, ch_f))
         cl_t += float(cl)
         cm_t += float(cm)
     converged = bool(np.all(np.isfinite(cp_all)))
@@ -220,15 +261,16 @@ def analyze(geometry: Geometry, alpha: float, re: Optional[float] = None, repane
     transition), other solver settings from ``params`` (default ``params.VISCOUS``). For several
     angles use :func:`polar`, which reaches each angle from a converged neighbour.
     """
-    config, bodies, names = _prepare(geometry, repanel, num_panels)
+    config, bodies, names, flaps = _prepare(geometry, repanel, num_panels)
     if re:
         from . import viscous
         prm, trips = _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params)
         body, corr = viscous.open_closed_te(bodies[0], prm)
         vres = viscous.solve_single(body, float(alpha), float(re) / config.reference()[0], prm, trips)
-        return _viscous_result(vres, body, names, config, repanel, prm, trip_upper, trip_lower, corr)
+        return _viscous_result(vres, body, names, config, repanel, prm, trip_upper, trip_lower, corr,
+                               flaps[0])
     ps = core.PanelSet.from_bodies(bodies)
-    return _result(ps, core.assemble(ps), bodies, names, config, float(alpha), repanel)
+    return _result(ps, core.assemble(ps), bodies, names, config, float(alpha), repanel, flaps)
 
 
 def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = None,
@@ -242,7 +284,7 @@ def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = Non
     0 deg up and down with warm starts, then failed starts from the nearest converged angle); each
     result's ``path`` says how it was reached.
     """
-    config, bodies, names = _prepare(geometry, repanel, num_panels)
+    config, bodies, names, flaps = _prepare(geometry, repanel, num_panels)
     alphas = [float(a) for a in alphas]
     if re:
         from . import viscous
@@ -250,7 +292,7 @@ def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = Non
         body, corr = viscous.open_closed_te(bodies[0], prm)
         res = viscous.sweep(body, alphas, float(re) / config.reference()[0], prm, trips)
         return Polar(tuple(_viscous_result(r, body, names, config, repanel, prm, trip_upper, trip_lower,
-                                           corr) for r in res))
+                                           corr, flaps[0]) for r in res))
     ps = core.PanelSet.from_bodies(bodies)
     asm = core.assemble(ps)
-    return Polar(tuple(_result(ps, asm, bodies, names, config, a, repanel) for a in alphas))
+    return Polar(tuple(_result(ps, asm, bodies, names, config, a, repanel, flaps) for a in alphas))

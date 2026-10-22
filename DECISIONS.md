@@ -2816,6 +2816,44 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
 - Defaults in `params.GEOMETRY` (`flap_fairing_length` 0.02, `flap_fillet_radius` 0.02, ...) are
   starting values; the values proposed after the 80/160/320 check come with step 2.
 
+### Step 2: hinge moment (`inviscid.hinge_moment`, `Result.ch`, `ViscousResult.shear`)
+
+- `ch` = moment about the hinge point of the pressure (and, viscous, wall-friction) force on the flap
+  panels, divided by q and the reference chord squared; positive trailing edge down (clockwise, the
+  same sense as nose-up `Cm`). Reported per element (`ElementResult.ch`, `ch_pressure`,
+  `ch_friction`); `Result.ch` is the single flap's value (error if several). `None` without a flap.
+- Which panels are the flap comes from the construction (`FlapInfo.zones`: flap part and hinge arc),
+  not from `x > hinge_x`. At deflection 0 the panels whose midpoint is aft of the hinge.
+- The viscous solver returns the wall-shear force per panel (`ViscousResult.shear`; the sum along the
+  freestream equals `cdf`, tested). Piece-wise as the existing drag split.
+- Citation: sign convention "trailing edge down positive" is the textbook one (Abbott & von
+  Doenhoff, *Theory of Wing Sections*, 1959). **Unverified**: a web search did not find the page; the
+  section is not cited. The thin-airfoil test cites Glauert's solution as given in Anderson,
+  *Fundamentals of Aerodynamics* (thin-airfoil theory, A0 and An); section number unverified.
+- Tests: sign (positive-lift flap gives negative `ch`, odd in alpha), the exact uniform-pressure
+  identity (moment = half the difference of squared distances from the hinge), zero moment of
+  pressure on the hinge arc (chord midpoints are perpendicular to the chord), the transfer identity to
+  `Cm`, thin-airfoil slopes (NACA 0002, 25 % flap: dCh/dalpha -0.0346 against -0.0353, 2 %;
+  dCh/ddelta -0.0590 against -0.0590, 0.1 %; tolerances 5 % and 2 % set from the expected O(thickness)
+  difference).
+- Bug found and fixed on the way: the flap construction was not scale-invariant (arc-length
+  parameter in absolute units, sizes in chords). Tests for size, position and rotation added.
+- **Panel-count check (NACA 2412, alpha 4 deg, hinge 0.75 / 0.5, defaults below):** at 160 / 320 / 640
+  panels Cl is 1.47713 / 1.47641 / 1.47634 (10 deg), 2.18408 / 2.18419 / 2.18424 (20 deg), 2.85232 /
+  2.85364 / 2.85412 (30 deg); `ch` -0.014524 / -0.014488 / -0.014484, -0.022145 / -0.022134 /
+  -0.022120, -0.028011 / -0.028046 / -0.028085. At 80 panels the 10 deg case is off by 4 % in Cl
+  (1.5411): the hinge zone needs more panels, so below the zone's need the spacing is relaxed and a
+  warning is issued; 160 or more is recommended for flaps.
+- **Size check at 160 / 320 panels, 20 deg:** fairing length 0.01 / 0.02 / 0.04 c and fillet radius
+  0 / 0.01 / 0.02 / 0.04 c change Cl by 0.0015, `ch` by 0.5 % (160 panels), 0.1 % (320). **Proposed
+  defaults, unchanged: fairing 0.02 c, fillet 0.02 c.**
+- **Chord change caused by the fairings:** none: the leading edge, the trailing-edge nodes and the
+  reference chord are untouched (reference frame is the undeflected section's). The largest
+  distance of the contour from the unfaired one (surface, arc, rotated surface; sharp notch) at the
+  defaults: fairings 0.0004 c (20 deg), 0.0008 c (fairing 0.04 c); fillet 0.0003 c (20 deg), 0.0007 c
+  (30 deg); `FlapInfo.diagnostics["fairing_deviation"]` and `["fillet_deviation"]`.
+- New default `flap_min_panel_length` 0.002 c and `flap_arc_min_panels` 2 (proposed).
+
 ## Later
 
 - End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver

@@ -153,7 +153,13 @@ def test_fairings_deviation_is_reported_and_small():
         assert dg["fillet_deviation"] < 0.002
 
 
-@pytest.mark.parametrize("n", (80, 160, 320))
+def test_few_panels_warn_that_the_hinge_zone_was_relaxed():
+    with pytest.warns(UserWarning, match="few for the hinge zone"):
+        fa = AF.with_flap(0.75, 10.0, num_panels=80)
+    assert fa.flap.diagnostics["zone_spacing_relaxed"] > 1.0 and not _crosses(fa.coords)
+
+
+@pytest.mark.parametrize("n", (160, 320))
 def test_node_spacing_near_the_hinge(n):
     fa = AF.with_flap(0.75, 20.0, num_panels=n)
     c = fa.coords
@@ -192,6 +198,24 @@ def test_transforms_commute_with_the_flap():
         assert np.allclose(one.coords, two.coords, atol=1e-9)
         assert np.allclose(one.hinge, two.hinge, atol=1e-9)
         assert one.chord == pytest.approx(two.chord)
+
+
+@pytest.mark.parametrize("op,inv", (
+    (lambda a: a.scaled(2.0), lambda c: c / 2.0),
+    (lambda a: a.translated(1.0, 0.5), lambda c: c - np.array([1.0, 0.5])),
+))
+def test_flap_does_not_depend_on_size_or_position(op, inv):
+    fa = SYM.with_flap(0.75, 8.0)
+    again = op(fa).repanelled(160)
+    assert np.allclose(inv(again.coords), fa.coords, atol=1e-9)
+    assert np.array_equal(again.flap.zones, fa.flap.zones)
+
+
+def test_flap_does_not_depend_on_rotation():
+    fa = SYM.with_flap(0.75, 8.0)
+    again = fa.rotated(17.0, pivot=(0.3, 0.1)).repanelled(160)
+    back = fl.Airfoil(again.coords).rotated(-17.0, pivot=(0.3, 0.1))
+    assert np.allclose(back.coords, fa.coords, atol=1e-9)
 
 
 def test_repanelling_keeps_the_hinge_refinement():
