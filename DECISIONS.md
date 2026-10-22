@@ -2895,3 +2895,8 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   (march, 13 iterations) at Cl 0.059, Cd 0.0272 against XFOIL 0.234, 0.00537 (step 1 after report 10);
   the 0.001 c gapped section gives 0.243, 0.00530 there. The closed-edge warning is the only guard;
   option (a) must remove it.
+- M7 speed (user, after the M3 report): PARSEC/design starting shapes should start with an open TE
+  (for example `closed_te_gap`) so they converge from a cold start; the design smoke test takes 383 s
+  because the default start shape needs the fallback. The smoke test (marked slow) is accepted as it is.
+  `maximize_ld` does not keep PARSEC closed edges sharp: the sharp viscous path can give converged
+  but wrong results.
