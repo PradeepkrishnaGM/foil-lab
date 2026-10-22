@@ -41,3 +41,30 @@ def test_flap_coordinate_file_is_deterministic():
     a = hashlib.sha256(canonical("NACA2412_F15").coords.tobytes()).hexdigest()
     b = hashlib.sha256(canonical("NACA2412_F15").coords.tobytes()).hexdigest()
     assert a == b
+
+
+def test_dump_script_solves_each_angle_and_dumps_cp_and_cf():
+    from foil_lab.benchmark.xfoil import alpha_tag, build_script
+    s = build_script("a.dat", "a.pol", 1e6, 0.0, -2.0, -1.0, hinge=(0.75, 0.0), dump=True)
+    lines = s.splitlines()
+    assert alpha_tag(-2.0) == "m2" and alpha_tag(2.5) == "2p5"
+    assert "SAVE nodes.dat" in lines and lines.index("SAVE nodes.dat") < lines.index("OPER")
+    for a, tag in ((0, "0"), (-1, "m1"), (-2, "m2")):
+        i = lines.index(f"ALFA {a}")
+        assert lines[i + 1:i + 3] == [f"CPWR cp_{tag}.txt", f"DUMP du_{tag}.txt"]
+    assert "ASEQ" not in s and "FMOM" in lines
+
+
+def test_hinge_moment_from_xfoil_data_with_uniform_pressure_is_exact():
+    """Uniform Cp on XFOIL's nodes (here the section's own nodes): the same exact value as the
+    panel identity of Foil-Lab's hinge_moment (sign: XFOIL's counter-clockwise moment reversed)."""
+    from foil_lab import inviscid as core
+    from foil_lab.benchmark.flap_run import xfoil_hinge_moment
+    from foil_lab.benchmark.xfoil import XfoilDumps
+    sec = canonical("NACA2412_F10")
+    n = len(sec.coords)
+    d = XfoilDumps(sec.coords, [0.0], np.full((1, n), 0.8), np.zeros((1, n)), np.ones((1, n)), [])
+    (ch_p, ch_f), = xfoil_hinge_moment(d, sec.coords, sec.flap_panels, np.asarray(sec.hinge)).values()
+    ps = core.PanelSet.from_bodies([sec.coords])
+    ref, _ = core.hinge_moment(ps, np.full(ps.num_panels, 0.8), 0, sec.flap_panels, np.asarray(sec.hinge))
+    assert ch_f == 0.0 and ch_p == pytest.approx(ref, abs=1e-12)

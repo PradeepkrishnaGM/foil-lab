@@ -147,7 +147,8 @@ def _fmt(value: float) -> str:
 
 def build_script(coord_name: str, polar_name: str, reynolds: float, alpha_start: float,
                  alpha_end: float | None = None, alpha_step: float | None = None,
-                 params: XfoilParams = XFOIL, hinge: tuple[float, float] | None = None) -> str:
+                 params: XfoilParams = XFOIL, hinge: tuple[float, float] | None = None,
+                 dump: bool = False) -> str:
     """Return the XFOIL command script for one fresh XFOIL process.
 
     ``reynolds`` of 0 gives an inviscid run. With ``alpha_end`` and ``alpha_step`` the script
@@ -159,16 +160,29 @@ def build_script(coord_name: str, polar_name: str, reynolds: float, alpha_start:
     point (``FNEW``), registers it with ``FMOM`` (without it XFOIL prints "Flap hinge location not
     defined" at the first solution and writes 0) and switches on the hinge moment column of the
     polar file (``HINC``; XFOIL user guide, OPER menu). XFOIL's own flap command is not used.
+
+    With ``dump`` the panel nodes are saved (``SAVE``, file ``nodes.dat``) and the sweep becomes one
+    ``ALFA`` per angle, each followed by ``CPWR`` (x, Cp; file ``cp_<tag>.txt``) and ``DUMP``
+    (boundary-layer data including Ue and Cf; file ``du_<tag>.txt``), ``<tag>`` from
+    :func:`alpha_tag`. Same solutions as ``ASEQ`` where both converge, since a converged solution
+    does not depend on how it was reached.
     """
     if (alpha_end is None) != (alpha_step is None):
         raise ValueError("give both alpha_end and alpha_step, or neither")
     if alpha_end is None:
+        angles = [alpha_start]
         solve = f"ALFA {_fmt(alpha_start)}"
     else:
+        angles = _requested_alphas(alpha_start, alpha_end, alpha_step)
         solve = f"ASEQ {_fmt(alpha_start)} {_fmt(alpha_end)} {_fmt(alpha_step)}"
+    if dump:
+        solve = "\n".join(f"ALFA {_fmt(a)}\nCPWR cp_{alpha_tag(a)}.txt\nDUMP du_{alpha_tag(a)}.txt"
+                          for a in angles)
     lines = [f"LOAD {coord_name}"]
     if params.pane_nodes is not None:
         lines += ["PPAR", f"N {params.pane_nodes}", "", "", "PANE"]
+    if dump:
+        lines += ["SAVE nodes.dat", ""]
     lines += ["OPER"]
     if params.mach:
         lines += [f"MACH {_fmt(params.mach)}"]
@@ -180,6 +194,11 @@ def build_script(coord_name: str, polar_name: str, reynolds: float, alpha_start:
     lines += [f"ITER {params.max_iter}", "PACC", polar_name, "", solve,
               "PACC", "", "QUIT", ""]
     return "\n".join(lines)
+
+
+def alpha_tag(alpha: float) -> str:
+    """File-name tag of an angle: ``-3`` -> ``m3``, ``2.5`` -> ``2p5``."""
+    return _fmt(alpha).replace("-", "m").replace(".", "p")
 
 
 _ROW = re.compile(r"^\s*-?\d+\.\d+(\s+-?\d+\.\d+){6}")
@@ -402,6 +421,99 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
 # --------------------------------------------------------------------------------------- #
 # Reference CSV files
 # --------------------------------------------------------------------------------------- #
+@dataclass
+class XfoilDumps:
+    """Surface data of the converged XFOIL solutions of one case (``run_dumps``).
+
+    ``nodes``: the panel nodes XFOIL used (``(n, 2)``, its order: the first surface of the input
+    file, leading edge, the second surface). For every angle ``cp``, ``cf`` and ``ue`` at the
+    nodes (``Ue`` is XFOIL's signed edge velocity; ``Cf`` is wall shear over 1/2 rho Ue^2),
+    together with the polar row of the same process (``Cl``, ``Cd``, ``Cdp``, ``Cm``, ``Chinge``).
+    """
+
+    nodes: np.ndarray
+    alphas: list[float]
+    cp: np.ndarray
+    cf: np.ndarray
+    ue: np.ndarray
+    rows: list[PolarRow]
+    runs: list["XfoilRun"] = field(default_factory=list)
+
+    def to_npz(self, path: Path) -> None:
+        """Compact file (float32) with what the hinge-moment comparison needs."""
+        r = self.rows
+        np.savez_compressed(
+            path, nodes=self.nodes.astype(np.float64), alphas=np.array(self.alphas),
+            cp=self.cp.astype(np.float32), cf=self.cf.astype(np.float32), ue=self.ue.astype(np.float32),
+            cl=np.array([x.cl for x in r]), cd=np.array([x.cd for x in r]),
+            cdp=np.array([x.cdp for x in r]), cm=np.array([x.cm for x in r]),
+            chinge=np.array([x.chinge if x.chinge is not None else np.nan for x in r]))
+
+    @classmethod
+    def from_npz(cls, path: Path) -> "XfoilDumps":
+        z = np.load(path)
+        rows = [PolarRow(float(a), float(cl), float(cd), float(cdp), float(cm), math.nan, math.nan,
+                         float(ch)) for a, cl, cd, cdp, cm, ch in
+                zip(z["alphas"], z["cl"], z["cd"], z["cdp"], z["cm"], z["chinge"])]
+        return cls(z["nodes"], [float(a) for a in z["alphas"]], z["cp"].astype(float),
+                   z["cf"].astype(float), z["ue"].astype(float), rows)
+
+
+def run_dumps(coords: np.ndarray, name: str, reynolds: float, hinge: tuple[float, float],
+              sweep: SweepParams = SWEEP, params: XfoilParams = XFOIL,
+              workdir: str | Path | None = None) -> XfoilDumps:
+    """Run XFOIL as :func:`run_polar` does (two fresh processes, 0 up and 0 down) but with one
+    ``ALFA`` per angle and ``CPWR`` / ``DUMP`` after each, and keep Cp, Cf and Ue at the nodes of
+    every angle that converged in that process (alpha = 0 from the upward process). Angles XFOIL
+    does not converge are absent; there is no retry."""
+    own_tmp = None
+    if workdir is None:
+        own_tmp = tempfile.TemporaryDirectory(prefix="foil-lab-xfoil-dump-")
+        workdir = own_tmp.name
+    wd = Path(workdir)
+    wd.mkdir(parents=True, exist_ok=True)
+    try:
+        coord_file = f"{name}.dat"
+        write_coordinate_file(wd / coord_file, coords, name)
+        nodes = None
+        got: dict[float, tuple] = {}
+        runs = []
+        for branch, (a0, a1, da) in (("up", (0.0, sweep.alpha_max, sweep.alpha_step)),
+                                     ("down", (0.0, sweep.alpha_min, -sweep.alpha_step))):
+            for f in wd.glob("cp_*.txt"):
+                f.unlink()
+            for f in wd.glob("du_*.txt"):
+                f.unlink()
+            polar_name = f"{name}_{branch}_dump.pol"
+            script = build_script(coord_file, polar_name, reynolds, a0, a1, da, params, hinge, dump=True)
+            run = run_xfoil(script, wd, polar_name, params)
+            runs.append(run)
+            if not run.polar_text:
+                continue
+            if nodes is None and (wd / "nodes.dat").exists():
+                nodes = np.loadtxt(wd / "nodes.dat", skiprows=1)
+            n = len(nodes)
+            for r in parse_polar_text(run.polar_text)[1]:
+                a = round(r.alpha, 6)
+                tag = alpha_tag(a)
+                cpf, duf = wd / f"cp_{tag}.txt", wd / f"du_{tag}.txt"
+                if a in got or not (cpf.exists() and duf.exists()):
+                    continue
+                cp = np.loadtxt(cpf, skiprows=1)[:, 1]
+                du = np.loadtxt(duf, skiprows=1, usecols=range(7), max_rows=n)
+                if len(cp) != n or len(du) != n:
+                    continue
+                got[a] = (cp, du[:, 6], du[:, 3], r)
+        if nodes is None or not got:
+            raise XfoilError(f"no converged point with surface data for {name} at Re {reynolds:g}")
+        al = sorted(got)
+        return XfoilDumps(nodes, al, np.array([got[a][0] for a in al]), np.array([got[a][1] for a in al]),
+                          np.array([got[a][2] for a in al]), [got[a][3] for a in al], runs)
+    finally:
+        if own_tmp is not None:
+            own_tmp.cleanup()
+
+
 def polar_to_csv_text(polar: XfoilPolar) -> str:
     """Serialise a polar as CSV with a ``# key: value`` provenance header.
 
