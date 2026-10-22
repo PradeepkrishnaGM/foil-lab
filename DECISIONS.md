@@ -2771,6 +2771,31 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
 
 ---
 
+## M4: flaps and hinge moment
+
+### Decisions before M4 (user, 2026-10-22)
+
+- An XFOIL source tree left by an earlier job was found outside the repo on 2026-10-22 and deleted
+  unread. `git ls-files` and `git log --all --name-only` show no Fortran or XFOIL source file in the
+  repository or its history.
+- Q1: `hinge_y` is a fraction of the local thickness at `hinge_x` (0 lower surface, 1 upper),
+  default 0.5.
+- Q2: tangent-continuous (G1) fairings between the surfaces and the hinge arc, plus a fillet on the
+  closed side. Sizes are in `params.GEOMETRY` with documented defaults, proposed from an 80/160/320
+  panel check; a fillet size of 0 is allowed and gives the pure notch. The largest chord change
+  caused by the fairings is reported.
+- Q3: reference chord, angle of attack and `Cm` point of a flapped section are those of the
+  undeflected section.
+- Q4: hinge moment sign is the textbook one, trailing edge down positive; `ch = -Chinge` of XFOIL.
+  A test covers it. The Abbott & von Doenhoff reference is verified or marked unverified.
+- Q5: flap cases sweep -4 deg up to the last angle where XFOIL converges, as SPEC.md 4.1.
+- Q6: Cl, Cd, Cm of flap cases are reported without a claim first. Targets for them and for the
+  hinge moment are proposed after the pilot.
+- Q7: a pilot run (4 cases) comes after the geometry, hinge-moment and XFOIL-runner steps.
+- SPEC.md 4.5 edited (user's approval): hinge height definition, "no kink" as tangent continuity
+  with fairings and a fillet, the reference frame, the sign convention, and that negative
+  deflections get geometry tests only, no viscous benchmark.
+
 ## Later
 
 - End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver

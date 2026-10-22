@@ -148,10 +148,22 @@ The benchmark always reports the measured numbers, whether or not a target is me
 
 ### 4.5 Flaps
 
-- Plain flap defined by hinge position (chordwise and through the thickness) and deflection.
-  The hinge region is closed with a smooth arc, with no gap and no kink.
-- Deflections from -30° to +30° produce valid geometry. Viscous accuracy is benchmarked up to 20°.
-- Hinge moment coefficient is computed from surface pressure and friction on the flap.
+- Plain flap defined by hinge position and deflection. The hinge is at chordwise position
+  `hinge_x` (fraction of the chord) and at `hinge_y`, a fraction of the local thickness at `hinge_x`
+  (0 lower surface, 1 upper surface, default 0.5). Deflection is positive trailing edge down.
+- The hinge region is closed with a smooth arc about the hinge point, with no gap and no kink.
+  "No kink" means the contour has a continuous tangent: short fairings join the arc to the
+  surfaces, and the closed side of the hinge gets a fillet (size 0 gives the plain notch). The sizes
+  are in the parameters module.
+- Deflections from -30° to +30° produce valid geometry. Viscous accuracy is benchmarked up to 20°,
+  positive deflections only; negative deflections get geometry tests only.
+- A flapped section keeps the reference frame of the undeflected section: reference chord, angle of
+  attack and the `Cm` reference point are those of the undeflected section.
+- Hinge moment coefficient is computed from surface pressure and friction on the flap, as the
+  moment about the hinge point on the flap, divided by dynamic pressure and the reference chord
+  squared. It is positive when it tends to deflect the flap further down (trailing edge down), so
+  lift on the flap at positive angle of attack gives a negative value. XFOIL's `Chinge` has the
+  opposite sign: `ch = -Chinge`.
 - A flap polar set covers several deflections and supports interpolation in deflection angle.
 
 ### 4.6 Multi-element
