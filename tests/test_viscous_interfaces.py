@@ -121,20 +121,22 @@ def test_batch_rows_carry_the_solver_flag_and_drag_parts(fake_viscous):
 
 
 def test_maximize_ld_uses_the_coupled_solver(monkeypatch):
-    """Every L/D evaluation is ``solve_flow`` with the Reynolds number (no other drag path)."""
+    """Every L/D evaluation is ``solve_flow`` with the Reynolds number (no other drag path): the
+    search from the direct start only, the final design with the full single-point logic."""
     from foil_lab import design
     seen = []
 
-    def fake(coords, alpha, reynolds=0.0, **kw):
-        seen.append(reynolds)
+    def fake(coords, alpha, reynolds=0.0, fallback=True, **kw):
+        seen.append((reynolds, fallback))
         s = solver.solve_flow(coords, alpha)
         s.reynolds, s.cd_visc = reynolds, 0.01
         return s
 
     monkeypatch.setattr(design, "solve_flow", fake)
     res = design.maximize_ld(alpha_deg=4.0, reynolds=2e6, max_iter=1)
-    assert seen and set(seen) == {2e6}
-    assert "viscous" in res.message
+    assert seen and {re for re, _ in seen} == {2e6}
+    assert seen[-1][1] is True and all(fb is False for _, fb in seen[:-1])
+    assert "viscous" in res.message and res.n_failed == 0
 
 
 def test_maximize_ld_penalises_unconverged_candidates(monkeypatch):
@@ -149,6 +151,7 @@ def test_maximize_ld_penalises_unconverged_candidates(monkeypatch):
     res = design.maximize_ld(alpha_deg=4.0, reynolds=2e6, max_iter=1)
     assert not res.success and "NOT converged" in res.message
     assert all(h == 0.0 for h in res.history)
+    assert res.n_failed == res.n_evals and f"{res.n_failed} candidates failed" in res.message
 
 
 # ---------------------------------------------------------------------------------------- #
@@ -214,14 +217,15 @@ def test_gui_single_case_runs_the_coupled_solver(monkeypatch):
 @pytest.fixture
 def scripted(monkeypatch):
     """``viscous.solve_point`` replaced by a script: angles in ``cold_ok`` converge from the march,
-    every warm-started angle converges unless it is in ``warm_fail``."""
+    every warm-started angle converges unless it, or the pair (angle, start angle), is in
+    ``warm_fail``."""
     cfg = {"cold_ok": set(), "warm_fail": set(), "calls": []}
 
     def solve_point(coords, alpha, reynolds, params=viscous.VISCOUS, trips=None, start=None,
                     alpha_start=None, geometry=None, *a, **kw):
         cold = start is None
         cfg["calls"].append((float(alpha), "cold" if cold else f"warm from {alpha_start:g}"))
-        ok = alpha in cfg["cold_ok"] if cold else alpha not in cfg["warm_fail"]
+        ok = alpha in cfg["cold_ok"] if cold else not ({alpha, (alpha, alpha_start)} & cfg["warm_fail"])
         return viscous.ViscousResult(alpha=alpha, reynolds=reynolds, converged=ok, iterations=2,
                                      reason="" if ok else "max_iter", iterations_total=2,
                                      state=("x", alpha), path="march" if cold else "warm start")
@@ -258,10 +262,28 @@ def test_single_point_that_fails_says_what_was_tried(scripted):
     scripted["cold_ok"] = {0.0}
     scripted["warm_fail"] = {3.0}
     r = viscous.solve_single(None, 3.0, 1e6)
-    assert not r.converged and r.path == "direct: march; continuation from 0 deg failed"
+    assert not r.converged and r.path.startswith("direct: march; continuation from 0 deg failed; 2 deg: no start")
+    assert r.path.endswith("cap of 10 cold starts reached")
+    assert sum(c == "cold" for _, c in scripted["calls"]) == 12        # direct, 0 deg and the cap of 10
     scripted["cold_ok"], scripted["warm_fail"] = set(), set()
     r = viscous.solve_single(None, 1.0, 1e6)
-    assert not r.converged and r.path.endswith("0 deg failed; no converged start within 4 deg")
+    assert not r.converged and r.path.startswith("direct: march; 0 deg failed; 2 deg: no start")
+    assert r.path.endswith("cap of 10 cold starts reached")
+
+
+def test_single_point_moves_on_after_a_failed_walk(scripted):
+    """As Clark Y Re 5e5 11 deg (report 12): the starts at 12 and 13 deg converge but their walks
+    fail; 8 deg is reached and its walk converges."""
+    scripted["cold_ok"] = {12.0, 13.0, 8.0}
+    scripted["warm_fail"] = {(11.0, 12.0)}
+    r = viscous.solve_single(None, 11.0, 1e6)
+    assert r.converged and r.path == "from 8 deg: warm start"
+    assert [a for a, c in scripted["calls"] if c == "cold"] == [11.0, 0.0, 10.0, 12.0, 9.0, 13.0, 8.0]
+
+
+def test_single_point_without_fallback_is_the_direct_start(scripted):
+    r = viscous.solve_single(None, 5.0, 1e6, fallback=False)
+    assert not r.converged and r.path == "direct: march" and scripted["calls"] == [(5.0, "cold")]
 
 
 # ---------------------------------------------------------------------------------------- #

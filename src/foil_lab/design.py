@@ -89,6 +89,7 @@ class DesignResult:
     n_evals: int
     message: str
     history: List[float] = field(default_factory=list)
+    n_failed: int = 0          # maximize_ld: candidates whose viscous solve did not converge
 
 
 def _vec_to_params(x: np.ndarray) -> Dict[str, float]:
@@ -222,8 +223,11 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
     Drag source
     -----------
     Lift and drag come from the coupled viscous-inviscid solver (``solve_flow`` with
-    ``reynolds``; each candidate started from its starting march). A candidate whose solve did
-    not converge (``converged`` False) is penalised, never used for L/D.
+    ``reynolds``). During the search each candidate is solved from the direct start only (no
+    continuation, ``fallback=False``): a candidate that does not converge from it counts as a
+    failed candidate, is penalised and is never used for L/D (user, after report 12). The result
+    reports how many failed (``n_failed``). The final design is solved with the full single-point
+    logic (:func:`foil_lab.viscous.solve_single`); ``success`` needs it to converge.
 
     Constraint
     ----------
@@ -239,12 +243,18 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
     history: List[float] = []
     n_eval = [0]
 
-    def _solve(coords):
+    n_failed = [0]
+
+    def _solve(coords, final=False):
         try:
-            s = solve_flow(coords, alpha_deg, reynolds=reynolds)
+            s = solve_flow(coords, alpha_deg, reynolds=reynolds, fallback=final)
         except (FloatingPointError, np.linalg.LinAlgError, ValueError):
-            return np.nan, np.nan, False
-        return s.cl, s.cd_total, bool(s.converged)
+            s = None
+        if s is None or not s.converged:
+            if not final:
+                n_failed[0] += 1
+            return (np.nan, np.nan, False) if s is None else (s.cl, s.cd_total, False)
+        return s.cl, s.cd_total, True
 
     def neg_ld(x):
         n_eval[0] += 1
@@ -278,13 +288,13 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
 
     params = space.params(res.x)
     coords = generate_parsec(params, num_panels)
-    cl, cd, conv = _solve(coords)
+    cl, cd, conv = _solve(coords, final=True)
     return DesignResult(
         params=params, coords=coords, success=bool(res.success and conv),
         objective=float(cl / cd), n_evals=n_eval[0],
         message=f"L/D={cl/cd:.1f} (Cl={cl:.3f}, Cd={cd:.5f}, "
-                f"viscous{'' if conv else ', NOT converged'})",
-        history=history)
+                f"viscous{'' if conv else ', NOT converged'}; {n_failed[0]} candidates failed)",
+        history=history, n_failed=n_failed[0])
 
 
 # --------------------------------------------------------------------------- #

@@ -2734,6 +2734,40 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
    (`benchmark_output/m3_r12`): all 1225 rows identical to the C5 run (converged, Cl, Cd, Cd TE, Cm,
    transition). The only changes are the 5 path labels of the labelling fix; so the benchmark
    tables are unchanged.
+5. **Decisions after report 12 (user, 2026-10-22).**
+   - **Single-point starts.** After a failed walk, the next start angle is tried, with no bound on
+     its distance (`single_point_reach` removed). Cap: `ViscousParams.single_point_max_cold` = 10
+     cold starts per point (new parameter; the direct start and 0 deg not counted). The search also
+     follows a failed continuation from 0 deg, which is itself a failed walk (our reading of "after
+     a failed walk"). When the cap is reached, the result is not converged and its `path` lists
+     every attempt ("<angle> deg: no start", "from <angle> deg failed", "cap of 10 cold starts
+     reached").
+   - **`maximize_ld`.** No fallback during the optimiser's search: each candidate is solved from the
+     direct start only (`solve_flow(..., fallback=False)`), and one that does not converge counts as
+     a failed candidate (penalised, never used for L/D). `DesignResult.n_failed` and the message
+     report how many failed. The final design is solved with the full single-point logic, and
+     `success` needs it to converge.
+   - **Rerun after report 12** of the single points that needed continuation (273) plus the 2
+     missed points:
+     - all 275 converge;
+     - both missed points converge with the polar's solution:
+       - E387 Re 1e5 20 deg: "from 15 deg", Cl 0.5339, 238 s;
+       - Clark Y Re 5e5 11 deg: "from 8 deg", Cl 1.3854, 253 s;
+     - the other 273 equal the previous single-point results to 2.2e-13 in Cl and 1.3e-11 relative
+       in Cd;
+     - run time mean 89 s, max 253 s.
+   - **Over all 1050 points:** 1030 converge in the polar and all 1030 converge as single points; the
+     other 20 converge in neither, and none converges only as a single point. On open edges, the
+     single points agree with the polar to 3.6e-5 in Cl and 0.017 % in Cd. **Target met.**
+   - **Design smoke test re-timed:** 383 s on an idle CPU (target near 125 s; **not met**).
+     Measured: 23 viscous solves, 16 s each on average; 13 of 22 candidates failed; the final design
+     (full logic) converged in 91 s, L/D 88.7.
+     - Cause: the PARSEC shapes have a closed trailing edge, which the default of item 2 now opens to
+       0.0005 c. The default start shape then fails from the direct start: 50 iterations, against
+       converged in 43 when kept sharp (60 panels, 4 deg, Re 3e6).
+     - The optimiser therefore starts from a penalised point and needs 22 evaluations instead of 11.
+       In report 11 (edge kept closed), 10 of 12 solves converged.
+     - Not changed; for the user.
 
 ---
 
@@ -2783,6 +2817,9 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   for the Cl constraint, and the constraint solves again the candidates the objective already solved
   (no caching). Candidates for M7: cache solves by design vector, warm-start each candidate from the
   previous solution, fewer finite-difference solves.
+- M7 speed (user, after report 12): single-point run time is 25-66 s mean, up to 297 s with
+  continuation (1050 benchmark points, one BLAS thread per process, report 12); a typical point
+  should take a few seconds.
 - M9 (user, after report 11): Validation statements say 'agreement with XFOIL', not experiment.
   Consider comparing E387 at Re 1e5 to 3e5 with the NASA Langley wind-tunnel data (McGhee et al.,
   NASA TM-4062, 1988); verify the citation and data licence before use, and do not bundle the data.

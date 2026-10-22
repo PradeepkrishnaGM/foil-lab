@@ -188,11 +188,14 @@ class ViscousParams:
         A single operating point whose start from the march does not converge is reached by
         continuation from 0 deg in steps of this size (deg), each warm-started from the last
         converged angle, as a polar reaches its angles. 1 deg set by the user after report 11.
-    single_point_reach:
-        If 0 deg itself does not converge, the start is taken from the nearest angle (in steps of
-        ``single_point_step`` around the target) that converges from the march, at most this far
-        from the target (deg). 4 deg is our choice (the bound keeps the number of cold starts
-        finite); for the user's approval.
+    single_point_max_cold:
+        If neither the direct start nor the continuation from 0 deg reaches a single point, the
+        angles around it (in steps of ``single_point_step``, nearest first) are started from the
+        march, and from each that converges the walk to the point is tried; a failed walk moves on
+        to the next angle. At most this many such cold starts per point (the direct start and 0 deg
+        not counted); when the cap is reached the result is not converged and its ``path`` lists the
+        attempts. 10 set by the user after report 12 (no bound on the distance; the two points
+        missed in report 12 needed 5 and 9).
     """
 
     closure_set: str = "fidkowski2022"
@@ -207,7 +210,7 @@ class ViscousParams:
     jacobian: str = "complex_step"
     closed_te_gap: float = 0.0005
     single_point_step: float = 1.0
-    single_point_reach: float = 4.0
+    single_point_max_cold: int = 10
 
 
 XFOIL = XfoilParams()

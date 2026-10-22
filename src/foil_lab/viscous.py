@@ -1167,31 +1167,36 @@ def _steps(a_from: float, a_to: float, step: float) -> list:
 
 
 def solve_single(coords, alpha: float, reynolds: float, params: ViscousParams = VISCOUS, trips=None,
-                 geometry: Geometry | None = None) -> ViscousResult:
+                 geometry: Geometry | None = None, fallback: bool = True) -> ViscousResult:
     """One operating point on its own (``fl.analyze``, ``solver.solve_flow``), reached as a polar
-    reaches its angles when the direct start fails (user, after report 11). In order, until one
-    converges:
+    reaches its angles when the direct start fails (user, after reports 11 and 12). In order, until
+    one converges:
 
     1. direct: the start from the march at ``alpha`` (:func:`solve_point`, with its repair
        restarts);
     2. continuation from 0 deg: the start from the march at 0 deg, then the angles towards
        ``alpha`` in steps of ``params.single_point_step``, each started from the last converged one
        (:func:`polar`);
-    3. only if 0 deg does not converge from the march: the angle nearest ``alpha`` (in steps of
-       ``single_point_step``, at most ``single_point_reach`` away, ties towards 0 deg) that converges
-       from the march, then the angles towards ``alpha`` as in 2 (as :func:`reach_from_nearest`
-       starts from the nearest converged angle).
+    3. if 0 deg does not converge from the march, or the walk from it fails: the angles around
+       ``alpha`` in steps of ``single_point_step``, nearest first (ties towards 0 deg), each started
+       from the march; from every one that converges, the walk towards ``alpha`` as in 2. A failed
+       walk moves on to the next angle. At most ``params.single_point_max_cold`` such starts (the
+       direct start and 0 deg not counted).
+
+    ``fallback=False``: the direct start only (``design.maximize_ld`` during its search).
 
     ``path`` says how the point was reached: "direct: <path>", "continuation from 0 deg: <path>"
-    or "from <angle> deg: <path>"; if every attempt fails it is "direct: <path>; continuation
-    from 0 deg failed" (or "... no converged start within <reach> deg"). ``iterations`` are those
-    of the final solve, ``iterations_total`` all Newton iterations of every attempt. ``converged``
-    is that of :func:`solve_viscous` (the residual criteria) at ``alpha``."""
+    or "from <angle> deg: <path>". If every attempt fails, the direct result is returned (converged
+    False) and its ``path`` lists the attempts: "direct: <path>; 0 deg failed" (or "continuation from
+    0 deg failed"), then each start tried ("<angle> deg: no start" or "from <angle> deg failed") and
+    "cap of <n> cold starts reached". ``iterations`` are those of the final solve,
+    ``iterations_total`` all Newton iterations of every attempt. ``converged`` is that of
+    :func:`solve_viscous` (the residual criteria) at ``alpha``."""
     geo = geometry or build_geometry(coords)
     alpha = float(alpha)
     direct = solve_point(coords, alpha, reynolds, params, trips, None, None, geo)
     direct.path = f"direct: {direct.path or direct.reason}"
-    if direct.converged:
+    if direct.converged or not fallback:
         return direct
     total = direct.iterations_total
     step = float(params.single_point_step)
@@ -1215,22 +1220,27 @@ def solve_single(coords, alpha: float, reynolds: float, params: ViscousParams = 
         r = walk(0.0, r0, "continuation from 0 deg")
         if r is not None:
             return r
-        direct.path += "; continuation from 0 deg failed"
+        tried = ["continuation from 0 deg failed"]
     else:
-        reach = float(params.single_point_reach)
-        offsets = [k * step for k in range(1, int(np.floor(reach / step + 1e-9)) + 1)]
-        cands = sorted({alpha - o for o in offsets} | {alpha + o for o in offsets}, key=lambda a: (abs(a - alpha), abs(a)))
-        for a_c in (a for a in cands if a != 0.0):
+        tried = ["0 deg failed"]
+    cap, k, n_cold = int(params.single_point_max_cold), 0, 0
+    while n_cold < cap:
+        k += 1
+        for a_c in sorted((alpha - k * step, alpha + k * step), key=abs):
+            if a_c == 0.0 or n_cold >= cap:
+                continue
+            n_cold += 1
             rc = solve_point(coords, a_c, reynolds, params, trips, None, None, geo)
             total += rc.iterations_total
-            if rc.converged:
-                r = walk(a_c, rc, f"from {a_c:g} deg")
-                if r is not None:
-                    return r
-                direct.path += f"; 0 deg failed; from {a_c:g} deg failed"
-                break
-        else:
-            direct.path += f"; 0 deg failed; no converged start within {reach:g} deg"
+            if not rc.converged:
+                tried.append(f"{a_c:g} deg: no start")
+                continue
+            r = walk(a_c, rc, f"from {a_c:g} deg")
+            if r is not None:
+                return r
+            tried.append(f"from {a_c:g} deg failed")
+    tried.append(f"cap of {cap} cold starts reached")
+    direct.path += "; " + "; ".join(tried)
     direct.iterations_total = total
     return direct
 

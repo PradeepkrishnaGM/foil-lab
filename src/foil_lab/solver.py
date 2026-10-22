@@ -156,6 +156,7 @@ def solve_flow(
     trip_x_lower: Optional[float] = None,
     n_crit: Optional[float] = None,
     params: Optional[ViscousParams] = None,
+    fallback: bool = True,
 ) -> SolutionData:
     """Solve the flow over one or more bodies.
 
@@ -164,7 +165,8 @@ def solve_flow(
     continuation; one body, Mach 0), with e^n transition (``n_crit``, default
     ``params.VISCOUS.n_crit``) and forced trips ``trip_x_upper`` / ``trip_x_lower`` (x/c; ``None``
     or 0 = free transition). A closed trailing edge is opened to ``params.closed_te_gap`` first
-    (recorded in ``corrections``; 0 keeps it sharp).
+    (recorded in ``corrections``; 0 keeps it sharp). ``fallback=False``: the direct start only, no
+    continuation (``design.maximize_ld`` during its search).
 
     real_body_index : with more than one body, the body whose loads are reported (None: all
         bodies together).
@@ -176,7 +178,7 @@ def solve_flow(
         prm = viscous_params(n_crit, params)
         body, corr = viscous.open_closed_te(bodies[0], prm)
         vres = viscous.solve_single(body, float(alpha_deg), float(reynolds), prm,
-                                    trips_dict(trip_x_upper, trip_x_lower))
+                                    trips_dict(trip_x_upper, trip_x_lower), fallback=fallback)
         return solution_from_viscous(body, vres, mach, aspect_ratio, corr)
 
     ps = core.PanelSet.from_bodies(bodies)
