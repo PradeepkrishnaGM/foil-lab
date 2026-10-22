@@ -174,7 +174,8 @@ class FlapCase:
     sens_a: list                    # |a(240) - a(160)| where both exist
     sens_b: list                    # |Chinge(240) - Chinge(160)|
     ch_abs: list                    # |ch| of XFOIL's -Chinge at the compared points (scale)
-    friction_share: list            # |friction part| / |ch| of ours at the compared points
+    friction_share: list            # (|friction part|, |ch|) of ours at the compared points
+    unconv_angles: list             # filter angles XFOIL converged and Foil-Lab did not
     runtime_total: float
     xfoil_runtime: float
     n_all_ours: int                 # converged angles of all requested
@@ -207,7 +208,7 @@ def compare_case(name: str, re: float, ref_dir: Path, out_dir: Path,
     unrel = {a: unreliable_quantities(ref.rows[a], None if ref240 is None else ref240.rows.get(a))
              for a in filt}
     st = MethodStats()
-    rows, d_a, d_b, s_a, s_b, ch_abs, fshare = [], [], [], [], [], [], []
+    rows, d_a, d_b, s_a, s_b, ch_abs, fshare, unconv = [], [], [], [], [], [], [], []
     a160 = dumps.get(bench.pane_nodes[0], {})
     a240 = dumps.get(bench.pane_nodes[1], {})
     for a in ref.alphas:
@@ -232,6 +233,7 @@ def compare_case(name: str, re: float, ref_dir: Path, out_dir: Path,
             st.runtime.append(o["runtime_s"])
         if not conv:
             st.n_unconverged += 1
+            unconv.append(a)
             continue
         skip = unrel[a]
         if "cl" not in skip:
@@ -243,7 +245,7 @@ def compare_case(name: str, re: float, ref_dir: Path, out_dir: Path,
         if x.ch is not None:
             d_b.append(abs(o["ch"] - x.ch))
             ch_abs.append(abs(x.ch))
-            fshare.append(abs(o["ch_friction"]) / abs(o["ch"]) if o["ch"] else math.nan)
+            fshare.append((abs(o["ch_friction"]), abs(o["ch"])))
             if x2 is not None and x2.ch is not None:
                 s_b.append(abs(x2.ch - x.ch))
         if math.isfinite(ca):
@@ -259,7 +261,7 @@ def compare_case(name: str, re: float, ref_dir: Path, out_dir: Path,
         name, base, float(name.rsplit("_F", 1)[1]), re, rows, st, len(filt),
         sum(ref.rows[a] is not None for a in filt),
         sum(1 for r in rows if r["in_filter"] and r["xfoil"] and r["ours"]), cut, n_unrel, d_a, d_b, s_a,
-        s_b, ch_abs, fshare, sum(r["runtime"] for r in rows if math.isfinite(r["runtime"])), xr,
+        s_b, ch_abs, fshare, unconv, sum(r["runtime"] for r in rows if math.isfinite(r["runtime"])), xr,
         sum(1 for r in rows if r["ours"]), len(rows), sum(1 for r in rows if r["xfoil"]), bool(a160))
 
 
@@ -280,6 +282,47 @@ def _md(head: list[str], rows: list[list[str]]) -> str:
 
 def _failed(v: dict) -> list[str]:
     return [k for k, (val, ok) in v.items() if not (ok and math.isfinite(val))]
+
+
+#: leave-one-out cases of the interpolation in deflection: (left-out deflection, deflections used or None = all others)
+LOO_CASES = ((10.0, None), (15.0, (10.0, 20.0)))
+
+
+def loo_errors(cs: list[FlapCase]) -> list[list[str]]:
+    """Leave-one-out error of :func:`foil_lab.flap_polars.interpolate_in_deflection` on the Foil-Lab
+    points of the benchmark: for each section and Reynolds number the polar of the left-out
+    deflection is interpolated from the others and compared with the solved one. Rows: (left out, used,
+    Re) with mean / max |dCl|, |dCm|, |d ch| and relative dCd, over the angles where every point involved
+    converged, for all angles and for the attached-flow filter angles of the left-out case."""
+    from ..flap_polars import interpolate_in_deflection
+    rows = []
+    res = sorted({c.re for c in cs})
+    for tgt, use in LOO_CASES:
+        for r in res:
+            errs = {"all": {q: [] for q in ("cl", "cd", "cm", "ch")}, "filter": {q: [] for q in ("cl", "cd", "cm", "ch")}}
+            for base in sorted({c.base for c in cs}):
+                grp = {c.deflection: c for c in cs if c.base == base and c.re == r}
+                if tgt not in grp or len(grp) < 3:
+                    continue
+                used = sorted(d for d in grp if d != tgt and (use is None or d in use))
+                if len(used) < 2:
+                    continue
+                for q in ("cl", "cd", "cm", "ch"):
+                    tab = np.array([[row[q] for row in grp[d].rows] for d in used])
+                    ref = np.array([row[q] for row in grp[tgt].rows])
+                    est = interpolate_in_deflection(np.array(used), tab, tgt)
+                    flt = np.array([row["in_filter"] for row in grp[tgt].rows])
+                    for key, mask in (("all", np.ones_like(flt)), ("filter", flt)):
+                        m = np.isfinite(est) & np.isfinite(ref) & mask
+                        e = np.abs(est - ref)[m] / (np.abs(ref[m]) if q == "cd" else 1.0)
+                        errs[key][q].extend(e.tolist())
+            f = lambda v, fmt="{:.4f}": (fmt.format(np.mean(v)) + " / " + fmt.format(np.max(v))) if v else "-"
+            rows.append([f"{tgt:g}", "all others" if use is None else "/".join(f"{u:g}" for u in use), f"{r:g}",
+                         str(len(errs["all"]["cl"])), f(errs["all"]["cl"]), f(errs["all"]["cm"]),
+                         f(errs["all"]["ch"], "{:.5f}"), f([x * 100 for x in errs["all"]["cd"]], "{:.1f}") + " %",
+                         f(errs["filter"]["cl"]), f(errs["filter"]["cm"]), f(errs["filter"]["ch"], "{:.5f}"),
+                         f([x * 100 for x in errs["filter"]["cd"]], "{:.1f}") + " %"])
+    return rows
 
 
 def build_report(cases: list[tuple[str, float]], ref_dir: Path, out_dir: Path,
@@ -340,7 +383,7 @@ def build_report(cases: list[tuple[str, float]], ref_dir: Path, out_dir: Path,
 
     # --- 3. convergence per case
     rows = [[c.name, f"{c.re:g}", f"{c.n_all_ours}/{c.n_all}", f"{c.n_all_xfoil}/{c.n_all}",
-             f"{c.n_both}/{c.n_xfoil} (cut {c.cut})", f"{c.stats.n_unconverged}",
+             f"{c.n_both}/{c.n_xfoil} (cut {c.cut})", f"{c.stats.n_unconverged}" + (f" ({', '.join(f'{a:g}' for a in c.unconv_angles)})" if c.unconv_angles else ""),
              f"{c.n_unrel['cl']}/{c.n_unrel['cd']}/{c.n_unrel['cm']}"] for c in cs]
     lines += ["## 2. Convergence per case\n", "Foil-Lab and XFOIL converged out of all 25 angles; both inside the "
               "filter (XFOIL converged there); Foil-Lab unconverged at filter points XFOIL converged; reference "
@@ -372,8 +415,8 @@ def build_report(cases: list[tuple[str, float]], ref_dir: Path, out_dir: Path,
                    "mean abs ch"], rows),
               f"All cases pooled: (a) mean {_stats(pa)[0]:.5f}, max {_stats(pa)[1]:.5f} over {len(pa)} points; "
               f"(b) mean {_stats(pb)[0]:.5f}, max {_stats(pb)[1]:.5f} over {len(pb)} points. "
-              f"Friction share of Foil-Lab's ch: mean {_stats([x for c in cs for x in c.friction_share])[0]:.3%}, "
-              f"max {_stats([x for c in cs for x in c.friction_share])[1]:.3%}.\n"]
+              f"Friction share of Foil-Lab's ch (mean |friction part| over mean |ch|, compared points): "
+              f"{sum(x[0] for c in cs for x in c.friction_share) / max(sum(x[1] for c in cs for x in c.friction_share), 1e-300):.2%}.\n"]
     # quantiles of (a)
     if pa:
         q = np.quantile(pa, [0.5, 0.9, 0.95, 0.99, 1.0])
@@ -389,6 +432,13 @@ def build_report(cases: list[tuple[str, float]], ref_dir: Path, out_dir: Path,
     lines += ["## 4. Run time\n", f"Foil-Lab: {tot:.0f} s of solver time in total over {npts} points "
               f"({tot / max(npts, 1):.1f} s per point, several workers at once). Mean per case (s):\n",
               _md(["flap deg", "Re", "Foil-Lab (25 angles)", "XFOIL polar processes"], rows)]
+    lines += ["## 5. Interpolation in deflection (leave-one-out)\n",
+              "The polar of the left-out deflection interpolated (PCHIP in the deflection, per angle) from the "
+              "others and compared with the solved polar; Foil-Lab points, both sections pooled; mean / max "
+              "absolute error (Cd: relative), over all angles where every point involved converged, and over "
+              "the attached-flow filter angles.\n",
+              _md(["left out", "from", "Re", "points", "dCl", "dCm", "d ch", "rel dCd", "dCl (filter)",
+                   "dCm (filter)", "d ch (filter)", "rel dCd (filter)"], loo_errors(cs))]
     if detail:
         for c in cs:
             lines += [f"\n#### {c.name}, Re {c.re:g}\n",

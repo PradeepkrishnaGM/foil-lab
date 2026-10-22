@@ -16,6 +16,7 @@ __version__ = "2.0.0.dev0"
 
 from .airfoil import Airfoil, Configuration, Element  # noqa: E402
 from .api import ElementResult, Polar, Result, analyze, polar  # noqa: E402
+from .flap_polars import FlapPolarSet, FlapSlice, flap_polars  # noqa: E402
 
 __all__ = ["Airfoil", "Element", "Configuration", "analyze", "polar", "Result", "ElementResult",
-           "Polar", "__version__"]
+           "Polar", "flap_polars", "FlapPolarSet", "FlapSlice", "__version__"]

@@ -145,6 +145,11 @@ class Polar:
         return np.array([np.nan if r.cd is None else r.cd for r in self.results])
 
     @property
+    def ch(self) -> np.ndarray:
+        """Hinge-moment coefficient of the flap (nan without a flap)."""
+        return np.array([np.nan if r.ch is None else r.ch for r in self.results])
+
+    @property
     def converged(self) -> np.ndarray:
         return np.array([r.converged for r in self.results])
 
