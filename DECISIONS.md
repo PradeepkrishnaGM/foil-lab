@@ -2925,6 +2925,32 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   6-20 s per point (mean 11 s) so 1.0-1.5 h on 5 workers; XFOIL 240 processes, about 15 min. Output
   well under 10 MB.
 
+### Decisions after the M4 pilot (user, 2026-10-22)
+
+1. **Cl / Cd / Cm of flap cases:** no separate targets for 15 and 20 deg. The SPEC.md 4.1 targets apply to
+   every flap deflection and the report gives pass or fail per deflection (at each Reynolds number, the
+   two sections pooled as in the main benchmark). The *validated flap range* is the largest deflection at
+   which every Reynolds number meets every target (and all smaller deflections do too); the deflections
+   beyond it are benchmarked up to 20 deg (SPEC.md 4.5) without a claim.
+2. **Hinge moment, two comparisons:** (a) XFOIL's own surface pressure (`CPWR`) and wall shear (`DUMP`,
+   `tau = Cf Ue^2`, taken along the flow) at every converged flap point, integrated with Foil-Lab's
+   definition (flap panels, about the hinge point, pressure plus friction) and compared with Foil-Lab's
+   `ch`: the solvers without the definition question. A hinge-moment target is to be proposed from the
+   full run's numbers together with XFOIL's own 160-against-240-node sensitivity (not from the pilot).
+   (b) `ch` against `-Chinge` with the approved loose target mean <= 0.0025, max <= 0.004, and a note on
+   the unexplained definition gap. The extra files are kept small (float32 npz, only Cp, Cf, Ue at the
+   nodes and the polar row of each converged angle, per case and node count).
+   The dump runs are separate XFOIL processes (one ALFA per angle, CPWR and DUMP after each) so that the
+   reference polars stay as the pilot made them; a converged solution does not depend on how it was
+   reached (checked: `Chinge` and `Cl` of the dump run equal those of the polar run for NACA 2412 F10,
+   Re 1e6, all 25 angles).
+3. **Full flap benchmark** (60 cases), and a check that the non-flap M3 benchmark is unchanged by the
+   wall-shear output and the runner changes (bit-identical rows apart from the run time, or the differences
+   listed).
+4. **Step 6:** `flap_polars` with the leave-one-out interpolation error measured (10 deg from 0/5/15/20,
+   15 deg from 10/20).
+5. **Fast suite:** if a change takes it over 55 s, the slowest new tests move to `slow`.
+
 ## Later
 
 - M4 (after the pilot): flap at 20 deg, Foil-Lab's Cl is 0.04 and Cd 10 % below XFOIL's over the
