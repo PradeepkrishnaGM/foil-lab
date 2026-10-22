@@ -2878,8 +2878,60 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   convention is also not known. Our integral of XFOIL's own `Cp` with both arms is 3 % (undeflected)
   to 8 % (20 deg) below `FMOM`. This is the reference's uncertainty; it is shown with every comparison.
 
+### Step 4: pilot run (docs/benchmark_m4_pilot.md); targets proposed, not applied
+
+- NACA 2412, 25 % flap, 10 and 20 deg, Re 1e6 and 3e6, 25 angles each; 597 s wall time; 1.6 MB of
+  output. Inside the attached-flow filter, both codes converged, mean / max:
+
+  | case | filter pts (both conv.) | dCl | rel dCd | dCm | d(ch) | mean abs ch (XFOIL) |
+  |---|---|---|---|---|---|---|
+  | F10 Re 1e6 | 13 (13) | 0.0088 / 0.0231 | 3.0 % / 4.9 % | 0.0020 / 0.0050 | 0.00094 / 0.00115 | 0.0096 |
+  | F10 Re 3e6 | 15 (15) | 0.0092 / 0.0245 | 3.1 % / 5.1 % | 0.0021 / 0.0053 | 0.00105 / 0.00128 | 0.0096 |
+  | F20 Re 1e6 | 11 (10; XFOIL 10) | 0.0382 / 0.0413 | 10.9 % / 18.3 % | 0.0076 / 0.0086 | 0.00196 / 0.00223 | 0.0140 |
+  | F20 Re 3e6 | 13 (11; XFOIL 13) | 0.0384 / 0.0431 | 9.2 % / 10.0 % | 0.0079 / 0.0091 | 0.00191 / 0.00231 | 0.0142 |
+
+  XFOIL's own 240-against-160-node change of `Chinge` is 0.00007-0.0002 on average and at most
+  0.0015 (one point, F20 Re 1e6).
+- At 10 deg the SPEC.md 4.1 targets (mean dCl 0.03, dCd 10 %, dCm 0.01) are met with a factor of 3 or
+  more. At 20 deg the mean dCl (0.038) is above 0.03 and the mean dCd at Re 1e6 (10.9 %) above 10 %; dCm is
+  inside. Foil-Lab converges at 11 of 13 filter points of F20 Re 3e6 (84.6 %, target 95 %: alpha -3 and 0
+  deg not converged). All numbers as measured; nothing tuned.
+- The F20 deficit is viscous: on the same flapped files the inviscid Cl differs from XFOIL's by at most
+  0.003 (0, 10, 20, 30 deg; alpha 0 and 4 deg), Cm by 0.0005. Foil-Lab's Cl is lower and Cd lower
+  than XFOIL's at 20 deg over the whole filter range, as expected for a thicker flap boundary layer
+  or earlier flap separation in XFOIL. Not investigated further (Later).
+- **Explanation of the `Chinge` gap (step 3 calibration, repeated on the pilot):** Foil-Lab's `ch`
+  is 5-15 % less negative than `-Chinge` over the whole sweep (F10: -0.00994 against -0.01052 at -4 deg,
+  -0.00743 against -0.00856 at 5 deg), a size that matches XFOIL's value being 3-8 % above a plain
+  pressure integral of its own `Cp` on the panels aft of the hinge (docs/xfoil_hinge_calibration.md).
+  The definition inside XFOIL is not explained (friction is excluded as the cause; the chordwise-arm-only
+  rule matches the undeflected case, not the deflected). The gap is therefore partly or wholly a
+  difference of definition and not of the solvers.
+- **Targets proposed, for the user's approval (not applied):**
+  - Cl, Cd, Cm of flap cases: report without claim (decision Q6) until the full run; the pilot
+    suggests the SPEC.md 4.1 targets as they stand for deflections up to 10 deg. For 15 and 20 deg
+    there is no pilot data at 15; with 20 deg the values above are what the code does.
+    Either (A) apply the SPEC.md 4.1 targets to every flap case and report 20 deg as not met (mean dCl
+    0.038, dCd 10.9 %), or (B) set the 15 and 20 deg targets after the full run from its numbers.
+    Recommendation: (B).
+  - Hinge moment: absolute difference `ch` against `-Chinge`, inside the attached-flow filter, at
+    every Reynolds number: mean |d(ch)| <= 0.0025 and max <= 0.004. Basis: the pilot's worst case is
+    0.0020 / 0.0023 (F20); at least half of it is the 5-15 % definition gap of the reference (the
+    reference's value itself is about 0.01 to 0.015), so a tighter target would test XFOIL's
+    definition rather than the solver; the form is absolute because `ch` passes through zero. The
+    measured XFOIL 240-against-160 change is reported next to it; the reliability rule is not applied
+    to `ch` (its sensitivity is 0.00007-0.0002 on average). To be confirmed on the full run.
+- Full-run estimate from the pilot: 60 cases (2 sections x 5 deflections x 6 Re), 1500 points, Foil-Lab
+  6-20 s per point (mean 11 s) so 1.0-1.5 h on 5 workers; XFOIL 240 processes, about 15 min. Output
+  well under 10 MB.
+
 ## Later
 
+- M4 (after the pilot): flap at 20 deg, Foil-Lab's Cl is 0.04 and Cd 10 % below XFOIL's over the
+  attached range (inviscid agrees to 0.003). Find the cause (flap boundary layer, wake, separation
+  handling) before the 15 and 20 deg targets are set.
+- M4 (after step 3): XFOIL's `Chinge` definition at deflection is not explained (3-8 % above a
+  pressure integral of its own `Cp`; only the chordwise-arm-only rule matches the undeflected case).
 - End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver
   converges on essentially every point at Re 1e5 and 2e5 with mean |dCl| 0.010 and 0.005 and drag
   within 5 to 6 %. Propose targets for Re 1e5 and 2e5 and report Re 5e4 as it is. This moves
