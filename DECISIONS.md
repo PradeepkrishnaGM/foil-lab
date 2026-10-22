@@ -2796,6 +2796,26 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   with fairings and a fillet, the reference frame, the sign convention, and that negative
   deflections get geometry tests only, no viscous benchmark.
 
+### Step 1: flap geometry (`foil_lab/flap.py`, `Airfoil.with_flap`)
+
+- Construction as in the plan: rigid rotation of the part aft of the cut about the hinge point;
+  circular arc about the hinge on the opening side, with Bezier fairings; intersection and fillet on
+  the closed side; a hinge closer than `flap_min_arc_radius` (0.002 c) to a surface is moved onto it
+  and that side becomes a corner (rounded by the fillet). Negative deflections use the mirror image.
+- On the closed side the main lower surface is allowed to extend aft of the cut where the rotated
+  flap meets it (small deflections cross it a little aft of the hinge).
+- Nodes come from the construction: cosine spacing by surface arc length plus refinement in the hinge
+  zones (`flap_zone_panels` across fairings + arc and across the fillet, `flap_arc_min_panels` on the
+  arc, grading `flap_grading`). Every junction of two pieces is a node, so each panel has one zone
+  (0 main, 1 flap, 2 hinge arc; the arc moves with the flap).
+- A flapped `Airfoil` stores `flap` (`FlapInfo`: the undeflected section, hinge, deflection, zones);
+  `chord`, `leading_edge`, `quarter_chord` are those of the undeflected section (Q3); transforms
+  move the stored section and hinge; repanelling and shape operations rebuild from the undeflected
+  section. Deflection 0 returns the original coordinates.
+- `geometry.deflect_flap` deleted; the GUI flap button uses `make_flap`.
+- Defaults in `params.GEOMETRY` (`flap_fairing_length` 0.02, `flap_fillet_radius` 0.02, ...) are
+  starting values; the values proposed after the 80/160/320 check come with step 2.
+
 ## Later
 
 - End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver

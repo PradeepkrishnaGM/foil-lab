@@ -111,12 +111,34 @@ class GeometryParams:
     le_search_samples:
         Samples per input point used to bracket the leading edge (the point of the arc-length
         spline farthest from the trailing-edge midpoint) before it is refined by root finding.
+    flap_fairing_length:
+        Plain flap (``foil_lab.flap``): length, in chords, of each tangent-continuous fairing that
+        joins the hinge arc to the main and flap surfaces (M4; proposed default, awaiting approval).
+    flap_fillet_radius:
+        Radius, in chords, of the fillet that rounds the notch on the closed side of the hinge (and
+        the corner when the hinge lies on a surface). 0 gives the plain notch.
+    flap_min_arc_radius:
+        When the hinge is closer than this (in chords) to a surface, the hinge point is moved onto
+        that surface (a corner instead of an arc); a section thinner than twice this at the hinge
+        is refused.
+    flap_zone_panels:
+        Panels placed across each hinge zone (fairings plus arc; the fillet).
+    flap_arc_min_panels:
+        Panels placed on the hinge arc itself, as far as the zone spacing allows.
+    flap_grading:
+        Largest ratio of neighbouring panel lengths when the spacing grows away from a hinge zone.
     """
 
     num_panels: int = 160
     te_gap_warn: float = 0.01
     te_gap_blend_start: float = 0.8
     le_search_samples: int = 20
+    flap_fairing_length: float = 0.02
+    flap_fillet_radius: float = 0.02
+    flap_min_arc_radius: float = 0.002
+    flap_zone_panels: int = 6
+    flap_arc_min_panels: int = 2
+    flap_grading: float = 1.3
 
 
 @dataclass(frozen=True)

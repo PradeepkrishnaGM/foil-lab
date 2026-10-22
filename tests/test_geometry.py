@@ -3,7 +3,7 @@
 import numpy as np
 
 from foil_lab.generators import generate_naca4
-from foil_lab.geometry import normalize_airfoil, repanel_cosine, deflect_flap
+from foil_lab.geometry import normalize_airfoil, repanel_cosine
 
 
 def test_normalize_unit_chord():
@@ -21,10 +21,9 @@ def test_repanel_point_count():
 
 
 def test_flap_deflection_changes_lift():
-    from foil_lab.solver import solve_flow
-    af = generate_naca4("0012", 160)
-    base = solve_flow(af, 0.0).cl
-    flapped = deflect_flap(af, hinge_x=0.7, deflection_deg=10.0)
-    flapped_cl = solve_flow(repanel_cosine(flapped, 160), 0.0).cl
+    import foil_lab as fl
+    af = fl.Airfoil.from_coords(generate_naca4("0012", 160))
+    base = fl.analyze(af, 0.0, repanel=False).cl
+    flapped_cl = fl.analyze(af.with_flap(0.7, 10.0), 0.0, repanel=False).cl
     # A downward flap adds camber -> positive lift at alpha=0.
     assert flapped_cl > base + 0.1
