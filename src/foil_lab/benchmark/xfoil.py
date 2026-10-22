@@ -36,6 +36,8 @@ from ..params import SWEEP, XFOIL, SweepParams, XfoilParams
 
 #: Columns of a reference polar CSV, in order.
 CSV_COLUMNS = ("alpha", "converged", "retried", "cl", "cd", "cdp", "cm", "xtr_top", "xtr_bot")
+#: Extra last column of flap references: XFOIL's ``Chinge`` in XFOIL's sign.
+CSV_COLUMNS_HINGE = CSV_COLUMNS + ("chinge",)
 
 
 class XfoilError(RuntimeError):
@@ -53,6 +55,14 @@ class PolarRow:
     cm: float
     xtr_top: float
     xtr_bot: float
+    #: hinge moment as XFOIL reports it (flap runs only): positive when it tends to turn the flap
+    #: trailing edge UP. Foil-Lab's ``ch`` is trailing edge down positive: ``ch = -chinge``.
+    chinge: float | None = None
+
+    @property
+    def ch(self) -> float | None:
+        """Hinge-moment coefficient in Foil-Lab's sign (trailing edge down positive)."""
+        return None if self.chinge is None else -self.chinge
 
 
 @dataclass
@@ -137,13 +147,18 @@ def _fmt(value: float) -> str:
 
 def build_script(coord_name: str, polar_name: str, reynolds: float, alpha_start: float,
                  alpha_end: float | None = None, alpha_step: float | None = None,
-                 params: XfoilParams = XFOIL) -> str:
+                 params: XfoilParams = XFOIL, hinge: tuple[float, float] | None = None) -> str:
     """Return the XFOIL command script for one fresh XFOIL process.
 
     ``reynolds`` of 0 gives an inviscid run. With ``alpha_end`` and ``alpha_step`` the script
     sweeps from ``alpha_start`` to ``alpha_end`` (``ASEQ``; negative step for a downward
     sweep). Without them it solves the single angle ``alpha_start`` directly (``ALFA``), which
     is how a skipped angle is retried from a fresh boundary layer.
+
+    With ``hinge`` (x, y of the hinge point in the coordinate file) the script sets the flap hinge
+    point (``FNEW``), registers it with ``FMOM`` (without it XFOIL prints "Flap hinge location not
+    defined" at the first solution and writes 0) and switches on the hinge moment column of the
+    polar file (``HINC``; XFOIL user guide, OPER menu). XFOIL's own flap command is not used.
     """
     if (alpha_end is None) != (alpha_step is None):
         raise ValueError("give both alpha_end and alpha_step, or neither")
@@ -160,6 +175,8 @@ def build_script(coord_name: str, polar_name: str, reynolds: float, alpha_start:
     if reynolds > 0:
         lines += [f"VISC {_fmt(reynolds)}", "VPAR", f"N {_fmt(params.n_crit)}",
                   f"XTR {_fmt(params.xtr_top)} {_fmt(params.xtr_bottom)}", ""]
+    if hinge is not None:
+        lines += [f"FNEW {_fmt(hinge[0])} {_fmt(hinge[1])}", "FMOM", "HINC"]
     lines += [f"ITER {params.max_iter}", "PACC", polar_name, "", solve,
               "PACC", "", "QUIT", ""]
     return "\n".join(lines)
@@ -191,13 +208,21 @@ def parse_polar_text(text: str) -> tuple[dict[str, str], list[PolarRow]]:
     m = re.search(r"xtrf\s*=\s*(\S+)\s*\(top\)\s+(\S+)\s*\(bottom\)", text)
     if m:
         header["xtrf_top"], header["xtrf_bot"] = m.group(1), m.group(2)
-    if not re.search(r"alpha\s+CL\s+CD\s+CDp\s+CM\s+Top_Xtr\s+Bot_Xtr", text):
+    cols = None
+    for line in text.splitlines():
+        if re.match(r"\s*alpha\s+CL\s+CD\s+CDp\s+CM\s+(Chinge\s+)?Top_Xtr\s+Bot_Xtr", line):
+            cols = line.split()
+            break
+    if cols is None:
         raise XfoilError("polar file has no column header")
+    names = {"alpha": "alpha", "CL": "cl", "CD": "cd", "CDp": "cdp", "CM": "cm",
+             "Chinge": "chinge", "Top_Xtr": "xtr_top", "Bot_Xtr": "xtr_bot"}
+    wanted = [(i, names[c]) for i, c in enumerate(cols) if c in names]
     rows = []
     for line in text.splitlines():
         if _ROW.match(line):
-            f = [float(v) for v in line.split()[:7]]
-            rows.append(PolarRow(*f))
+            f = line.split()
+            rows.append(PolarRow(**{key: float(f[i]) for i, key in wanted}))
     return header, rows
 
 
@@ -269,7 +294,8 @@ def _write_log(log_dir: Path | None, stem: str, run: XfoilRun) -> None:
 def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: str,
               sweep: SweepParams = SWEEP, params: XfoilParams = XFOIL,
               workdir: str | Path | None = None,
-              log_dir: str | Path | None = None) -> XfoilPolar:
+              log_dir: str | Path | None = None,
+              hinge: tuple[float, float] | None = None) -> XfoilPolar:
     """Compute an XFOIL reference polar for one section at one Reynolds number.
 
     The coordinates are written once with :func:`write_coordinate_file`; the same file is what
@@ -280,6 +306,8 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
     ``geometry_source`` is a free-text description recorded in the provenance header, e.g.
     ``"foil_lab.generators.generate_naca4('2412', 160)"``. If ``log_dir`` is given, the
     script, console output and polar file of every XFOIL process are written there.
+    ``hinge`` is the flap hinge point (x, y) in the coordinate file: XFOIL then also reports its
+    hinge moment (``Chinge``, XFOIL's sign) for every point.
     """
     log_path = Path(log_dir) if log_dir is not None else None
     pane = "asis" if params.pane_nodes is None else f"pane{params.pane_nodes}"
@@ -301,7 +329,7 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
         for branch, (a0, a1, da) in (("up", (0.0, sweep.alpha_max, sweep.alpha_step)),
                                      ("down", (0.0, sweep.alpha_min, -sweep.alpha_step))):
             polar_name = f"{name}_{branch}.pol"
-            script = build_script(coord_file, polar_name, reynolds, a0, a1, da, params)
+            script = build_script(coord_file, polar_name, reynolds, a0, a1, da, params, hinge)
             run = run_xfoil(script, wd, polar_name, params)
             runs.append(run)
             _write_log(log_path, f"{stem}_{branch}", run)
@@ -321,7 +349,7 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
         labels = ["up", "down"]
         for a in [a for a, r in rows.items() if r is None]:
             polar_name = f"{name}_retry.pol"
-            script = build_script(coord_file, polar_name, reynolds, a, params=params)
+            script = build_script(coord_file, polar_name, reynolds, a, params=params, hinge=hinge)
             run = run_xfoil(script, wd, polar_name, params)
             runs.append(run)
             labels.append(f"retry {_fmt(a)}")
@@ -360,6 +388,9 @@ def run_polar(coords: np.ndarray, name: str, reynolds: float, geometry_source: s
             "runs": status,
             "converged_points": (f"{sum(r is not None for r in rows.values())} of {len(rows)} "
                                  f"({len(retried)} after one retry)"),
+            **({} if hinge is None else {
+                "hinge_point": f"{_fmt(hinge[0])} {_fmt(hinge[1])}",
+                "chinge_sign": "XFOIL sign: positive = flap trailing edge up; foil-lab ch = -chinge"}),
             "date_utc": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         return XfoilPolar(rows=rows, provenance=provenance, runs=runs, retried=retried)
@@ -381,14 +412,16 @@ def polar_to_csv_text(polar: XfoilPolar) -> str:
     for key, value in polar.provenance.items():
         buf.write(f"# {key}: {value}\n")
     w = csv.writer(buf, lineterminator="\n")
-    w.writerow(CSV_COLUMNS)
+    hinge = any(r is not None and r.chinge is not None for r in polar.rows.values())
+    w.writerow(CSV_COLUMNS_HINGE if hinge else CSV_COLUMNS)
     for a in polar.alphas:
         r = polar.rows[a]
         if r is None:
-            w.writerow([_fmt(a), 0, 0, "", "", "", "", "", ""])
+            w.writerow([_fmt(a), 0, 0, "", "", "", "", "", ""] + ([""] if hinge else []))
         else:
             w.writerow([_fmt(a), 1, int(a in polar.retried), f"{r.cl:.4f}", f"{r.cd:.5f}",
-                        f"{r.cdp:.5f}", f"{r.cm:.4f}", f"{r.xtr_top:.4f}", f"{r.xtr_bot:.4f}"])
+                        f"{r.cdp:.5f}", f"{r.cm:.4f}", f"{r.xtr_top:.4f}", f"{r.xtr_bot:.4f}"]
+                       + ([f"{r.chinge:.5f}"] if hinge else []))
     return buf.getvalue()
 
 
@@ -403,7 +436,7 @@ def read_reference_csv(text: str) -> XfoilPolar:
         elif line.strip():
             body.append(line)
     reader = csv.DictReader(body)
-    if tuple(reader.fieldnames or ()) != CSV_COLUMNS:
+    if tuple(reader.fieldnames or ()) not in (CSV_COLUMNS, CSV_COLUMNS_HINGE):
         raise ValueError(f"unexpected columns {reader.fieldnames}")
     rows: dict[float, PolarRow | None] = {}
     retried: set[float] = set()
@@ -411,7 +444,8 @@ def read_reference_csv(text: str) -> XfoilPolar:
         a = round(float(rec["alpha"]), 6)
         if rec["converged"] == "1":
             rows[a] = PolarRow(a, float(rec["cl"]), float(rec["cd"]), float(rec["cdp"]),
-                               float(rec["cm"]), float(rec["xtr_top"]), float(rec["xtr_bot"]))
+                               float(rec["cm"]), float(rec["xtr_top"]), float(rec["xtr_bot"]),
+                               float(rec["chinge"]) if rec.get("chinge") else None)
             if rec["retried"] == "1":
                 retried.add(a)
         else:

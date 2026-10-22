@@ -83,6 +83,11 @@ class BenchmarkParams:
         the first positive angle at which XFOIL's Cl reaches this fraction of its maximum.
     workers:
         Parallel worker processes for reference generation and baseline runs.
+    flap_bases, flap_deflections, flap_hinge_x, flap_hinge_y:
+        Flap cases (SPEC.md 4.1 and 4.5, DECISIONS.md M4): sections, deflections in degrees
+        (trailing edge down), hinge position (fraction of the chord) and hinge height (fraction
+        of the local thickness). A flap case is named ``<section>_F<deflection>``, for example
+        ``NACA2412_F10``, and is made by ``Airfoil.with_flap`` from the canonical section.
     """
 
     sections: tuple[str, ...] = ("NACA0012", "NACA2412", "NACA4412", "NACA23012",
@@ -93,6 +98,10 @@ class BenchmarkParams:
     num_panels: int = 160
     attached_fraction: float = 0.9
     workers: int = 6
+    flap_bases: tuple[str, ...] = ("NACA0012", "NACA2412")
+    flap_deflections: tuple[float, ...] = (0.0, 5.0, 10.0, 15.0, 20.0)
+    flap_hinge_x: float = 0.75
+    flap_hinge_y: float = 0.5
 
 
 @dataclass(frozen=True)

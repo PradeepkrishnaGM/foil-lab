@@ -2854,6 +2854,30 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   (30 deg); `FlapInfo.diagnostics["fairing_deviation"]` and `["fillet_deviation"]`.
 - New default `flap_min_panel_length` 0.002 c and `flap_arc_min_panels` 2 (proposed).
 
+### Step 3: XFOIL runner with the hinge moment, flap cases, calibration of `Chinge`
+
+- `build_script(..., hinge=(x, y))` adds `FNEW x y`, `FMOM`, `HINC` before `PACC`. `FMOM` is needed
+  once: without it XFOIL prints "Flap hinge location not defined" at the first solution and writes
+  0 in the `Chinge` column (found in the first real run). XFOIL's own flap command is not used.
+- `parse_polar_text` is header-driven (columns by name); old polar files and the reference CSVs
+  without the `chinge` column still read. `PolarRow.chinge` is XFOIL's value, `PolarRow.ch` the
+  Foil-Lab sign (`-chinge`). The flap reference CSV has an extra last column `chinge`, and its
+  provenance records the hinge point and the sign.
+- Flap cases: `<section>_F<deflection>` (`NACA2412_F10`), made by `Airfoil.with_flap` from the
+  canonical section (`sections.canonical`); `CanonicalSection.hinge` and `.flap_panels`. Parameters in
+  `BENCHMARK` (`flap_bases`, `flap_deflections`, `flap_hinge_x` 0.75, `flap_hinge_y` 0.5).
+  `viscous_run` rows gain `ch`, `ch_pressure`, `ch_friction`; `benchmark/flap_run.py` runs XFOIL and
+  Foil-Lab on the cases and writes the comparison (`python -m foil_lab.benchmark.flap_run pilot`).
+- **Calibration of `Chinge` (docs/xfoil_hinge_calibration.md, `tests/diagnostics/xfoil_hinge_calibration.py`):**
+  not explained. Friction is not the cause (the gap is there without friction, and the friction
+  moment is one to two orders smaller). XFOIL's undeflected value equals the pressure moment with the
+  chordwise arm only on the panels aft of the hinge (0.001632 against 0.001626; 0.005274 against
+  0.005252), but with the flap deflected the same rule is 5-11 % below XFOIL (10 deg: 0.010865 against
+  0.011408; 20 deg: 0.017943 against 0.020218), and the force components XFOIL prints do not match any
+  panel sum tried. The `Cf` of `DUMP` does not reproduce `CD - CDp` with `Cf Ue^2` or `Cf`, so its
+  convention is also not known. Our integral of XFOIL's own `Cp` with both arms is 3 % (undeflected)
+  to 8 % (20 deg) below `FMOM`. This is the reference's uncertainty; it is shown with every comparison.
+
 ## Later
 
 - End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver

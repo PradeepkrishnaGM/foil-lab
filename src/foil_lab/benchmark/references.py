@@ -52,7 +52,7 @@ def _one(sec: CanonicalSection, reynolds: float, pane_nodes: int, out_dir: str,
     if sec.repanel_deviation is not None:
         source += f"; max distance of repanelled points to the original polyline {sec.repanel_deviation:.2e}"
     pol = run_polar(sec.coords, sec.name, reynolds, source, sweep=SWEEP, params=params,
-                    log_dir=log_dir)
+                    log_dir=log_dir, hinge=sec.hinge)
     name = reference_name(sec.name, reynolds, pane_nodes)
     Path(out_dir, name).write_text(polar_to_csv_text(pol))
     return name, pol.provenance["converged_points"], time.perf_counter() - t0

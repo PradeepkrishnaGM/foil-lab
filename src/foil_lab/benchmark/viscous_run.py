@@ -28,6 +28,8 @@ import math
 import multiprocessing as mp
 import os
 import warnings
+
+import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -43,7 +45,8 @@ TARGETS = {"converged": 0.95, "cl_mean": 0.03, "cl_max": 0.10, "cd_mean": 0.10, 
 #: its laminar Falkner-Skan comparison and its tests are kept (DECISIONS.md M3, report 6 decisions)
 CLOSURE_SETS = ("fidkowski2022",)
 COLUMNS = ("method", "alpha", "converged", "cl", "cd", "cd_te", "cm", "xtr_top", "xtr_bot",
-           "iterations", "iterations_total", "continuation", "runtime_s", "reason", "path", "warning", "error")
+           "iterations", "iterations_total", "continuation", "runtime_s", "reason", "path", "warning", "error",
+           "ch", "ch_pressure", "ch_friction")
 
 
 def method_name(closure_set: str) -> str:
@@ -62,17 +65,21 @@ def _sweeps() -> tuple[list[float], list[float]]:
     return up, down
 
 
-def _row(r, closure_set: str, runtime: float, error: str = "") -> dict:
+def _row(r, closure_set: str, runtime: float, error: str = "", hinge=None) -> dict:
     if r is None:
         return dict(method=method_name(closure_set), alpha=math.nan, converged="0", cl=math.nan, cd=math.nan,
                     cd_te=math.nan, cm=math.nan, xtr_top=math.nan, xtr_bot=math.nan, iterations=0,
                     iterations_total=0, continuation=0, runtime_s=runtime, reason="exception", path="",
                     warning="", error=error)
-    return dict(method=method_name(closure_set), alpha=r.alpha, converged="1" if r.converged else "0",
-                cl=r.cl, cd=r.cd, cd_te=r.cd_te, cm=r.cm, xtr_top=r.xtr_upper, xtr_bot=r.xtr_lower,
-                iterations=r.iterations, iterations_total=r.iterations_total, continuation=r.continuation,
-                runtime_s=runtime, reason=r.reason, path=r.path, warning="; ".join(r.warnings),
-                error=error)
+    row = dict(method=method_name(closure_set), alpha=r.alpha, converged="1" if r.converged else "0",
+               cl=r.cl, cd=r.cd, cd_te=r.cd_te, cm=r.cm, xtr_top=r.xtr_upper, xtr_bot=r.xtr_lower,
+               iterations=r.iterations, iterations_total=r.iterations_total, continuation=r.continuation,
+               runtime_s=runtime, reason=r.reason, path=r.path, warning="; ".join(r.warnings),
+               error=error)
+    if hinge is not None:       # flap cases: hinge moment of the flap panels (Foil-Lab's sign)
+        row.update(zip(("ch_pressure", "ch_friction"), hinge))
+        row["ch"] = hinge[0] + hinge[1]
+    return row
 
 
 def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, float, list[dict]]:
@@ -83,21 +90,31 @@ def run_case(section: str, reynolds: float, closure_set: str) -> tuple[str, floa
     from .. import viscous as V
     from .sections import canonical
     prm = dataclasses.replace(VISCOUS, closure_set=closure_set)
-    coords = canonical(section).coords
+    sec = canonical(section)
+    coords = sec.coords
     up, down = _sweeps()
     rows: dict[float, dict] = {}
+    if sec.hinge is not None:
+        from .. import inviscid as core
+        ps = core.PanelSet.from_bodies([coords])
+
+    def hinge_of(r):
+        if sec.hinge is None or r.cp is None:
+            return None
+        return core.hinge_moment(ps, np.asarray(r.cp), 0, sec.flap_panels, np.asarray(sec.hinge),
+                                 1.0, np.asarray(r.shear))
 
     def record(a, r, seconds, walked, error):
         if not walked:
             if error is None:
-                rows[a] = _row(r, closure_set, seconds)
+                rows[a] = _row(r, closure_set, seconds, hinge=hinge_of(r))
             else:
                 rows[a] = _row(None, closure_set, seconds, error)
                 rows[a]["alpha"] = a
             return
         old = rows[a]
         if r.converged:
-            rows[a] = _row(r, closure_set, old["runtime_s"] + seconds)
+            rows[a] = _row(r, closure_set, old["runtime_s"] + seconds, hinge=hinge_of(r))
         else:
             old["runtime_s"] += seconds
             old["iterations_total"] += r.iterations_total
@@ -123,8 +140,9 @@ def read_case(path: Path) -> list[dict]:
     with path.open() as f:
         out = []
         for r in csv.DictReader(f):
-            for k in ("alpha", "cl", "cd", "cd_te", "cm", "xtr_top", "xtr_bot", "runtime_s"):
-                r[k] = float(r[k]) if r[k] not in ("", "nan") else math.nan
+            for k in ("alpha", "cl", "cd", "cd_te", "cm", "xtr_top", "xtr_bot", "runtime_s", "ch",
+                      "ch_pressure", "ch_friction"):
+                r[k] = float(r[k]) if r.get(k) not in ("", "nan", None) else math.nan
             for k in ("iterations", "iterations_total", "continuation"):
                 r[k] = int(r[k])
             out.append(r)

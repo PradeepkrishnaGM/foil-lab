@@ -12,6 +12,7 @@ benchmark (written by :func:`foil_lab.benchmark.xfoil.write_coordinate_file`).
 from __future__ import annotations
 
 import hashlib
+import re
 import os
 import urllib.error
 import urllib.request
@@ -68,6 +69,8 @@ class CanonicalSection:
     trailing_edge_gap: float          # distance between first and last point, chord units
     repanel_deviation: float | None   # max distance of new points to the original polyline
     removed_duplicates: int           # consecutive duplicate points dropped from the download
+    hinge: tuple[float, float] | None = None     # flap cases: hinge point in the file's coordinates
+    flap_panels: np.ndarray | None = None        # flap cases: True for the panels of the flap
 
 
 def cache_dir() -> Path:
@@ -165,6 +168,30 @@ def _polyline_distance(points: np.ndarray, poly: np.ndarray) -> np.ndarray:
     return np.min(np.linalg.norm(points[:, None, :] - proj, axis=2), axis=1)
 
 
+_FLAP_NAME = re.compile(r"(.+)_F(\d+)")
+
+
+def flap_name(base: str, deflection: float) -> str:
+    """Name of a flap case: ``flap_name("NACA2412", 10.0) == "NACA2412_F10"``."""
+    return f"{base}_F{int(round(deflection)):02d}"
+
+
+def _flap_canonical(name: str, base: str, deflection: float, num_panels: int) -> CanonicalSection:
+    """Canonical section of a flap case: the canonical base section with a plain flap."""
+    from ..airfoil import Airfoil
+    from ..params import BENCHMARK
+    sec = canonical(base, num_panels)
+    af = Airfoil.from_coords(sec.coords, base).with_flap(BENCHMARK.flap_hinge_x, deflection,
+                                                          BENCHMARK.flap_hinge_y)
+    src = (f"canonical {base} ({sec.source}), then Airfoil.with_flap(hinge_x={BENCHMARK.flap_hinge_x:g}, "
+           f"deflection={deflection:g}, hinge_y={BENCHMARK.flap_hinge_y:g}); hinge point "
+           f"({af.hinge[0]:.6f}, {af.hinge[1]:.6f})")
+    gap = float(np.hypot(*(af.coords[0] - af.coords[-1])))
+    return CanonicalSection(name, np.asarray(af.coords, dtype=float), src, gap, sec.repanel_deviation,
+                            sec.removed_duplicates, (float(af.hinge[0]), float(af.hinge[1])),
+                            np.asarray(af.flap.flap_panels))
+
+
 def canonical(name: str, num_panels: int = BENCHMARK.num_panels) -> CanonicalSection:
     """Canonical coordinates of a benchmark section (``num_panels`` panels, Selig order).
 
@@ -178,6 +205,9 @@ def canonical(name: str, num_panels: int = BENCHMARK.num_panels) -> CanonicalSec
     SectionUnavailable
         For a UIUC section that is not cached and cannot be downloaded.
     """
+    m = _FLAP_NAME.fullmatch(name)
+    if m:
+        return _flap_canonical(name, m.group(1), float(m.group(2)), num_panels)
     spec = SECTIONS[name]
     if spec.kind == "gap":
         from ..geometry import set_trailing_edge_gap
