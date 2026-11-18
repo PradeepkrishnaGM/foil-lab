@@ -3361,10 +3361,9 @@ ground-effect solve, unit chord and moment about (0.25, 0) whatever the geometry
   handling) before the 15 and 20 deg targets are set.
 - M4 (after step 3): XFOIL's `Chinge` definition at deflection is not explained (3-8 % above a
   pressure integral of its own `Cp`; only the chordwise-arm-only rule matches the undeflected case).
-- End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver
-  converges on essentially every point at Re 1e5 and 2e5 with mean |dCl| 0.010 and 0.005 and drag
-  within 5 to 6 %. Propose targets for Re 1e5 and 2e5 and report Re 5e4 as it is. This moves
-  low-Reynolds validation from v2.2 into v2.0 and needs a SPEC.md change (for the user's approval).
+- Done (closed 2026-11-18): End of M3 (user's decision, 2026-10-10): extend the validated range
+  downward. Approved after report 11 and applied to SPEC.md in commit 17017dc (validated Re 1e5 to
+  6e6 with the same targets; Re 5e4 reported without a claim).
 - After M3 (candidate for M7; user, 2026-10-10): solver speed. Reuse the coupling between angles, a
   faster starting march, a compiled JAX path. Golden values recorded first; results must not change.
   Time per point reported before and after; the target is set from measurements.
