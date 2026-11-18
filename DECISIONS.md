@@ -3329,8 +3329,42 @@ ground-effect solve, unit chord and moment about (0.25, 0) whatever the geometry
   8.9e-16 chord (26 times the measured difference). The bit-for-bit determinism test on one machine
   is unchanged.
 
+## v2.2 study: Re 5e4 (planning answers, user, 2026-11-18)
+
+Scope: explain why Re 5e4 misses the SPEC.md 4.1 targets (release run: 72/78 converged, 92.3 %;
+max dCl 0.138; max rel dCd 35.9 %; max dCm 0.056) and whether a fix looks feasible. No solver
+change in the study; no claim at 5e4 unless a method meets the targets (SPEC.md 2, v2.2).
+
+1. Re 7e4 is added to the study as an intermediate point: XFOIL references (160 and 240 nodes) and a
+   Foil-Lab run of the seven sections, written to `benchmark_output/study_re5e4` (not in git, not
+   package data).
+2. XFOIL boundary-layer dumps (external program, subprocess) may be run on the failing points.
+3. The Re 5e4 rows of the release run are copied from the M1 worktree into
+   `benchmark_output/study_re5e4` (ignored).
+
+Deliverable: `docs/study_re5e4.md`; diagnostic script `tests/diagnostics/re5e4_study.py`.
+
+### Results (2026-11-18; details in docs/study_re5e4.md)
+
+- Re 5e4 (release rows): 72/78 converged; max dCl 0.138, max rel dCd 35.9 %, max dCm 0.056 (all
+  three maxima from E387_GAP025 at -4 deg). Re 7e4 (new run, 37 min on 5 workers): 76/76 converged;
+  every mean target met; max dCl 0.141 (NACA 23012, -2 deg) and max rel dCd 35.5 % (E387_GAP025,
+  -4 deg) missed.
+- NACA 4412, 5-9 deg at 5e4: the transition interval cycles between two neighbouring nodes on every
+  Newton iteration (solver defect; more iterations, 0.25 deg steps or 240 panels do not help).
+- NACA 23012 -3 deg (5e4): bubble regime boundary (XFOIL's Cl jumps 0.007 to -0.310); no steady
+  solution of ours from either side. E387_GAP025 -4 deg: XFOIL's bubble bursts, ours does not.
+  Model differences; no experiment to decide.
+- The flap points at Re 6e6 have a different cause (steps cut to 0-4 % from the starting march).
+- Recommendation for approval: fix the transition-interval cycle as its own step (continuous
+  transition position, Drela 1989; or cycle detection with a consistency condition); no claim at
+  Re 5e4 or 7e4; no SPEC.md change.
+
 ## Later
 
+- v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re
+  5e4, 5-9 deg); fix proposed in docs/study_re5e4.md, not started. Flap points at Re 6e6: the
+  starting state is the likely cause (separate study).
 - After M9 (found while retiring the old layer): NACA 2412 from the generator (120 panels, not
   repanelled), Re 3e6: the 0 deg point converges at Re 3e6 per unit length (Cl 0.2453, reached from
   2 deg by continuation) but not at 3e6 / 1.000078 (the same Re per the section's own chord): the
