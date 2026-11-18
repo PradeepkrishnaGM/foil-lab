@@ -132,7 +132,9 @@ def solution_from_viscous(body: np.ndarray, vres, mach: float = 0.0, aspect_rati
     alpha = float(vres.alpha)
     cp = np.asarray(vres.cp) if vres.cp is not None else np.full(ps.num_panels, np.nan)
     _, cm_le, _ = loads_from_cp(ps, cp, alpha)
-    cl, cd_ind, cm_qc = apply_3d_corrections(float(vres.cl), float(vres.cm), alpha, aspect_ratio, mach)
+    slope = _lift_slope([body], alpha, mach) if aspect_ratio > 0 else 2.0 * np.pi
+    cl, cd_ind, cm_qc = apply_3d_corrections(float(vres.cl), float(vres.cm), alpha, aspect_ratio, mach,
+                                             slope)
     return SolutionData(
         alpha_deg=alpha, mach=mach, reynolds=float(vres.reynolds), aspect_ratio=aspect_ratio,
         cp_dist=cp, cl=cl, cd_ind=cd_ind, cd_visc=float(vres.cd), cm_le=cm_le, cm_qc=cm_qc,
@@ -142,6 +144,20 @@ def solution_from_viscous(body: np.ndarray, vres, mach: float = 0.0, aspect_rati
         cd_pressure=float(vres.cdp), xtr_upper=float(vres.xtr_upper), xtr_lower=float(vres.xtr_lower),
         iterations=int(vres.iterations), residual=vres.residual, path=vres.path,
         warnings=list(vres.warnings), corrections=list(corrections), viscous=vres)
+
+
+def _lift_slope(bodies, alpha_deg: float, mach: float, body_idx=None) -> float:
+    """Inviscid lift slope (per rad, Kármán-Tsien at ``mach``) by a central difference of
+    ``params.CORRECTIONS.lift_slope_step``: the infinite wing's slope for the aspect-ratio factor."""
+    from .params import CORRECTIONS
+    h = CORRECTIONS.lift_slope_step
+    ps = core.PanelSet.from_bodies(bodies)
+    asm = core.assemble(ps)
+    cls = []
+    for a in (alpha_deg + h, alpha_deg - h):
+        cp = karman_tsien_correction(np.asarray(core.solve(ps, a, assembly=asm).cp), mach)
+        cls.append(loads_from_cp(ps, cp, a, body_idx)[0])
+    return float((cls[0] - cls[1]) / np.deg2rad(2.0 * h))
 
 
 def solve_flow(
@@ -189,7 +205,8 @@ def solve_flow(
     body_idx = real_body_index if ps.num_bodies > 1 else None
     cl0, cm_le, cm_qc0 = loads_from_cp(ps, cp_dist, alpha_deg, body_idx)
 
-    cl, cd_ind, cm_qc = apply_3d_corrections(cl0, cm_qc0, alpha_deg, aspect_ratio, mach)
+    slope = _lift_slope(bodies, alpha_deg, mach, body_idx) if aspect_ratio > 0 else 2.0 * np.pi
+    cl, cd_ind, cm_qc = apply_3d_corrections(cl0, cm_qc0, alpha_deg, aspect_ratio, mach, slope)
 
     return SolutionData(
         alpha_deg=alpha_deg, mach=mach, reynolds=reynolds, aspect_ratio=aspect_ratio,

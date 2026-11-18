@@ -224,7 +224,6 @@ def test_karman_tsien_applied_once():
     assert abs(solve_flow(af, 4.0, mach=0.5).cl - cl_once) <= 1e-3
 
 
-@_xfail("M6", "aspect-ratio correction must not apply compressibility a second time")
 def test_aspect_ratio_correction_does_not_reapply_compressibility():
     """With a very large aspect ratio the Mach 0.5 Cl equals the 2D Mach 0.5 Cl (1e-3)."""
     af = generate_naca4("2412", 160)

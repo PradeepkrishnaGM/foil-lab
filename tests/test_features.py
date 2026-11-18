@@ -14,12 +14,20 @@ from foil_lab.ground_effect import solve_ground_effect
 
 
 # --- Advanced flight -------------------------------------------------------- #
-def test_busemann_sweep_cos_squared_scaling():
-    af = generate_naca4("2412", 160)
-    cl0 = solve_swept_wing(af, 5.0, 0.0).cl_3d
-    cl30 = solve_swept_wing(af, 5.0, 30.0).cl_3d
-    expected = np.cos(np.radians(30.0)) ** 2
-    assert cl30 / cl0 == pytest.approx(expected, abs=1e-3)
+def test_simple_sweep_lift_slope_scales_with_cos_sweep():
+    """Simple sweep theory (M6): the swept wing's lift equals the normal-plane section's lift at
+    alpha_n = atan(tan(alpha)/cos(sweep)) times cos^2(sweep); for the lift slope about the zero-lift
+    angle this is the classic cos(sweep) (v1.3.1 gave cos^2)."""
+    af = generate_naca4("0012", 160)
+    lam = np.radians(30.0)
+    a_n = np.degrees(np.arctan(np.tan(np.radians(2.0)) / np.cos(lam)))
+    r = solve_swept_wing(af, 2.0, 30.0)
+    assert r.alpha_eff_deg == pytest.approx(a_n, abs=1e-12)
+    from foil_lab.solver import solve_flow
+    assert r.cl_3d == pytest.approx(solve_flow(af, a_n).cl * np.cos(lam) ** 2, rel=1e-12)
+    slope = (solve_swept_wing(af, 1.0, 30.0).cl_3d - solve_swept_wing(af, -1.0, 30.0).cl_3d) / 2.0
+    slope0 = (solve_swept_wing(af, 1.0, 0.0).cl_3d - solve_swept_wing(af, -1.0, 0.0).cl_3d) / 2.0
+    assert slope / slope0 == pytest.approx(np.cos(lam), rel=1e-3)
 
 
 @pytest.mark.slow

@@ -3092,8 +3092,63 @@ limits printed next to them.
 (`test_closed_te_jax_gradient_matches_finite_difference`, the transition case of
 `test_interval_jacobians_agree`) moved to `slow` (decision 5 after the M4 pilot).
 
+## M6: Corrections
+
+### Decisions (autonomous, for review; 2026-11-18)
+
+- **Q1 One pipeline, fixed order** (`foil_lab.corrections`, `fl.analyze` / `fl.polar` options `mach`,
+  `sweep`, `aspect_ratio`, `ground_height`, `pivot`): (1) ground effect as part of the 2D flow problem
+  (image method); (2) sweep: solve in the plane normal to the leading edge; (3) Kármán-Tsien on that
+  solution's Cp at the normal Mach number; (4) back to the freestream; (5) finite wing. Each applied
+  once and listed in `Result.corrections` in that order; conditions in `Result.mach`, `sweep`,
+  `aspect_ratio`, `ground_height`. Without options the result is bit-identical to the plain solve.
+- **Q2 Compressibility is inviscid only.** The boundary layer is incompressible, so `re` with
+  `mach` > 0 raises NotImplementedError with a message (limit for the README). Mach >= 1 is a
+  ValueError.
+- **Q3 Critical Mach number** is reported on every result (`Result.mach_critical`): the Mach number at
+  which the Kármán-Tsien-corrected minimum Cp of the (incompressible) solution reaches the
+  isentropic critical Cp; with sweep, the normal-plane value / cos(sweep). A result above it carries a
+  warning. The root is the first sign change from low Mach (the rule has a pole at higher Mach for a
+  strong suction peak). NACA-type check: Cp_min -0.43 gives 0.723.
+- **Q4 Ground effect** (SPEC.md 4.7): the configuration is pitched by alpha about `pivot` (default the
+  moment reference point), raised so the pivot is `ground_height` reference chords above the ground,
+  and solved with its mirror image in a stream parallel to the ground. One construction
+  (`ground_effect.ground_frame`, `image`) for `fl.analyze` and the v1.3.1-shaped `solve_ground_effect`.
+  Any number of elements; viscous too (the section and its image go through the M5 multi-element
+  solver; only the real elements' drag is counted). Results (Cp, x, y) are in the ground frame.
+  Validation: equal (1e-12) to the two-body mirror problem solved as a free-air configuration; the
+  normal velocity on y = 0 below 1e-10; 50 chords up equals free air (0.2 %).
+- **Q5 Sweep: simple sweep theory with the normal-plane angle.** alpha_n = atan(tan alpha / cos sweep),
+  M_n = M cos sweep, Re_n = Re cos sweep (the section is the one normal to the leading edge, Re based
+  on its chord); Cl, Cm and Ch x cos^2, Cd (and its parts) x cos^3 (normal-plane force projected on the
+  stream; spanwise friction not included). v1.3.1's `solve_swept_wing` solved the normal plane at the
+  geometric alpha, so its lift slope scaled with cos^2 instead of the classic cos; fixed and routed
+  through the same functions. Sweep limited to +-60 deg (`CORRECTIONS.max_sweep`).
+- **Q6 Aspect ratio: Helmbold's factor with the infinite wing's own lift slope.**
+  CL = F Cl_inf, F = 1 / (sqrt(1 + k^2) + k), k = a / (pi AR), with a the lift slope of the infinite
+  (swept, compressible) wing from a central difference of two inviscid solves (+-0.5 deg,
+  `CORRECTIONS.lift_slope_step`); for a viscous result the inviscid slope is used. Induced drag
+  CL^2 / (pi e AR), e = 1 (`CORRECTIONS.oswald`), added to `cd` and reported in `cd_induced`. Cm and
+  the profile drag stay those of the section at the geometric angle (lifting-line approximation). The
+  v1.3.1 formula Cl / (beta + 2/AR) applied the compressibility a second time (CODE_REPORT 9 #5); the
+  M1 test marked expected-failure for M6 now passes and its marker is removed.
+- **New parameters** (`params.CORRECTIONS`): gamma 1.4, oswald 1.0, lift_slope_step 0.5 deg,
+  max_sweep 60 deg. New, so no default changed.
+- **Citations made without the source at hand** (to check in M9): von Kármán 1941 and Tsien 1939
+  (J. Aero. Sci.), Busemann 1935 and Schlichting & Truckenbrodt 1979 for simple sweep theory, Helmbold
+  1942 (Jahrbuch der deutschen Luftfahrtforschung).
+
+### Results
+
+- Fast suite 459 tests, 48.9 s. New tests: tests/test_corrections.py (14 fast, 1 slow: viscous ground
+  effect at h/c 1 converges, image drag excluded; viscous sweep equals the normal-plane solve scaled).
+- No benchmark number changes (all corrections are off in the benchmark, which runs at Mach 0).
+
 ## Later
 
+- M6: compressible viscous analysis (Mach in the boundary-layer closures and the coupling); the
+  finite-wing correction evaluated at the effective angle (profile drag at alpha_eff) instead of the
+  geometric angle; spanwise friction in simple sweep theory.
 - M5: per-element forced transition (trips apply to element 0 only); transition location of an
   element as x/c of the element's own chord instead of the global x.
 - M5: wake merging with a downstream boundary layer and slot-flow separation (SPEC.md 4.6: not in
