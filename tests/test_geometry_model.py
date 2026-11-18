@@ -48,8 +48,13 @@ def test_closed_naca_pinned(code, n):
     a = gen(code, n, trailing_edge="closed")
     assert a.shape == ref.shape and a.dtype == ref.dtype
     big = np.abs(ref) >= 1e-12
-    np.testing.assert_array_max_ulp(a[big], ref[big], maxulp=_MAX_ULP)
-    assert np.all(np.abs(a[~big] - ref[~big]) <= _MAX_ULP * np.spacing(1.0))
+    d = np.abs(a - ref)
+    ulp = d[big] / np.spacing(np.abs(ref[big]))
+    k = int(np.argmax(ulp))
+    info = (f"max abs diff {d.max():.3e}; max {ulp[k]:.0f} ulp at value {ref[big][k]:.3e} "
+            f"(abs diff {d[big][k]:.3e})")
+    assert ulp.max() <= _MAX_ULP, info
+    assert np.all(d[~big] <= _MAX_ULP * np.spacing(1.0)), info
 
 
 def test_naca_default_is_open():
