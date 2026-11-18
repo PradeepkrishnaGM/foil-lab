@@ -3254,8 +3254,8 @@ limits printed next to them.
   125736196+PradeepkrishnaGM@users.noreply.github.com; no commit message mentions an AI tool, a
   Co-Authored-By trailer or a Gmail address; no added line in any commit contains those. One
   committed docstring (M7, tests/test_notebook.py) named the local brief file; removed at
-  HEAD; it remains in the history of that one commit (rewriting history needs the user's approval).
-- **Release benchmark rerun** on commit 379f3e9 (version 2.0.0): the viscous matrix (49 cases, 1225
+  HEAD, and from the history on 2026-11-18 (user's approval; see "History cleanup" below).
+- **Release benchmark rerun** on commit 6944cd9 (version 2.0.0): the viscous matrix (49 cases, 1225
   rows; 60 min on 5 workers) and the flap cases (60 cases; 58 min) are identical, cell for cell apart
   from the run time, to the M4 runs the earlier reports used (`benchmark_output/m4_m3check`,
   `benchmark_output/m4_full`). VALIDATION.md is generated from the release run
@@ -3287,7 +3287,7 @@ ground-effect solve, unit chord and moment about (0.25, 0) whatever the geometry
 - **Benchmark baseline adapter** (`baseline_v131`): inviscid rows from `inviscid.body_loads`, the
   same numbers as before.
 - **Constant wing loading** is removed without a replacement: it is not in SPEC.md, not in the README
-  and had no validation. Recoverable from git history (`advanced.py` at `c37b127`) if wanted on the
+  and had no validation. Recoverable from git history (`advanced.py` at `19d0802`) if wanted on the
   new API.
 - **Tests**: inviscid checks on raw coordinates use `tests/section.py` (the core's unit-chord loads,
   identical to what `solve_flow` returned, so no tolerance changed). Viscous, sweep and ground tests
@@ -3301,6 +3301,18 @@ ground-effect solve, unit chord and moment about (0.25, 0) whatever the geometry
 - `fl.analyze` on the same points gives the same surface Cp as the old path; its Cl and Cm differ by
   up to 5e-4 for a cambered NACA section because they use the section's own chord and
   quarter-chord point (SPEC.md 3), not a unit chord at the origin.
+
+## History cleanup (user's approval, 2026-11-18)
+
+- Every branch rewritten with `git filter-repo --replace-text` so that no commit names the local
+  brief file: four literal text replacements in `tests/test_notebook.py` (M7 docstring) and
+  `DECISIONS.md`. Commit count, authors, messages and all other content unchanged (checked by
+  diffing the old and new `main` trees); all branches force-pushed.
+- Commits from M7 on have new hashes. Hashes quoted in tracked files were mapped: 379f3e9 to
+  6944cd9 (M9 release preparation; the trees differ only in DECISIONS.md text) and c37b127 to
+  19d0802 (M9 merge). `VALIDATION.md` names the new hash; its numbers are unchanged.
+- Backup of the history before the rewrite: `~/backups/foil-lab-pre-history-rewrite-20261118.bundle`
+  (all refs, verified), outside the repository.
 
 ## Later
 
