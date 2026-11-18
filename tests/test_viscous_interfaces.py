@@ -214,8 +214,13 @@ def test_gui_single_case_runs_the_coupled_solver(monkeypatch):
     w.spin_re.setValue(1e6)
     w.spin_alpha.setValue(4.0)
     w.run_single_analysis()
+    import time
+    while w._thread is not None:                     # the solve runs in a worker thread (M8)
+        app.processEvents()
+        time.sleep(0.01)
+    app.processEvents()
     text = w.lbl_status.text()
-    assert text.startswith("Viscous: converged"), text
+    assert text.startswith("Viscous, Re 1e+06: converged"), text
     w.close()
     del app
 
