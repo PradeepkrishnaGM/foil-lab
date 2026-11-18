@@ -35,6 +35,15 @@ Subsonic, attached or mildly separated flow; viscous results at Mach 0; validate
 maximum lift and post-stall approximate; multi-element results without wake merging or slot
 separation and without a viscous reference. Details in README.md and VALIDATION.md.
 
+## Known issues
+
+- Some viscous points do not converge and are returned with `converged=False` (never as a silent
+  result): several low angles (-4 to 4 deg) of flapped sections at Re 6e6, and isolated points
+  whose outcome depends on very small changes of the Reynolds number. Neighbouring angles of a
+  polar are usually unaffected.
+- Plain-flap lift is mostly below XFOIL's, by a mean 0.02 to 0.04 at 15 to 20 deg deflection
+  (inviscid flow agrees to 0.003); hence no claim beyond 0 deg.
+
 ## Install
 
 `pip install foil-lab-2.0.0-py3-none-any.whl` (from the release assets), Python 3.10 or newer.
