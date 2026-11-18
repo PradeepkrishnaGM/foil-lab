@@ -140,3 +140,32 @@ def test_e387_gap_variant():
     assert abs(var.trailing_edge_gap - 0.0025) <= 1e-12
     ahead = base.coords[:, 0] < 0.79
     assert np.max(np.abs(var.coords[ahead] - base.coords[ahead])) <= 1e-12
+
+
+def _flap_cases():
+    from foil_lab.benchmark.flap_run import case_names
+    return [(s, re, n) for s in case_names() for re in BENCHMARK.reynolds_validated for n in BENCHMARK.pane_nodes]
+
+
+@pytest.mark.parametrize("section,re,n", _flap_cases(), ids=[reference_name(*c)[:-4] for c in _flap_cases()])
+def test_committed_flap_reference_with_hinge_moment(section, re, n):
+    """M4 flap references (committed in M9): provenance, the hinge point, and XFOIL's Chinge on every
+    converged row."""
+    ref = load_reference(section, re, n)
+    p = ref.provenance
+    assert p["xfoil_version"] == "6.99" and p["pane_nodes"] == str(n) and float(p["re"]) == re
+    assert any("hinge" in k for k in p), p.keys()
+    rows = [r for r in ref.rows.values() if r is not None]
+    assert rows and all(r.chinge is not None for r in rows)
+
+
+def test_flap_canonical_files_match_reference_checksums(tmp_path):
+    from foil_lab.benchmark.flap_run import case_names
+    from foil_lab.benchmark.xfoil import write_coordinate_file
+    stale = []
+    for name in case_names():
+        sec = sections.canonical(name)
+        sha = write_coordinate_file(tmp_path / f"{name}.dat", sec.coords, name)
+        stale += [reference_name(name, re, n) for re in BENCHMARK.reynolds_validated for n in BENCHMARK.pane_nodes
+                  if load_reference(name, re, n).provenance["geometry_sha256"] != sha]
+    assert not stale, f"canonical flap file changed; regenerate: {stale[:4]}"

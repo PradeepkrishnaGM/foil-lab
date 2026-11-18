@@ -1,4 +1,4 @@
-"""M7: the example notebook runs on a CPU in under a minute (SPEC.md 4.8; milestone M7)."""
+"""M7: the example notebook runs on a CPU in under a minute (SPEC.md 4.8)."""
 
 import time
 from pathlib import Path
