@@ -3314,6 +3314,19 @@ ground-effect solve, unit chord and moment about (0.25, 0) whatever the geometry
 - Backup of the history before the rewrite: `~/backups/foil-lab-pre-history-rewrite-20261118.bundle`
   (all refs, verified), outside the repository.
 
+## First CI run (manual start, 2026-11-18)
+
+- The build workflow's first run failed on Python 3.12 and 3.14 (passed on 3.10, 3.11, 3.13): only
+  the 8 `test_closed_naca_pinned` cases, which compared a SHA-256 of the generated closed NACA
+  coordinates. 3.12 and 3.13 both had numpy 2.5.5, so the last-bit difference comes from the
+  runner's CPU (numpy's vectorised sin/cos/power), not from our code.
+- User's decision: compare to 4 ulp. The reference arrays (tests/data/closed_naca, 8 files, 32 KB)
+  were regenerated here and match the M2 hashes bit for bit; the test checks each file against its
+  hash, then the generated geometry against it to 4 ulp per entry. Entries that are round-off zeros
+  (|value| < 1e-12; about 1.7e-17 at the leading and trailing edge) are compared to 4 ulp of the
+  unit chord (8.9e-16), because a relative ulp is meaningless there (our choice, for review). The
+  bit-for-bit determinism test on one machine is unchanged.
+
 ## Later
 
 - After M9 (found while retiring the old layer): NACA 2412 from the generator (120 panels, not

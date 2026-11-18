@@ -20,8 +20,14 @@ from foil_lab.geometry import (repanel_cosine, rotate, scale, scale_thickness_ca
                                set_trailing_edge_gap, translate, trailing_edge_gap)
 
 # --------------------------------------------------------------------------------------- #
-# Closed NACA geometry pinned bit for bit (SHA-256 recorded before the default changed)
+# Closed NACA geometry pinned (SHA-256 recorded before the default changed, M2). The reference
+# arrays in tests/data/closed_naca are checked against those hashes bit for bit; the generated
+# geometry is compared with them to 4 units in the last place, because numpy's sin/cos/power can
+# differ in the last bit between CPU types (GitHub runners). Entries that are round-off zeros
+# (|value| < 1e-12, at the leading and trailing edge) are compared to 4 ulp of the unit chord.
 # --------------------------------------------------------------------------------------- #
+_CLOSED_DIR = Path(__file__).parent / "data" / "closed_naca"
+_MAX_ULP = 4
 _CLOSED_SHA = {
     ("0012", 120): "41e92a82074285fba6204a3bb357d6453ddd5cc7febe1c66c5e7a8ad53f2e3a5",
     ("0012", 160): "b7c515a34c3f1a9990d0ae0d94c04e1cfac6eff9690c7afe501f4c8114a91633",
@@ -36,9 +42,14 @@ _CLOSED_SHA = {
 
 @pytest.mark.parametrize("code,n", list(_CLOSED_SHA))
 def test_closed_naca_pinned(code, n):
+    ref = np.load(_CLOSED_DIR / f"{code}_{n}.npy")
+    assert hashlib.sha256(ref.tobytes()).hexdigest() == _CLOSED_SHA[(code, n)]
     gen = generate_naca5 if len(code) == 5 else generate_naca4
     a = gen(code, n, trailing_edge="closed")
-    assert hashlib.sha256(a.tobytes()).hexdigest() == _CLOSED_SHA[(code, n)]
+    assert a.shape == ref.shape and a.dtype == ref.dtype
+    big = np.abs(ref) >= 1e-12
+    np.testing.assert_array_max_ulp(a[big], ref[big], maxulp=_MAX_ULP)
+    assert np.all(np.abs(a[~big] - ref[~big]) <= _MAX_ULP * np.spacing(1.0))
 
 
 def test_naca_default_is_open():
