@@ -83,6 +83,11 @@ class BenchmarkParams:
         the first positive angle at which XFOIL's Cl reaches this fraction of its maximum.
     workers:
         Parallel worker processes for reference generation and baseline runs.
+    flap_bases, flap_deflections, flap_hinge_x, flap_hinge_y:
+        Flap cases (SPEC.md 4.1 and 4.5, DECISIONS.md M4): sections, deflections in degrees
+        (trailing edge down), hinge position (fraction of the chord) and hinge height (fraction
+        of the local thickness). A flap case is named ``<section>_F<deflection>``, for example
+        ``NACA2412_F10``, and is made by ``Airfoil.with_flap`` from the canonical section.
     """
 
     sections: tuple[str, ...] = ("NACA0012", "NACA2412", "NACA4412", "NACA23012",
@@ -93,6 +98,10 @@ class BenchmarkParams:
     num_panels: int = 160
     attached_fraction: float = 0.9
     workers: int = 6
+    flap_bases: tuple[str, ...] = ("NACA0012", "NACA2412")
+    flap_deflections: tuple[float, ...] = (0.0, 5.0, 10.0, 15.0, 20.0)
+    flap_hinge_x: float = 0.75
+    flap_hinge_y: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -111,12 +120,39 @@ class GeometryParams:
     le_search_samples:
         Samples per input point used to bracket the leading edge (the point of the arc-length
         spline farthest from the trailing-edge midpoint) before it is refined by root finding.
+    flap_fairing_length:
+        Plain flap (``foil_lab.flap``): length, in chords, of each tangent-continuous fairing that
+        joins the hinge arc to the main and flap surfaces (M4; proposed default, awaiting approval).
+    flap_fillet_radius:
+        Radius, in chords, of the fillet that rounds the notch on the closed side of the hinge (and
+        the corner when the hinge lies on a surface). 0 gives the plain notch.
+    flap_min_arc_radius:
+        When the hinge is closer than this (in chords) to a surface, the hinge point is moved onto
+        that surface (a corner instead of an arc); a section thinner than twice this at the hinge
+        is refused.
+    flap_zone_panels:
+        Panels placed across each hinge zone (fairings plus arc; the fillet).
+    flap_arc_min_panels:
+        Panels placed on the hinge arc itself, as far as ``flap_min_panel_length`` and the panel
+        count allow.
+    flap_min_panel_length:
+        Smallest panel length (in chords) the hinge refinement asks for. With few panels the zone
+        spacing is relaxed until the panels suffice; ``FlapInfo.diagnostics`` records the factor.
+    flap_grading:
+        Largest ratio of neighbouring panel lengths when the spacing grows away from a hinge zone.
     """
 
     num_panels: int = 160
     te_gap_warn: float = 0.01
     te_gap_blend_start: float = 0.8
     le_search_samples: int = 20
+    flap_fairing_length: float = 0.02
+    flap_fillet_radius: float = 0.02
+    flap_min_arc_radius: float = 0.002
+    flap_zone_panels: int = 6
+    flap_arc_min_panels: int = 2
+    flap_min_panel_length: float = 0.002
+    flap_grading: float = 1.3
 
 
 @dataclass(frozen=True)

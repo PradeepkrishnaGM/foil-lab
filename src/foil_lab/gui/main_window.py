@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 
 from .views import AirfoilPlotCanvas
 from foil_lab.utils.io import load_dat, export_polar_csv
-from foil_lab.geometry import (normalize_airfoil, repanel_cosine, deflect_flap, 
+from foil_lab.geometry import (normalize_airfoil, repanel_cosine,
                                translate, scale, rotate, smooth_coordinates)
 from foil_lab.solver import solve_flow, compute_panel_geometry
 from foil_lab.analysis import run_alpha_sweep
@@ -154,7 +154,7 @@ class FoilLabMainWindow(QMainWindow):
         flap_group = QGroupBox("Flap Tool")
         flap_layout = QFormLayout()
         self.spin_hinge = QDoubleSpinBox(); self.spin_hinge.setRange(0.1, 0.95); self.spin_hinge.setValue(0.75); self.spin_hinge.setSingleStep(0.05); self.spin_hinge.setSuffix(" c")
-        self.spin_deflect = QDoubleSpinBox(); self.spin_deflect.setRange(-45.0, 45.0); self.spin_deflect.setValue(10.0); self.spin_deflect.setSuffix(" °")
+        self.spin_deflect = QDoubleSpinBox(); self.spin_deflect.setRange(-30.0, 30.0); self.spin_deflect.setValue(10.0); self.spin_deflect.setSuffix(" °")
         self.btn_apply_flap = QPushButton("Apply Plain Flap")
         self.btn_apply_flap.setEnabled(False)
         self.btn_apply_flap.clicked.connect(self.apply_flap)
@@ -301,9 +301,14 @@ class FoilLabMainWindow(QMainWindow):
         if self.current_coords is None: return
         hinge = self.spin_hinge.value()
         deflect = self.spin_deflect.value()
-        deflected = deflect_flap(self.current_coords, hinge, deflect)
+        from foil_lab.flap import make_flap
+        try:
+            deflected, _ = make_flap(self.current_coords, hinge, deflect, num_panels=120)
+        except ValueError as e:
+            self.lbl_status.setText(f"Flap not applied:\n{e}")
+            return
         # Resets to a single body (overwriting any slotted flaps)
-        self.panelled_bodies = [repanel_cosine(deflected, num_panels=120)]
+        self.panelled_bodies = [deflected]
         self.lbl_status.setText(f"Flap Applied:\nHinge: {hinge}c, Deflection: {deflect}°")
         self._plot_geometry()
 

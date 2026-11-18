@@ -730,6 +730,7 @@ class ViscousResult:
     cp: Any = field(default=None, repr=False)         # surface pressure at the panel midpoints (solver order)
     gamma: Any = field(default=None, repr=False)      # nodal sheet strengths of the coupled solution
     sources: Any = field(default=None, repr=False)    # airfoil panel source strengths (wake sources excluded)
+    shear: Any = field(default=None, repr=False)      # wall-shear force per panel / q, (n, 2), solver order
 
     @property
     def residual(self) -> float:
@@ -866,6 +867,7 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
     cf[m:] = 0.0
     tau = cf * ue ** 2                              # wall shear / (1/2 rho V^2)
     cdf = 0.0
+    shear = np.zeros((ps.num_panels, 2))            # wall-shear force on each panel / q (solver order)
     surface, te_states = {}, {}
     for b in st.branches:
         nd = b.nodes
@@ -877,6 +879,11 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
         xs, ys = np.concatenate([[sx], px]), np.concatenate([[sy], py])
         t = np.concatenate([[0.0], tau[nd]])        # tau = 0 at the stagnation point
         cdf += float(np.sum(0.5 * (t[1:] + t[:-1]) * (np.diff(xs) * dhat[0] + np.diff(ys) * dhat[1])))
+        # the same piece-wise shear as a force on the panel that contains each piece (the first
+        # piece runs from the stagnation point to the first node: panel k_stag); single body
+        pan = np.concatenate([[k], np.minimum(nd[:-1], nd[1:])]).astype(int)
+        np.add.at(shear, pan, (0.5 * (t[1:] + t[:-1]))[:, None]
+                  * np.column_stack([np.diff(xs), np.diff(ys)]))
         key = "upper" if b.upper else "lower"
         xtr = np.nan
         if b.p_tr is not None:
@@ -908,7 +915,7 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
     cd_te = 2.0 * th1 * u1 ** ((h1 + 5.0) / 2.0)
     out.update(cd=float(cd), cd_te=float(cd_te), cdf=cdf, cdp=float(cd - cdf), surface=surface,
                warnings=[] if all(ps.open_te) else [WARN_CLOSED_TE_DRAG], cp=np.asarray(cp),
-               gamma=np.asarray(gamma), sources=np.asarray(sources))
+               gamma=np.asarray(gamma), sources=np.asarray(sources), shear=shear)
     return out
 
 

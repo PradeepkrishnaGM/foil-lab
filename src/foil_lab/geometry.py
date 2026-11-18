@@ -237,46 +237,6 @@ def set_trailing_edge_gap(coords: np.ndarray, gap: float,
     return _from_chord_frame(shaped(delta), frame)
 
 
-# Add to the bottom of src/foil_lab/geometry.py
-def deflect_flap(coords: np.ndarray, hinge_x: float, deflection_deg: float) -> np.ndarray:
-    """
-    Simulates a simple plain flap by rotating all coordinates aft of the 
-    hinge_x around the camber line at the hinge location.
-    Downwards deflection is positive.
-    """
-    if hinge_x <= 0.0 or hinge_x >= 1.0:
-        return coords # Hinge must be inside the airfoil
-        
-    upper, lower = split_surfaces(coords)
-    
-    # 1. Find the Y coordinate of the hinge on the camber line
-    # We interpolate the upper and lower surfaces at hinge_x
-    y_up_hinge = np.interp(hinge_x, upper[::-1, 0], upper[::-1, 1])
-    y_low_hinge = np.interp(hinge_x, lower[:, 0], lower[:, 1])
-    y_hinge = (y_up_hinge + y_low_hinge) / 2.0
-    
-    # 2. Define the rotation matrix
-    angle_rad = np.deg2rad(-deflection_deg) # Negative because positive flap is trailing edge DOWN
-    cos_val, sin_val = np.cos(angle_rad), np.sin(angle_rad)
-    rot_matrix = np.array([
-        [cos_val, -sin_val],
-        [sin_val,  cos_val]
-    ])
-    
-    new_coords = np.copy(coords)
-    
-    # 3. Rotate all points aft of the hinge
-    for i in range(len(new_coords)):
-        x, y = new_coords[i, 0], new_coords[i, 1]
-        if x >= hinge_x:
-            # Translate hinge to origin, rotate, translate back
-            shifted = np.array([x - hinge_x, y - y_hinge])
-            rotated = np.dot(shifted, rot_matrix.T)
-            new_coords[i, 0] = rotated[0] + hinge_x
-            new_coords[i, 1] = rotated[1] + y_hinge
-            
-    return new_coords
-
 def translate(coords: np.ndarray, dx: float, dy: float) -> np.ndarray:
     """Shifts the geometry by dx and dy."""
     return coords + np.array([dx, dy])

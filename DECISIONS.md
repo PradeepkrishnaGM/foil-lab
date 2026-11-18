@@ -2771,8 +2771,288 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
 
 ---
 
+## M4: flaps and hinge moment
+
+### Decisions before M4 (user, 2026-10-22)
+
+- An XFOIL source tree left by an earlier job was found outside the repo on 2026-10-22 and deleted
+  unread. `git ls-files` and `git log --all --name-only` show no Fortran or XFOIL source file in the
+  repository or its history.
+- Q1: `hinge_y` is a fraction of the local thickness at `hinge_x` (0 lower surface, 1 upper),
+  default 0.5.
+- Q2: tangent-continuous (G1) fairings between the surfaces and the hinge arc, plus a fillet on the
+  closed side. Sizes are in `params.GEOMETRY` with documented defaults, proposed from an 80/160/320
+  panel check; a fillet size of 0 is allowed and gives the pure notch. The largest chord change
+  caused by the fairings is reported.
+- Q3: reference chord, angle of attack and `Cm` point of a flapped section are those of the
+  undeflected section.
+- Q4: hinge moment sign is the textbook one, trailing edge down positive; `ch = -Chinge` of XFOIL.
+  A test covers it. The Abbott & von Doenhoff reference is verified or marked unverified.
+- Q5: flap cases sweep -4 deg up to the last angle where XFOIL converges, as SPEC.md 4.1.
+- Q6: Cl, Cd, Cm of flap cases are reported without a claim first. Targets for them and for the
+  hinge moment are proposed after the pilot.
+- Q7: a pilot run (4 cases) comes after the geometry, hinge-moment and XFOIL-runner steps.
+- SPEC.md 4.5 edited (user's approval): hinge height definition, "no kink" as tangent continuity
+  with fairings and a fillet, the reference frame, the sign convention, and that negative
+  deflections get geometry tests only, no viscous benchmark.
+
+### Step 1: flap geometry (`foil_lab/flap.py`, `Airfoil.with_flap`)
+
+- Construction as in the plan: rigid rotation of the part aft of the cut about the hinge point;
+  circular arc about the hinge on the opening side, with Bezier fairings; intersection and fillet on
+  the closed side; a hinge closer than `flap_min_arc_radius` (0.002 c) to a surface is moved onto it
+  and that side becomes a corner (rounded by the fillet). Negative deflections use the mirror image.
+- On the closed side the main lower surface is allowed to extend aft of the cut where the rotated
+  flap meets it (small deflections cross it a little aft of the hinge).
+- Nodes come from the construction: cosine spacing by surface arc length plus refinement in the hinge
+  zones (`flap_zone_panels` across fairings + arc and across the fillet, `flap_arc_min_panels` on the
+  arc, grading `flap_grading`). Every junction of two pieces is a node, so each panel has one zone
+  (0 main, 1 flap, 2 hinge arc; the arc moves with the flap).
+- A flapped `Airfoil` stores `flap` (`FlapInfo`: the undeflected section, hinge, deflection, zones);
+  `chord`, `leading_edge`, `quarter_chord` are those of the undeflected section (Q3); transforms
+  move the stored section and hinge; repanelling and shape operations rebuild from the undeflected
+  section. Deflection 0 returns the original coordinates.
+- `geometry.deflect_flap` deleted; the GUI flap button uses `make_flap`.
+- Defaults in `params.GEOMETRY` (`flap_fairing_length` 0.02, `flap_fillet_radius` 0.02, ...) are
+  starting values; the values proposed after the 80/160/320 check come with step 2.
+
+### Step 2: hinge moment (`inviscid.hinge_moment`, `Result.ch`, `ViscousResult.shear`)
+
+- `ch` = moment about the hinge point of the pressure (and, viscous, wall-friction) force on the flap
+  panels, divided by q and the reference chord squared; positive trailing edge down (clockwise, the
+  same sense as nose-up `Cm`). Reported per element (`ElementResult.ch`, `ch_pressure`,
+  `ch_friction`); `Result.ch` is the single flap's value (error if several). `None` without a flap.
+- Which panels are the flap comes from the construction (`FlapInfo.zones`: flap part and hinge arc),
+  not from `x > hinge_x`. At deflection 0 the panels whose midpoint is aft of the hinge.
+- The viscous solver returns the wall-shear force per panel (`ViscousResult.shear`; the sum along the
+  freestream equals `cdf`, tested). Piece-wise as the existing drag split.
+- Citation: sign convention "trailing edge down positive" is the textbook one (Abbott & von
+  Doenhoff, *Theory of Wing Sections*, 1959). **Unverified**: a web search did not find the page; the
+  section is not cited. The thin-airfoil test cites Glauert's solution as given in Anderson,
+  *Fundamentals of Aerodynamics* (thin-airfoil theory, A0 and An); section number unverified.
+- Tests: sign (positive-lift flap gives negative `ch`, odd in alpha), the exact uniform-pressure
+  identity (moment = half the difference of squared distances from the hinge), zero moment of
+  pressure on the hinge arc (chord midpoints are perpendicular to the chord), the transfer identity to
+  `Cm`, thin-airfoil slopes (NACA 0002, 25 % flap: dCh/dalpha -0.0346 against -0.0353, 2 %;
+  dCh/ddelta -0.0590 against -0.0590, 0.1 %; tolerances 5 % and 2 % set from the expected O(thickness)
+  difference).
+- Bug found and fixed on the way: the flap construction was not scale-invariant (arc-length
+  parameter in absolute units, sizes in chords). Tests for size, position and rotation added.
+- **Panel-count check (NACA 2412, alpha 4 deg, hinge 0.75 / 0.5, defaults below):** at 160 / 320 / 640
+  panels Cl is 1.47713 / 1.47641 / 1.47634 (10 deg), 2.18408 / 2.18419 / 2.18424 (20 deg), 2.85232 /
+  2.85364 / 2.85412 (30 deg); `ch` -0.014524 / -0.014488 / -0.014484, -0.022145 / -0.022134 /
+  -0.022120, -0.028011 / -0.028046 / -0.028085. At 80 panels the 10 deg case is off by 4 % in Cl
+  (1.5411): the hinge zone needs more panels, so below the zone's need the spacing is relaxed and a
+  warning is issued; 160 or more is recommended for flaps.
+- **Size check at 160 / 320 panels, 20 deg:** fairing length 0.01 / 0.02 / 0.04 c and fillet radius
+  0 / 0.01 / 0.02 / 0.04 c change Cl by 0.0015, `ch` by 0.5 % (160 panels), 0.1 % (320). **Proposed
+  defaults, unchanged: fairing 0.02 c, fillet 0.02 c.**
+- **Chord change caused by the fairings:** none: the leading edge, the trailing-edge nodes and the
+  reference chord are untouched (reference frame is the undeflected section's). The largest
+  distance of the contour from the unfaired one (surface, arc, rotated surface; sharp notch) at the
+  defaults: fairings 0.0004 c (20 deg), 0.0008 c (fairing 0.04 c); fillet 0.0003 c (20 deg), 0.0007 c
+  (30 deg); `FlapInfo.diagnostics["fairing_deviation"]` and `["fillet_deviation"]`.
+- New default `flap_min_panel_length` 0.002 c and `flap_arc_min_panels` 2 (proposed).
+
+### Step 3: XFOIL runner with the hinge moment, flap cases, calibration of `Chinge`
+
+- `build_script(..., hinge=(x, y))` adds `FNEW x y`, `FMOM`, `HINC` before `PACC`. `FMOM` is needed
+  once: without it XFOIL prints "Flap hinge location not defined" at the first solution and writes
+  0 in the `Chinge` column (found in the first real run). XFOIL's own flap command is not used.
+- `parse_polar_text` is header-driven (columns by name); old polar files and the reference CSVs
+  without the `chinge` column still read. `PolarRow.chinge` is XFOIL's value, `PolarRow.ch` the
+  Foil-Lab sign (`-chinge`). The flap reference CSV has an extra last column `chinge`, and its
+  provenance records the hinge point and the sign.
+- Flap cases: `<section>_F<deflection>` (`NACA2412_F10`), made by `Airfoil.with_flap` from the
+  canonical section (`sections.canonical`); `CanonicalSection.hinge` and `.flap_panels`. Parameters in
+  `BENCHMARK` (`flap_bases`, `flap_deflections`, `flap_hinge_x` 0.75, `flap_hinge_y` 0.5).
+  `viscous_run` rows gain `ch`, `ch_pressure`, `ch_friction`; `benchmark/flap_run.py` runs XFOIL and
+  Foil-Lab on the cases and writes the comparison (`python -m foil_lab.benchmark.flap_run pilot`).
+- **Calibration of `Chinge` (docs/xfoil_hinge_calibration.md, `tests/diagnostics/xfoil_hinge_calibration.py`):**
+  not explained. Friction is not the cause (the gap is there without friction, and the friction
+  moment is one to two orders smaller). XFOIL's undeflected value equals the pressure moment with the
+  chordwise arm only on the panels aft of the hinge (0.001632 against 0.001626; 0.005274 against
+  0.005252), but with the flap deflected the same rule is 5-11 % below XFOIL (10 deg: 0.010865 against
+  0.011408; 20 deg: 0.017943 against 0.020218), and the force components XFOIL prints do not match any
+  panel sum tried. The `Cf` of `DUMP` does not reproduce `CD - CDp` with `Cf Ue^2` or `Cf`, so its
+  convention is also not known. Our integral of XFOIL's own `Cp` with both arms is 3 % (undeflected)
+  to 8 % (20 deg) below `FMOM`. This is the reference's uncertainty; it is shown with every comparison.
+
+### Step 4: pilot run (docs/benchmark_m4_pilot.md); targets proposed, not applied
+
+- NACA 2412, 25 % flap, 10 and 20 deg, Re 1e6 and 3e6, 25 angles each; 597 s wall time; 1.6 MB of
+  output. Inside the attached-flow filter, both codes converged, mean / max:
+
+  | case | filter pts (both conv.) | dCl | rel dCd | dCm | d(ch) | mean abs ch (XFOIL) |
+  |---|---|---|---|---|---|---|
+  | F10 Re 1e6 | 13 (13) | 0.0088 / 0.0231 | 3.0 % / 4.9 % | 0.0020 / 0.0050 | 0.00094 / 0.00115 | 0.0096 |
+  | F10 Re 3e6 | 15 (15) | 0.0092 / 0.0245 | 3.1 % / 5.1 % | 0.0021 / 0.0053 | 0.00105 / 0.00128 | 0.0096 |
+  | F20 Re 1e6 | 11 (10; XFOIL 10) | 0.0382 / 0.0413 | 10.9 % / 18.3 % | 0.0076 / 0.0086 | 0.00196 / 0.00223 | 0.0140 |
+  | F20 Re 3e6 | 13 (11; XFOIL 13) | 0.0384 / 0.0431 | 9.2 % / 10.0 % | 0.0079 / 0.0091 | 0.00191 / 0.00231 | 0.0142 |
+
+  XFOIL's own 240-against-160-node change of `Chinge` is 0.00007-0.0002 on average and at most
+  0.0015 (one point, F20 Re 1e6).
+- At 10 deg the SPEC.md 4.1 targets (mean dCl 0.03, dCd 10 %, dCm 0.01) are met with a factor of 3 or
+  more. At 20 deg the mean dCl (0.038) is above 0.03 and the mean dCd at Re 1e6 (10.9 %) above 10 %; dCm is
+  inside. Foil-Lab converges at 11 of 13 filter points of F20 Re 3e6 (84.6 %, target 95 %: alpha -3 and 0
+  deg not converged). All numbers as measured; nothing tuned.
+- The F20 deficit is viscous: on the same flapped files the inviscid Cl differs from XFOIL's by at most
+  0.003 (0, 10, 20, 30 deg; alpha 0 and 4 deg), Cm by 0.0005. Foil-Lab's Cl is lower and Cd lower
+  than XFOIL's at 20 deg over the whole filter range, as expected for a thicker flap boundary layer
+  or earlier flap separation in XFOIL. Not investigated further (Later).
+- **Explanation of the `Chinge` gap (step 3 calibration, repeated on the pilot):** Foil-Lab's `ch`
+  is 5-15 % less negative than `-Chinge` over the whole sweep (F10: -0.00994 against -0.01052 at -4 deg,
+  -0.00743 against -0.00856 at 5 deg), a size that matches XFOIL's value being 3-8 % above a plain
+  pressure integral of its own `Cp` on the panels aft of the hinge (docs/xfoil_hinge_calibration.md).
+  The definition inside XFOIL is not explained (friction is excluded as the cause; the chordwise-arm-only
+  rule matches the undeflected case, not the deflected). The gap is therefore partly or wholly a
+  difference of definition and not of the solvers.
+- **Targets proposed, for the user's approval (not applied):**
+  - Cl, Cd, Cm of flap cases: report without claim (decision Q6) until the full run; the pilot
+    suggests the SPEC.md 4.1 targets as they stand for deflections up to 10 deg. For 15 and 20 deg
+    there is no pilot data at 15; with 20 deg the values above are what the code does.
+    Either (A) apply the SPEC.md 4.1 targets to every flap case and report 20 deg as not met (mean dCl
+    0.038, dCd 10.9 %), or (B) set the 15 and 20 deg targets after the full run from its numbers.
+    Recommendation: (B).
+  - Hinge moment: absolute difference `ch` against `-Chinge`, inside the attached-flow filter, at
+    every Reynolds number: mean |d(ch)| <= 0.0025 and max <= 0.004. Basis: the pilot's worst case is
+    0.0020 / 0.0023 (F20); at least half of it is the 5-15 % definition gap of the reference (the
+    reference's value itself is about 0.01 to 0.015), so a tighter target would test XFOIL's
+    definition rather than the solver; the form is absolute because `ch` passes through zero. The
+    measured XFOIL 240-against-160 change is reported next to it; the reliability rule is not applied
+    to `ch` (its sensitivity is 0.00007-0.0002 on average). To be confirmed on the full run.
+- Full-run estimate from the pilot: 60 cases (2 sections x 5 deflections x 6 Re), 1500 points, Foil-Lab
+  6-20 s per point (mean 11 s) so 1.0-1.5 h on 5 workers; XFOIL 240 processes, about 15 min. Output
+  well under 10 MB.
+
+### Decisions after the M4 pilot (user, 2026-10-22)
+
+1. **Cl / Cd / Cm of flap cases:** no separate targets for 15 and 20 deg. The SPEC.md 4.1 targets apply to
+   every flap deflection and the report gives pass or fail per deflection (at each Reynolds number, the
+   two sections pooled as in the main benchmark). The *validated flap range* is the largest deflection at
+   which every Reynolds number meets every target (and all smaller deflections do too); the deflections
+   beyond it are benchmarked up to 20 deg (SPEC.md 4.5) without a claim.
+2. **Hinge moment, two comparisons:** (a) XFOIL's own surface pressure (`CPWR`) and wall shear (`DUMP`,
+   `tau = Cf Ue^2`, taken along the flow) at every converged flap point, integrated with Foil-Lab's
+   definition (flap panels, about the hinge point, pressure plus friction) and compared with Foil-Lab's
+   `ch`: the solvers without the definition question. A hinge-moment target is to be proposed from the
+   full run's numbers together with XFOIL's own 160-against-240-node sensitivity (not from the pilot).
+   (b) `ch` against `-Chinge` with the approved loose target mean <= 0.0025, max <= 0.004, and a note on
+   the unexplained definition gap. The extra files are kept small (float32 npz, only Cp, Cf, Ue at the
+   nodes and the polar row of each converged angle, per case and node count).
+   The dump runs are separate XFOIL processes (one ALFA per angle, CPWR and DUMP after each) so that the
+   reference polars stay as the pilot made them; a converged solution does not depend on how it was
+   reached (checked: `Chinge` and `Cl` of the dump run equal those of the polar run for NACA 2412 F10,
+   Re 1e6, all 25 angles).
+3. **Full flap benchmark** (60 cases), and a check that the non-flap M3 benchmark is unchanged by the
+   wall-shear output and the runner changes (bit-identical rows apart from the run time, or the differences
+   listed).
+4. **Step 6:** `flap_polars` with the leave-one-out interpolation error measured (10 deg from 0/5/15/20,
+   15 deg from 10/20).
+5. **Fast suite:** if a change takes it over 55 s, the slowest new tests move to `slow`.
+
+### Step 5: full flap benchmark (docs/benchmark_m4.md; benchmark_output/m4_full, not in git)
+
+- 60 cases (NACA 0012 and 2412; 0, 5, 10, 15, 20 deg; Re 1e5, 2e5, 5e5, 1e6, 3e6, 6e6), 25 angles each:
+  5589 s wall time (XFOIL, 240 processes of polars and dumps, about 45 min; Foil-Lab 1500 points, 16207 s of
+  solver time, 10.8 s per point on 5 workers, about 50 min). Output 54 MB: surface dumps 6.5 MB (120
+  float32 files), references 0.5 MB, XFOIL logs 47 MB (the per-process logs the runner always keeps).
+- **Validated flap range (decision 1): 0 deg.** No deflection above 0 meets every target at every Re. The
+  first failures: 5 deg at Re 6e6 (Foil-Lab converges at 94.3 % of the filter points, target 95 %); 10 deg
+  at Re 2e5 (91.7 %, max dCl 0.1017 against 0.10) and Re 6e6 (87.9 %); 20 deg fails the mean dCl at
+  every Re (0.034-0.041 against 0.03); 15 deg fails it at Re 1e5 and 2e5 (0.032, 0.039) and fails the
+  convergence target at Re 5e5 (94.7 %) and 6e6 (77.4 %); 20 deg Re 6e6 converges at 78.6 %. 15 deg
+  passes at Re 1e6 and 3e6 only. 20 deg mean rel dCd 11.2 % at
+  Re 5e5. The Cm target is met everywhere. Table in docs/benchmark_m4.md. The unconverged points are at
+  low angles (-4 to 4 deg), mostly at Re 6e6 (the six at NACA 2412 F20 are -4 to 1 deg).
+- **Hinge moment**, filter points where both codes converged (docs/benchmark_m4.md, section 3):
+  - (a) Foil-Lab `ch` against XFOIL's Cp and Cf integrated with our definition: 767 points, mean 0.00036,
+    max 0.00228; quantiles 50 / 90 / 95 / 99 % 0.00018 / 0.00084 / 0.00107 / 0.00168. Per (deflection, Re)
+    cell mean 0.00006 (0 deg) to 0.00097 (20 deg), max 0.00228 (10 deg, Re 2e5). XFOIL's own 240-against-160
+    change of the same integral: mean 0.00003, 95 % 0.00009, max 0.00056.
+  - (b) against `-Chinge`: 781 points, mean 0.00077, max 0.00351; every cell meets the loose target (mean
+    <= 0.0025, max <= 0.004): cell means 0.00015-0.00181, cell maxima up to 0.00351 (20 deg, Re 5e5).
+    XFOIL's 240-against-160 change of `Chinge`: cell means 0.00001-0.00018, max 0.00146.
+  - Friction is 0.22 % of Foil-Lab's `ch` (mean absolute values).
+  - The definition gap is visible: the cell means of (b) are 2 to 3.5 times those of (a) at every
+    deflection (0 deg 0.0002 against 0.00007; 10 deg 0.0009 against 0.0002; 20 deg 0.0017 against 0.0008).
+  - **Proposed target for (a), from the full run, for the user's approval:** per (deflection, Re) cell mean
+    |d ch| <= 0.0012 and max <= 0.0030, inside the attached-flow filter. Basis: the worst cell mean is
+    0.00097 and the worst cell maximum 0.00228 (margins 1.24 and 1.3); XFOIL's own sensitivity (mean 0.00003,
+    max 0.00056) is well below, so the target tests the solver and not the reference's panelling. Absolute,
+    as the loose (b) target; the error grows with the deflection in step with |ch| (mean |ch| 0.003 at 0 deg
+    to 0.013 at 20 deg, (a) about 2-6 % of it).
+- Non-flap M3 benchmark unchanged: the full matrix (49 cases, 1225 rows, including Re 5e4) rerun with the
+  M4 code is bit-identical to the report 12 run (`benchmark_output/m3_r12`) in every column except the
+  run time and the new `ch` columns (0 cell differences); 66 min on 5 workers.
+
+### Step 6: `flap_polars` (`foil_lab/flap_polars.py`)
+
+- `fl.flap_polars(airfoil, hinge_x, deflections, alphas, re=None, hinge_y=0.5, **polar_kwargs)` returns a
+  `FlapPolarSet` (tables of Cl, Cd, Cm, ch over deflection and angle, the solved `Polar`s, NaN where not
+  converged). `.at(deflection, alphas=None)` returns a `FlapSlice` (arrays, `converged`, `interpolated`);
+  `.value(quantity, alpha, deflection)`; `.leave_one_out(deflection, use=None)`.
+- Interpolation: PCHIP (Fritsch & Carlson 1980) in the deflection, per angle; linear for two deflections;
+  a solved deflection returns its values; no extrapolation (`ValueError`); no interpolation in alpha; a point
+  is NaN if any node the interval's interpolant uses (the interval's two nodes and their neighbours)
+  did not converge; a warning for deflections more than 10 deg apart. `Polar.ch` added.
+- **Leave-one-out errors on the Foil-Lab benchmark data** (both sections pooled, mean / max over the
+  attached-flow angles of the left-out case; full table in docs/benchmark_m4.md, section 5):
+
+  | left out, from | Re | dCl | dCm | d ch | rel dCd |
+  |---|---|---|---|---|---|
+  | 10 from 0/5/15/20 | 1e5 | 0.0176 / 0.084 | 0.0030 / 0.011 | 0.00033 / 0.00075 | 1.8 % / 15 % |
+  | | 1e6 | 0.027 / 0.076 | 0.0045 / 0.012 | 0.00046 / 0.0015 | 4.1 % / 16 % |
+  | | 3e6 | 0.017 / 0.043 | 0.0032 / 0.008 | 0.00058 / 0.0013 | 3.8 % / 11 % |
+  | | 6e6 | 0.015 / 0.030 | 0.0030 / 0.006 | 0.00064 / 0.0010 | 3.2 % / 7 % |
+  | 15 from 10/20 | 1e5 | 0.017 / 0.080 | 0.0031 / 0.010 | 0.00038 / 0.0010 | 3.3 % / 21 % |
+  | | 1e6 | 0.046 / 0.198 | 0.0081 / 0.036 | 0.00070 / 0.0019 | 21 % / 93 % |
+  | | 3e6 | 0.024 / 0.117 | 0.0038 / 0.020 | 0.00049 / 0.00095 | 15 % / 77 % |
+  | | 6e6 | 0.022 / 0.088 | 0.0033 / 0.017 | 0.00050 / 0.00090 | 12 % / 42 % |
+
+  Over all converged angles (including stall) the maxima are larger (dCl up to 0.39). Reading: with 5 deg
+  spacing the interpolated Cl and Cm are good to about 0.02 / 0.004 on average, ch to 0.0005, Cd to a few
+  percent; with 10 deg spacing (15 from 10/20, linear) Cd and Cl errors are several times larger, near
+  separation up to 0.2 in Cl. The error is of the same size as the solver's own difference from XFOIL at
+  these deflections, so the interpolated polar is only as good as the 5 deg spacing and is not better
+  than the solved ones.
+
+### Close of M4 (autonomous, for review; 2026-11-18)
+
+The user asked on 2026-11-18 for M4 to M9 to be finished without stopping for plan approval.
+From here on, open planning questions are decided by the most defensible option and marked
+**(autonomous, for review)**; the user can overturn any of them. The honesty rules are unchanged:
+a missed target is reported with its numbers. The M8 review over remote desktop and publishing the
+release stay with the user.
+
+- **Hinge-moment target (a) accepted as proposed in step 5 (autonomous, for review):** per
+  (deflection, Re) cell, Foil-Lab `ch` against XFOIL's Cp and Cf integrated with Foil-Lab's
+  definition, mean <= 0.0012 and max <= 0.0030, inside the attached-flow filter
+  (`flap_run.TARGET_A`; docs/benchmark_m4.md section 3 marks a missed cell with ✗). Every cell
+  meets it. The target was set from the same run, so meeting it is a consistency statement, not an
+  independent check; a later rerun (other machine or code change) is the real test.
+- **Flap claim:** the validated flap range stays 0 deg, as measured (step 5). Deflections 5 to 20 deg
+  are benchmarked and reported without a claim; the README states this (M9). The failures are
+  mostly convergence at low angles at Re 6e6 and the mean dCl at 20 deg (Later: flap convergence).
+- M4 ends here: all four M4 boxes are covered (geometry -30 to +30 deg with tests; hinge moment
+  with sign convention and test; flap cases in the benchmark with hinge moment; flap polar set with
+  interpolation in deflection).
+
 ## Later
 
+- M4 (after the full run): Foil-Lab does not converge at several low angles (-4 to 4 deg) of the flap cases at
+  Re 6e6 (NACA 0012 F15: -4, -1, 0, 1; NACA 2412 F20: -4 to 1; in the filter 2-6 points per case) and at 10 deg
+  Re 2e5 (91.7 % of the pooled filter points). Find the cause (start from the march or the
+  continuation from 0 deg at a flapped section's hinge); this is what prevents 5 and 10 deg from
+  being validated.
+- M4 (after the full run): the Cl error of the flap cases grows with the deflection (mean dCl 0.002-0.008 at
+  0 deg, 0.021-0.040 at 15 deg, 0.034-0.041 at 20 deg) and is mostly Foil-Lab's lift being lower than
+  XFOIL's; the inviscid flow agrees to 0.003. Flap boundary layer and wake treatment.
+- M4 (after the pilot): flap at 20 deg, Foil-Lab's Cl is 0.04 and Cd 10 % below XFOIL's over the
+  attached range (inviscid agrees to 0.003). Find the cause (flap boundary layer, wake, separation
+  handling) before the 15 and 20 deg targets are set.
+- M4 (after step 3): XFOIL's `Chinge` definition at deflection is not explained (3-8 % above a
+  pressure integral of its own `Cp`; only the chordwise-arm-only rule matches the undeflected case).
 - End of M3 (user's decision, 2026-10-10): extend the validated range downward. The new solver
   converges on essentially every point at Re 1e5 and 2e5 with mean |dCl| 0.010 and 0.005 and drag
   within 5 to 6 %. Propose targets for Re 1e5 and 2e5 and report Re 5e4 as it is. This moves

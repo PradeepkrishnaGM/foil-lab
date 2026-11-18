@@ -158,3 +158,64 @@ def test_real_xfoil_symmetric_section_and_determinism():
     assert p1.rows == p2.rows
     assert p1.provenance["xfoil_version"] == "6.99"
     assert p1.provenance["xfoil_package"].startswith("xfoil-6.99")
+
+
+# --------------------------------------------------------------------------------------- #
+# Hinge moment (M4 step 3)
+# --------------------------------------------------------------------------------------- #
+SAMPLE_HINGE_POLAR = SAMPLE_POLAR.replace(
+    "alpha    CL        CD       CDp       CM     Top_Xtr",
+    "alpha    CL        CD       CDp       CM      Chinge   Top_Xtr").replace(
+    "   0.000   0.2249   0.00556   0.00104  -0.0479   0.6493",
+    "   0.000   0.2249   0.00556   0.00104  -0.0479   0.00123   0.6493").replace(
+    "   1.000   0.3171   0.00557   0.00120  -0.0484   0.5910",
+    "   1.000   0.3171   0.00557   0.00120  -0.0484   0.00210   0.5910").replace(
+    "  -3.000  -0.1189   0.00688   0.00109  -0.0457   0.8380",
+    "  -3.000  -0.1189   0.00688   0.00109  -0.0457  -0.00300   0.8380")
+
+
+def test_parser_reads_columns_by_name_with_and_without_hinge_moment():
+    _, rows = parse_polar_text(SAMPLE_HINGE_POLAR)
+    assert rows[1] == PolarRow(1.0, 0.3171, 0.00557, 0.00120, -0.0484, 0.5910, 0.8434, 0.00210)
+    assert rows[2].chinge == -0.003 and rows[2].xtr_top == 0.8380
+    # Foil-Lab's sign is the opposite of XFOIL's
+    assert rows[1].ch == -0.0021
+    _, plain = parse_polar_text(SAMPLE_POLAR)
+    assert plain[0].chinge is None and plain[0].ch is None
+
+
+def test_script_with_hinge_sets_the_point_and_the_polar_column_before_accumulating():
+    s = build_script("a.dat", "a.pol", 1e6, 0.0, 20.0, 1.0, hinge=(0.75, 0.0123456789))
+    lines = s.splitlines()
+    assert "FNEW 0.75 0.0123457" in lines and "HINC" in lines
+    assert lines.index("FNEW 0.75 0.0123457") < lines.index("FMOM") < lines.index("PACC")
+    assert lines.index("HINC") < lines.index("PACC")
+    assert "FLAP" not in s.upper()
+    assert "FNEW" not in build_script("a.dat", "a.pol", 1e6, 0.0, 20.0, 1.0)
+
+
+def test_reference_csv_keeps_the_hinge_column_and_old_files_still_read():
+    _, rows = parse_polar_text(SAMPLE_HINGE_POLAR)
+    pol = XfoilPolar(rows={r.alpha: r for r in rows}, provenance={"hinge_point": "0.75 0"})
+    text = polar_to_csv_text(pol)
+    assert text.splitlines()[1].endswith(",chinge")
+    back = read_reference_csv(text)
+    assert back.rows[1.0].chinge == 0.0021 and back.rows[-3.0].chinge == -0.003
+    _, plain = parse_polar_text(SAMPLE_POLAR)
+    old = XfoilPolar(rows={r.alpha: r for r in plain}, provenance={})
+    assert "chinge" not in polar_to_csv_text(old)
+    assert read_reference_csv(polar_to_csv_text(old)).rows[1.0].chinge is None
+
+
+@pytest.mark.slow
+@pytest.mark.xfoil
+def test_real_xfoil_reports_a_hinge_moment_of_the_expected_sign():
+    """Symmetric section, flap hinge at 0.75: XFOIL's Chinge is positive for positive lift (it
+    tends to turn the flap trailing edge up), odd in alpha; ours is the negative of it."""
+    af = generate_naca4("0012", 160)
+    pol = run_polar(af, "NACA0012", 1e6, "generate_naca4('0012', 160)",
+                    sweep=SweepParams(-3.0, 3.0, 3.0), hinge=(0.75, 0.0))
+    assert pol.provenance["hinge_point"] == "0.75 0"
+    r, l = pol.rows[3.0], pol.rows[-3.0]
+    assert r.chinge > 0.0 and l.chinge == pytest.approx(-r.chinge, rel=0.02)
+    assert r.ch < 0.0

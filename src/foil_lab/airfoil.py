@@ -16,6 +16,7 @@ from typing import Optional, Sequence, Tuple, Union
 import numpy as np
 
 from . import geometry as geo
+from .flap import FlapInfo, make_flap
 from .params import GEOMETRY
 
 
@@ -34,6 +35,8 @@ class Airfoil:
     coords: np.ndarray
     name: str = "airfoil"
     source: str = "coordinates"
+    #: set by :meth:`with_flap`; the undeflected section and hinge (see :mod:`foil_lab.flap`)
+    flap: Optional[FlapInfo] = None
 
     def __post_init__(self):
         object.__setattr__(self, "coords", _frozen(self.coords))
@@ -90,54 +93,111 @@ class Airfoil:
         return geo.trailing_edge_gap(self.coords)
 
     @property
+    def _reference(self) -> np.ndarray:
+        """Coordinates that define the reference frame: the undeflected section if flapped."""
+        return self.coords if self.flap is None else self.flap.base
+
+    @property
     def leading_edge(self) -> np.ndarray:
-        return geo._ArcSpline(self.coords).chord_frame()[0]
+        return geo._ArcSpline(self._reference).chord_frame()[0]
 
     @property
     def trailing_edge(self) -> np.ndarray:
-        """Midpoint of the trailing edge."""
-        return 0.5 * (self.coords[0] + self.coords[-1])
+        """Midpoint of the trailing edge (of the undeflected section if flapped)."""
+        r = self._reference
+        return 0.5 * (r[0] + r[-1])
 
     @property
     def chord(self) -> float:
-        return geo._ArcSpline(self.coords).chord_frame()[2]
+        """Chord length; for a flapped section the chord of the undeflected one (SPEC.md 4.5)."""
+        return geo._ArcSpline(self._reference).chord_frame()[2]
 
     @property
     def quarter_chord(self) -> np.ndarray:
         le = self.leading_edge
         return le + 0.25 * (self.trailing_edge - le)
 
+    @property
+    def hinge(self) -> Optional[np.ndarray]:
+        """Hinge point of a flapped section (``None`` without a flap)."""
+        return None if self.flap is None else self.flap.hinge
+
     # --- operations ------------------------------------------------------------------
-    def _new(self, coords, what: str) -> "Airfoil":
-        return Airfoil(coords, self.name, f"{self.source}; {what}")
+    def _new(self, coords, what: str, flap: Optional[FlapInfo] = None) -> "Airfoil":
+        return Airfoil(coords, self.name, f"{self.source}; {what}", flap)
+
+    def _moved(self, fn, what: str) -> "Airfoil":
+        """Apply a point transformation to the coordinates and to the flap definition."""
+        flap = None if self.flap is None else self.flap.transformed(fn)
+        return self._new(fn(self.coords), what, flap)
+
+    def _reflapped(self, base_op, what: str) -> "Airfoil":
+        """A shape operation on a flapped section: change the undeflected one, flap it again."""
+        f = self.flap
+        coords, info = make_flap(base_op(f.base), f.hinge_x, f.deflection, f.hinge_y,
+                                 self.num_panels, f.params)
+        return self._new(coords, what, info)
 
     def scaled(self, factor: float) -> "Airfoil":
-        return self._new(geo.scale(self.coords, factor), f"scaled {factor:g}")
+        return self._moved(lambda p: geo.scale(p, factor), f"scaled {factor:g}")
 
     def translated(self, dx: float, dy: float) -> "Airfoil":
-        return self._new(geo.translate(self.coords, dx, dy), f"translated ({dx:g}, {dy:g})")
+        return self._moved(lambda p: geo.translate(p, dx, dy), f"translated ({dx:g}, {dy:g})")
 
     def rotated(self, angle_deg: float, pivot: Tuple[float, float] = (0.25, 0.0)) -> "Airfoil":
         """Pitch by ``angle_deg`` (nose up positive) about ``pivot``."""
-        return self._new(geo.rotate(self.coords, angle_deg, pivot=pivot),
-                         f"rotated {angle_deg:g} deg about {tuple(pivot)}")
+        return self._moved(lambda p: geo.rotate(p, angle_deg, pivot=pivot),
+                           f"rotated {angle_deg:g} deg about {tuple(pivot)}")
 
     def repanelled(self, num_panels: Optional[int] = None) -> "Airfoil":
         n = GEOMETRY.num_panels if num_panels is None else num_panels
+        if self.flap is not None:                      # rebuilt, so the hinge refinement stays
+            f = self.flap
+            coords, info = make_flap(f.base, f.hinge_x, f.deflection, f.hinge_y, n, f.params)
+            return self._new(coords, f"repanelled to {n}", info)
         return self._new(geo.repanel_cosine(self.coords, n), f"repanelled to {n}")
 
     def with_te_gap(self, gap: float, blend_start: Optional[float] = None) -> "Airfoil":
         """Trailing-edge gap ``gap`` (fraction of this section's chord)."""
-        return self._new(geo.set_trailing_edge_gap(self.coords, gap * self.chord, blend_start),
-                         f"trailing-edge gap {gap:g} c")
+        what = f"trailing-edge gap {gap:g} c"
+        if self.flap is not None:
+            ch = self.chord
+            return self._reflapped(lambda b: geo.set_trailing_edge_gap(b, gap * ch, blend_start), what)
+        return self._new(geo.set_trailing_edge_gap(self.coords, gap * self.chord, blend_start), what)
 
     def with_thickness_scaled(self, factor: float) -> "Airfoil":
-        return self._new(geo.scale_thickness_camber(self.coords, thickness=factor),
-                         f"thickness x{factor:g}")
+        what = f"thickness x{factor:g}"
+        if self.flap is not None:
+            return self._reflapped(lambda b: geo.scale_thickness_camber(b, thickness=factor), what)
+        return self._new(geo.scale_thickness_camber(self.coords, thickness=factor), what)
 
     def with_camber_scaled(self, factor: float) -> "Airfoil":
-        return self._new(geo.scale_thickness_camber(self.coords, camber=factor),
-                         f"camber x{factor:g}")
+        what = f"camber x{factor:g}"
+        if self.flap is not None:
+            return self._reflapped(lambda b: geo.scale_thickness_camber(b, camber=factor), what)
+        return self._new(geo.scale_thickness_camber(self.coords, camber=factor), what)
+
+    def with_flap(self, hinge_x: float, deflection: float, hinge_y: float = 0.5,
+                  num_panels: Optional[int] = None) -> "Airfoil":
+        """Plain flap: the part aft of ``hinge_x`` (fraction of the chord) deflected by
+        ``deflection`` degrees about the hinge point (trailing edge down positive, -30 to +30).
+
+        ``hinge_y`` is the fraction of the local thickness at ``hinge_x`` (0 lower surface, 1 upper
+        surface, default 0.5). The hinge region is closed by an arc about the hinge point with
+        tangent-continuous fairings and, on the closed side, a fillet (sizes in
+        ``params.GEOMETRY``; :mod:`foil_lab.flap`). The panels are redistributed with a refinement
+        at the hinge; ``num_panels`` defaults to the panel count of this section. A flapped section
+        keeps the chord, leading edge and quarter-chord point of the undeflected one, so the angle
+        of attack and ``Cm`` refer to them. A deflection of 0 leaves the coordinates unchanged.
+        Called on a flapped section, it replaces the flap.
+        """
+        base = self._reference
+        coords, info = make_flap(base, hinge_x, deflection, hinge_y,
+                                 self.num_panels if num_panels is None else num_panels,
+                                 self.flap.params if self.flap else GEOMETRY)
+        src = self.source if self.flap is None else self.source.split("; flap")[0]
+        return Airfoil(coords, self.name, f"{src}; flap hinge ({hinge_x:g}, {hinge_y:g}) "
+                       f"deflection {deflection:g} deg", info)
 
 
 @dataclass(frozen=True)
