@@ -120,7 +120,7 @@ Foil-Lab and XFOIL converged out of all 25 angles; both inside the filter (XFOIL
 
 ## 3. Hinge moment
 
-(a) Foil-Lab `ch` against XFOIL's Cp and Cf integrated with Foil-Lab's definition; (b) Foil-Lab `ch` against `-Chinge` of XFOIL, loose target mean <= 0.0025, max <= 0.004 (definition of Chinge unexplained, docs/xfoil_hinge_calibration.md). Mean / max absolute difference over the filter points where both converged, both sections pooled; XFOIL's own change between 240 and 160 PANE nodes next to each; last column the mean |ch| (XFOIL) as scale.
+(a) Foil-Lab `ch` against XFOIL's Cp and Cf integrated with Foil-Lab's definition, target mean <= 0.0012, max <= 0.003 per cell; (b) Foil-Lab `ch` against `-Chinge` of XFOIL, loose target mean <= 0.0025, max <= 0.004 (definition of Chinge unexplained, docs/xfoil_hinge_calibration.md). Mean / max absolute difference over the filter points where both converged, both sections pooled; XFOIL's own change between 240 and 160 PANE nodes next to each; last column the mean |ch| (XFOIL) as scale.
 
 | flap deg | Re | (a) mean / max | (a) XFOIL 240 vs 160 | (b) mean / max | (b) XFOIL 240 vs 160 | mean abs ch |
 |---|---|---|---|---|---|---|

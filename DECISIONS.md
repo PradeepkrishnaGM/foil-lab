@@ -3017,6 +3017,27 @@ solver only returns more of what it computes (`ViscousResult.cp`, `gamma`, `sour
   these deflections, so the interpolated polar is only as good as the 5 deg spacing and is not better
   than the solved ones.
 
+### Close of M4 (autonomous, for review; 2026-11-18)
+
+The user asked on 2026-11-18 for M4 to M9 to be finished without stopping for plan approval.
+From here on, open planning questions are decided by the most defensible option and marked
+**(autonomous, for review)**; the user can overturn any of them. The honesty rules are unchanged:
+a missed target is reported with its numbers. The M8 review over remote desktop and publishing the
+release stay with the user.
+
+- **Hinge-moment target (a) accepted as proposed in step 5 (autonomous, for review):** per
+  (deflection, Re) cell, Foil-Lab `ch` against XFOIL's Cp and Cf integrated with Foil-Lab's
+  definition, mean <= 0.0012 and max <= 0.0030, inside the attached-flow filter
+  (`flap_run.TARGET_A`; docs/benchmark_m4.md section 3 marks a missed cell with ✗). Every cell
+  meets it. The target was set from the same run, so meeting it is a consistency statement, not an
+  independent check; a later rerun (other machine or code change) is the real test.
+- **Flap claim:** the validated flap range stays 0 deg, as measured (step 5). Deflections 5 to 20 deg
+  are benchmarked and reported without a claim; the README states this (M9). The failures are
+  mostly convergence at low angles at Re 6e6 and the mean dCl at 20 deg (Later: flap convergence).
+- M4 ends here: all four M4 boxes are covered (geometry -30 to +30 deg with tests; hinge moment
+  with sign convention and test; flap cases in the benchmark with hinge moment; flap polar set with
+  interpolation in deflection).
+
 ## Later
 
 - M4 (after the full run): Foil-Lab does not converge at several low angles (-4 to 4 deg) of the flap cases at

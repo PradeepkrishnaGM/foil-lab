@@ -41,6 +41,9 @@ from .xfoil import XfoilDumps, read_reference_csv, run_dumps, write_coordinate_f
 
 #: loose target on the comparison (b) against -Chinge (user, after the pilot)
 TARGET_B = {"mean": 0.0025, "max": 0.004}
+#: hinge-moment target (a), per (deflection, Re) cell: Foil-Lab ch against XFOIL's Cp and Cf integrated
+#: with Foil-Lab's definition (proposed after the full run, step 5; accepted autonomously 2026-11-18)
+TARGET_A = {"mean": 0.0012, "max": 0.003}
 
 
 def case_names(bench: BenchmarkParams = BENCHMARK) -> list[str]:
@@ -401,12 +404,15 @@ def build_report(cases: list[tuple[str, float]], ref_dir: Path, out_dir: Path,
             sb = _stats([x for c in sel for x in c.sens_b])
             sc = _stats([x for c in sel for x in c.ch_abs])[0]
             okb = mb <= TARGET_B["mean"] and xb <= TARGET_B["max"]
-            rows.append([f"{d:g}", f"{r:g}", f"{ma:.5f} / {xa:.5f}", f"{sa[0]:.5f} / {sa[1]:.5f}",
+            oka = ma <= TARGET_A["mean"] and xa <= TARGET_A["max"]
+            rows.append([f"{d:g}", f"{r:g}", f"{ma:.5f} / {xa:.5f}" + ("" if oka else " ✗"),
+                         f"{sa[0]:.5f} / {sa[1]:.5f}",
                          f"{mb:.5f} / {xb:.5f}" + ("" if okb else " ✗"), f"{sb[0]:.5f} / {sb[1]:.5f}", f"{sc:.4f}"])
     pa = [x for c in cs for x in c.d_a]
     pb = [x for c in cs for x in c.d_b]
     lines += ["## 3. Hinge moment\n",
-              "(a) Foil-Lab `ch` against XFOIL's Cp and Cf integrated with Foil-Lab's definition; (b) Foil-Lab "
+              "(a) Foil-Lab `ch` against XFOIL's Cp and Cf integrated with Foil-Lab's definition, target mean <= "
+              f"{TARGET_A['mean']}, max <= {TARGET_A['max']} per cell; (b) Foil-Lab "
               f"`ch` against `-Chinge` of XFOIL, loose target mean <= {TARGET_B['mean']}, max <= {TARGET_B['max']} "
               "(definition of Chinge unexplained, docs/xfoil_hinge_calibration.md). Mean / max absolute "
               "difference over the filter points where both converged, both sections pooled; XFOIL's own "
