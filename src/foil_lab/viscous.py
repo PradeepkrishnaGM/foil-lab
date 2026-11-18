@@ -53,7 +53,9 @@ FID = Fidkowski; DECISIONS.md M3):
   Squire-Young value from the two trailing-edge states (SY38 p. 4) is kept as a cross-check
   (``cd_te``). Lift and moment from the surface pressure of the viscous nodal strengths.
 
-Mach 0. The structure allows several bodies (two branches and one wake each); M3 tests one body.
+Mach 0. Several bodies (M5): two branches and one wake per body; each wake's sources act on every
+other wake; per-body loads in ``ViscousResult.bodies``. Wakes do not merge with a downstream boundary
+layer (SPEC.md 4.6).
 """
 
 from __future__ import annotations
@@ -169,13 +171,16 @@ def build_coupling(geo: Geometry, alpha: float, closure_set="fidkowski2022") -> 
     hw = np.zeros(mt)
     dead = np.zeros(mt)
     wake_nodes = []
+    ops, cols_all = [], []
     r0, q0 = m, n
     for w in wakes:
         op = wk_mod.wake_operators(ps, w, alpha)
         npw = w.n - 1
         # this wake's operators act on the airfoil sources and its own wake sources; the velocity of
-        # one body's wake sources at another body's wake is not included (single body in M3; M5)
+        # its sources at the other bodies' wakes is added below (M5)
         cols = np.r_[0:n, q0:q0 + npw]
+        ops.append(op)
+        cols_all.append(cols)
         sn_air[:, cols] += op.sn_air
         rows = np.arange(r0, r0 + w.n)
         ut_q[np.ix_(rows - m, cols)] += op.ut_wake
@@ -191,6 +196,12 @@ def build_coupling(geo: Geometry, alpha: float, closure_set="fidkowski2022") -> 
         wake_nodes.append(rows)
         r0 += w.n
         q0 += npw
+    # several bodies (M5): velocity along wake j induced by the sources of wake k (j != k), with the
+    # same half-panel distribution and evaluation point as the wake's own term (wake.wake_operators)
+    for j, wj in enumerate(wakes):
+        for k, opk in enumerate(ops):
+            if k != j:
+                ut_q[np.ix_(wake_nodes[j] - m, cols_all[k])] += wk_mod.cross_wake_velocity(wj, opk)
     # airfoil Neumann rows: outer normal velocity = own panel source (inviscid.solve)
     rhs = -sn_air
     rhs[np.arange(n), np.arange(n)] += 1.0
@@ -731,6 +742,11 @@ class ViscousResult:
     gamma: Any = field(default=None, repr=False)      # nodal sheet strengths of the coupled solution
     sources: Any = field(default=None, repr=False)    # airfoil panel source strengths (wake sources excluded)
     shear: Any = field(default=None, repr=False)      # wall-shear force per panel / q, (n, 2), solver order
+    #: per body (M5): dicts with cl, cm, cd, cd_te, cdf, cdp, xtr_upper, xtr_lower (unit reference
+    #: chord, moment about (0.25, 0)); ``cl``, ``cm``, ``cd``, ``cdf`` above are their sums. The
+    #: scalar ``xtr_upper`` / ``xtr_lower`` and ``surface`` are those of body 0.
+    bodies: list = field(default_factory=list, repr=False)
+    surfaces: list = field(default_factory=list, repr=False)   # ``surface`` of every body
 
     @property
     def residual(self) -> float:
@@ -855,6 +871,9 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
     lengths = np.asarray(ps.lengths)
     sources = (ddm[ps.end_node] - ddm[ps.start_node]) / lengths     # q = P (dd m), airfoil panels
     cl, _, cm = inviscid.pressure_loads(ps, cp, alpha)
+    nb = ps.num_bodies
+    per = [dict(zip(("cl", "cd_p_inv", "cm"), (float(v) for v in inviscid.pressure_loads(ps, cp, alpha, k))))
+           for k in range(nb)]
     ss = stagnation_s(st, ue)
     a = np.deg2rad(alpha)
     dhat = np.array([np.cos(a), np.sin(a)])
@@ -866,9 +885,10 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
         cf = np.where(st.turbulent, cs.cf_turb(hk, np.maximum(ret, 1.0001)), cs.cf_lam(hk, ret))
     cf[m:] = 0.0
     tau = cf * ue ** 2                              # wall shear / (1/2 rho V^2)
-    cdf = 0.0
+    cdf_b = np.zeros(nb)
     shear = np.zeros((ps.num_panels, 2))            # wall-shear force on each panel / q (solver order)
-    surface, te_states = {}, {}
+    surfaces = [dict() for _ in range(nb)]
+    te_states = {}
     for b in st.branches:
         nd = b.nodes
         px, py = ps.node_x[nd], ps.node_y[nd]
@@ -878,10 +898,11 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
         sy = ps.node_y[k] + f * (ps.node_y[k + 1] - ps.node_y[k])
         xs, ys = np.concatenate([[sx], px]), np.concatenate([[sy], py])
         t = np.concatenate([[0.0], tau[nd]])        # tau = 0 at the stagnation point
-        cdf += float(np.sum(0.5 * (t[1:] + t[:-1]) * (np.diff(xs) * dhat[0] + np.diff(ys) * dhat[1])))
+        cdf_b[b.body] += float(np.sum(0.5 * (t[1:] + t[:-1]) * (np.diff(xs) * dhat[0] + np.diff(ys) * dhat[1])))
         # the same piece-wise shear as a force on the panel that contains each piece (the first
-        # piece runs from the stagnation point to the first node: panel k_stag); single body
-        pan = np.concatenate([[k], np.minimum(nd[:-1], nd[1:])]).astype(int)
+        # piece runs from the stagnation point to the first node: panel k_stag). Body k's panels are
+        # numbered k below its nodes (one more node than panels per body)
+        pan = np.concatenate([[k], np.minimum(nd[:-1], nd[1:])]).astype(int) - b.body
         np.add.at(shear, pan, (0.5 * (t[1:] + t[:-1]))[:, None]
                   * np.column_stack([np.diff(xs), np.diff(ys)]))
         key = "upper" if b.upper else "lower"
@@ -896,24 +917,34 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
                 w = float(np.real(eq.transition_onset(s_, th[nd[p]], dsx[nd[p]], ue[nd[p]],
                                                       xi_[p] - xi_[p - 1], reynolds, prm.n_crit, cs=cs)))
             xtr = float(px[p - 1] + w * (px[p] - px[p - 1]))
-        out["xtr_" + key] = xtr
-        surface[key] = dict(x=px, y=py, xi=st.d[nd] * (geo.s[nd] - ss[b.body]), ue=ue[nd], theta=th[nd],
-                            dstar=dsx[nd], h=h[nd], cf=cf[nd], third=c[nd], turbulent=st.turbulent[nd])
-        te_states[key] = (th[nd[-1]], dsx[nd[-1]], ue[nd[-1]])
-    wn = cpl.wake_nodes[0]
-    wk = cpl.wakes[0]
-    surface["wake"] = dict(x=wk.x, y=wk.y, xi=wk.s, ue=ue[wn], theta=th[wn], dstar=dsx[wn], h=h[wn],
-                           hw=cpl.hw[wn], third=c[wn])
-    # Squire & Young (ARC R&M 1838, eqs. 3, 13-14) at the last wake station (FID p. 12) ...
-    j = wn[-1]
-    cd = 2.0 * th[j] * ue[j] ** ((h[j] + 5.0) / 2.0)
-    # ... and, as a cross-check, from both trailing-edge states combined (SY38 p. 4)
-    (tu, du, uu), (tl, dl, ul) = te_states["upper"], te_states["lower"]
-    th1 = tu + tl
-    h1 = (du + dl) / th1
-    u1 = (tu * uu + tl * ul) / th1
-    cd_te = 2.0 * th1 * u1 ** ((h1 + 5.0) / 2.0)
-    out.update(cd=float(cd), cd_te=float(cd_te), cdf=cdf, cdp=float(cd - cdf), surface=surface,
+        per[b.body]["xtr_" + key] = xtr
+        surfaces[b.body][key] = dict(x=px, y=py, xi=st.d[nd] * (geo.s[nd] - ss[b.body]), ue=ue[nd],
+                                     theta=th[nd], dstar=dsx[nd], h=h[nd], cf=cf[nd], third=c[nd],
+                                     turbulent=st.turbulent[nd])
+        te_states[(b.body, key)] = (th[nd[-1]], dsx[nd[-1]], ue[nd[-1]])
+    for k in range(nb):
+        wn = cpl.wake_nodes[k]
+        wk = cpl.wakes[k]
+        surfaces[k]["wake"] = dict(x=wk.x, y=wk.y, xi=wk.s, ue=ue[wn], theta=th[wn], dstar=dsx[wn], h=h[wn],
+                                   hw=cpl.hw[wn], third=c[wn])
+        # Squire & Young (ARC R&M 1838, eqs. 3, 13-14) at the last station of the body's wake (FID
+        # p. 12); with several bodies each wake's value is that body's drag (M5) ...
+        j = wn[-1]
+        cd_k = 2.0 * th[j] * ue[j] ** ((h[j] + 5.0) / 2.0)
+        # ... and, as a cross-check, from both trailing-edge states combined (SY38 p. 4)
+        (tu, du, uu), (tl, dl, ul) = te_states[(k, "upper")], te_states[(k, "lower")]
+        th1 = tu + tl
+        h1 = (du + dl) / th1
+        u1 = (tu * uu + tl * ul) / th1
+        cd_te_k = 2.0 * th1 * u1 ** ((h1 + 5.0) / 2.0)
+        per[k].pop("cd_p_inv")
+        per[k].update(cd=float(cd_k), cd_te=float(cd_te_k), cdf=float(cdf_b[k]),
+                      cdp=float(cd_k - cdf_b[k]))
+    cd = sum(p["cd"] for p in per)
+    cdf = float(cdf_b.sum())
+    out.update(cd=float(cd), cd_te=float(sum(p["cd_te"] for p in per)), cdf=cdf, cdp=float(cd - cdf),
+               xtr_upper=per[0]["xtr_upper"], xtr_lower=per[0]["xtr_lower"], surface=surfaces[0],
+               surfaces=surfaces, bodies=per,
                warnings=[] if all(ps.open_te) else [WARN_CLOSED_TE_DRAG], cp=np.asarray(cp),
                gamma=np.asarray(gamma), sources=np.asarray(sources), shear=shear)
     return out
@@ -1250,6 +1281,16 @@ def solve_single(coords, alpha: float, reynolds: float, params: ViscousParams = 
     direct.path += "; " + "; ".join(tried)
     direct.iterations_total = total
     return direct
+
+
+def open_closed_te_bodies(bodies, params: ViscousParams = VISCOUS):
+    """:func:`open_closed_te` for every body of a list; corrections name the element (M5)."""
+    out, corr = [], []
+    for k, b in enumerate(bodies):
+        c, msgs = open_closed_te(b, params)
+        out.append(c)
+        corr += [m if len(bodies) == 1 else f"element {k}: {m}" for m in msgs]
+    return out, corr
 
 
 def open_closed_te(coords, params: ViscousParams = VISCOUS):

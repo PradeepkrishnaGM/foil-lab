@@ -194,6 +194,7 @@ def test_closed_te_least_squares_invariant_to_neumann_row_scaling():
         assert np.max(np.abs(g - base)) <= 1e-12
 
 
+@pytest.mark.slow
 def test_closed_te_jax_gradient_matches_finite_difference():
     """dCl/d(node y) on a closed section: JAX gradient vs central differences, relative 1e-4,
     at a mid-chord node and at the node next to the trailing edge (in eq. 9)."""

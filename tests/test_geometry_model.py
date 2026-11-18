@@ -255,14 +255,21 @@ def test_element_loads_sum_to_totals():
     assert abs(sum(e.cm for e in r.elements) - r.cm) <= 1e-12
 
 
-def test_viscous_analysis_of_several_elements_not_supported_yet():
+def test_viscous_analysis_of_several_elements_passes_every_body(monkeypatch):
+    """M5: with re, every element reaches the coupled solver as one list of bodies (solved together)."""
+    from foil_lab import viscous
+    seen = []
+
+    def fake_single(coords, alpha, reynolds, params=viscous.VISCOUS, trips=None, *a, **kw):
+        seen.append(coords)
+        raise RuntimeError("stop")
+    monkeypatch.setattr(viscous, "solve_single", fake_single)
     main = fl.Airfoil.naca("2412")
     flap = fl.Element(fl.Airfoil.naca("0012"), offset=(1.05, -0.05), scale=0.3, rotation_deg=-10.0)
     config = fl.Configuration((fl.Element(main), flap))
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(RuntimeError):
         fl.analyze(config, 4.0, re=1e6)
-    with pytest.raises(NotImplementedError):
-        fl.polar(config, [0.0], re=1e6)
+    assert isinstance(seen[0], list) and len(seen[0]) == 2
 
 
 def test_polar_matches_analyze():
