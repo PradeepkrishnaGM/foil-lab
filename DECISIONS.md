@@ -3192,8 +3192,41 @@ limits printed next to them.
   benchmark's canonical file the same polar took 44 s for 3 points, and 3 deg steps took longer than
   2 deg steps (continuation): see Later.
 
+## M8: GUI repair
+
+### Decisions (autonomous, for review; 2026-11-18)
+
+- **Q1 Thin client.** The window keeps a list of `fl.Element` (element 0 the main section) and every
+  solve is `fl.analyze` / `fl.polar` on `Configuration(elements)` with the Conditions tab, in a
+  `QThread` worker with a progress bar and Cancel. `fl.polar` gained `progress(done, total)`; a
+  callback that raises (`fl.api.Cancelled`) stops the polar after the point being solved. A single
+  point cannot be interrupted inside the Newton solve: Cancel discards it when it finishes.
+- **Q2 What was repaired** (CODE_REPORT section 6): surface labels from `ElementResult.surface`
+  (suction peak on "upper", tested); the flow field from the same inviscid panel solution
+  (`flowfield.velocity_field`; grid around the bodies, interior masked by ray casting, axes limits
+  equal to the grid; normal velocity 0.002 c outside the surface below 0.02, tested), titled as the
+  inviscid field (the viscous displacement is not drawn); the geometry is redrawn on a cleared
+  figure after every change; drag is `Result.cd` once, with its friction, pressure and induced parts
+  (tested); the polar uses every condition (Re, Mach, sweep, AR, ground, trips, N_crit) and all
+  elements; the window title shows the package version.
+- **Q3 No new features** beyond what the repair needs: "Remove extra elements" (the slotted-flap
+  button adds elements and nothing removed them), hinge height and a section by UIUC name in the
+  existing text box (the API's import by name). The 6-series prefix is gone with its generator (M2).
+- **Q4 The v1.3.1-shaped layer** (`solver.solve_flow`, `analysis`, `advanced`,
+  `ground_effect.solve_ground_effect`) is no longer used by the GUI, command line or batch runner.
+  It stays importable (used by `design.py`, two examples and tests), sharing the cores and the
+  corrections; retiring it is a Later item. `main.py` calls `gui.main_window.run`.
+- **Headless check:** tests/test_gui.py drives the window offscreen (6 tests, one slow: viscous
+  two-element and ground runs). Screenshots for the user's review in `review-gui/m8/` (not in git):
+  flapped section, viscous single case with Cp, flow field, viscous polar, slotted flap geometry,
+  slotted flap Cp and flow field, ground effect flow field.
+- Fast suite 475 tests, 52-56 s depending on load (no single fast test above 2 s).
+- **Not ticked:** the M8 box "Reviewed by me over remote desktop" waits for the user.
+
 ## Later
 
+- M8: retire the v1.3.1-shaped layer (`solver.solve_flow`, `SolutionData`, `analysis`, `advanced`,
+  `ground_effect.solve_ground_effect`) after moving `design.py` and the examples to the API.
 - M7 (measured while making the notebook): the viscous polar of NACA 2412 at Re 1e6 takes about 6 s
   per point on the arc-length repanelled section but about 15 s on the canonical benchmark file
   (generator spacing), and 3 deg steps take longer than 2 deg steps. Part of the solver-speed item.

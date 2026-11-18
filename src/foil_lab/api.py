@@ -29,6 +29,11 @@ METHOD = "inviscid linear-strength vortex panel method"
 METHOD_VISCOUS = "coupled viscous-inviscid (integral boundary layer and wake, e^n transition)"
 
 
+class Cancelled(Exception):
+    """Raised by a ``progress`` callback of :func:`polar` to stop the polar (the point being solved
+    finishes first); :func:`polar` lets it propagate."""
+
+
 def _pandas():
     try:
         import pandas
@@ -444,7 +449,7 @@ def _check_conditions(re, mach, sweep, aspect_ratio, ground_height):
 
 
 def _run(geometry, alphas, re, repanel, num_panels, n_crit, trip_upper, trip_lower, params, mach,
-         sweep, aspect_ratio, ground_height, pivot, single: bool) -> list:
+         sweep, aspect_ratio, ground_height, pivot, single: bool, progress=None) -> list:
     """The pipeline of :mod:`foil_lab.corrections` for a list of angles (DECISIONS.md M6)."""
     from .corrections import NormalPlane, to_normal_plane
     _check_conditions(re, mach, sweep, aspect_ratio, ground_height)
@@ -463,7 +468,14 @@ def _run(geometry, alphas, re, repanel, num_panels, n_crit, trip_upper, trip_low
             if single:
                 vr = [viscous.solve_single(_solver_input(solved), planes[0].alpha, rn, prm, trips)]
             else:
-                vr = viscous.sweep(_solver_input(solved), [p.alpha for p in planes], rn, prm, trips)
+                done = [0]
+
+                def on_result(a, r, seconds, walked, error):
+                    if progress is not None and not walked:
+                        done[0] += 1
+                        progress(done[0], len(planes))
+                vr = viscous.sweep(_solver_input(solved), [p.alpha for p in planes], rn, prm, trips,
+                                   on_result=on_result)
             raw = [_viscous_result(v, solved, pb.names, config, repanel, prm, trip_upper, trip_lower,
                                    corr, pb.flaps) for v in vr]
         else:                                  # the geometry changes with the angle: one solve each
@@ -475,6 +487,8 @@ def _run(geometry, alphas, re, repanel, num_panels, n_crit, trip_upper, trip_low
                 v = viscous.solve_single(_solver_input(solved), 0.0, p.reynolds / chord, prm, trips)
                 raw.append(_viscous_result(v, solved, pb.names, config, repanel, prm, trip_upper,
                                            trip_lower, corr, pb.flaps, pb.n_real, pb.chord, pb.point))
+                if progress is not None:
+                    progress(len(raw), len(planes))
     else:
         raw = []
         fixed = None
@@ -489,6 +503,8 @@ def _run(geometry, alphas, re, repanel, num_panels, n_crit, trip_upper, trip_low
                     fixed = (pb, ps, asm)
             raw.append(_result(ps, asm, pb.bodies, pb.names, config, p.alpha if ground_height is None
                                else 0.0, repanel, pb.flaps, p.mach, pb.n_real, pb.chord, pb.point))
+            if progress is not None:
+                progress(len(raw), len(planes))
     for a, p, r in zip(alphas, planes, raw):
         def slope(a=a):
             h = CORRECTIONS.lift_slope_step
@@ -540,7 +556,7 @@ def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = Non
           trip_upper: Optional[float] = None, trip_lower: Optional[float] = None,
           params: Optional[ViscousParams] = None, mach: float = 0.0, sweep: float = 0.0,
           aspect_ratio: Optional[float] = None, ground_height: Optional[float] = None,
-          pivot: Optional[Tuple[float, float]] = None) -> Polar:
+          pivot: Optional[Tuple[float, float]] = None, progress=None) -> Polar:
     """Analyse a list of angles; results in the order given (options as :func:`analyze`).
 
     Inviscid: the system is assembled once (per angle with ground effect, where the section is
@@ -548,7 +564,11 @@ def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = Non
     (:func:`foil_lab.viscous.sweep`: from the angle nearest 0 deg up and down with warm starts, then
     failed starts from the nearest converged angle); each result's ``path`` says how it was reached.
     With ground effect and ``re`` each angle is a separate solve (the geometry changes with alpha).
+
+    ``progress``: optional callable ``progress(done, total)`` called after each angle is solved
+    (viscous: in the order the sweep reaches them). If it raises (for example :class:`Cancelled`),
+    the polar stops and the exception propagates.
     """
     return Polar(tuple(_run(geometry, [float(a) for a in alphas], re, repanel, num_panels, n_crit,
                             trip_upper, trip_lower, params, float(mach), float(sweep), aspect_ratio,
-                            ground_height, pivot, False)))
+                            ground_height, pivot, False, progress)))
