@@ -5,7 +5,7 @@ import pytest
 
 from foil_lab import batch
 from foil_lab.generators import generate_naca4
-from foil_lab.solver import drag_is_plausible, solve_flow
+from foil_lab.solver import drag_is_plausible
 
 
 @pytest.mark.parametrize("cd,ok", [(0.006, True), (0.0, True), (1.0, True), (-1e-6, False),
@@ -17,21 +17,20 @@ def test_drag_is_plausible(cd, ok):
 
 @pytest.mark.parametrize("cd_visc", [2.0, -0.01, np.nan])
 def test_batch_row_with_absurd_drag_is_not_converged(monkeypatch, cd_visc):
-    af = generate_naca4("2412", 80)
-    real = solve_flow
+    import foil_lab as fl
+    from foil_lab import viscous
 
-    def fake(coords, alpha, *a, **kw):
-        # a converged viscous result with the given drag, without running the coupled solver
-        s = real(coords, alpha)
-        s.reynolds, s.converged, s.cd_visc = kw.get("reynolds", 0.0), True, cd_visc
-        return s
-
-    monkeypatch.setattr(batch, "solve_flow", fake)
-    batch.register_airfoils({"a": af})
-    row = batch._solve_one(batch.Case(airfoil="a", alpha_deg=4.0, reynolds=1e6))
-    assert row["converged"] is False
+    def fake_sweep(coords, alphas, reynolds, params=viscous.VISCOUS, trips=None, *a, **kw):
+        # converged viscous results with the given drag, without running the coupled solver
+        return [viscous.ViscousResult(alpha=al, reynolds=reynolds, converged=True, iterations=3, reason="",
+                                      cl=0.5, cd=cd_visc, cdf=0.004, cdp=0.0, cm=-0.05, xtr_upper=0.3,
+                                      xtr_lower=0.6, path="march") for al in alphas]
+    monkeypatch.setattr(viscous, "sweep", fake_sweep)
+    af = fl.Airfoil.from_coords(generate_naca4("2412", 80))
+    rows = batch.run_batch([batch.Case("a", 4.0, re=1e6)], {"a": af})
+    assert rows[0]["converged"] is False
 
 
 def test_batch_inviscid_row_still_converged():
-    batch.register_airfoils({"a": generate_naca4("2412", 80)})
-    assert batch._solve_one(batch.Case(airfoil="a", alpha_deg=4.0))["converged"] is True
+    rows = batch.run_batch([batch.Case("a", 4.0)], {"a": generate_naca4("2412", 80)})
+    assert rows[0]["converged"] is True

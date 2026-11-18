@@ -29,6 +29,21 @@ METHOD = "inviscid linear-strength vortex panel method"
 METHOD_VISCOUS = "coupled viscous-inviscid (integral boundary layer and wake, e^n transition)"
 
 
+def _pandas():
+    try:
+        import pandas
+    except ImportError as exc:                      # pragma: no cover - depends on the install
+        raise ImportError("pandas is needed for tables: pip install 'foil-lab[pandas]'") from exc
+    return pandas
+
+
+#: scalar columns of a result row (``Result.to_dict`` without the element list), in table order
+ROW_COLUMNS = ("alpha", "cl", "cd", "cm", "ch", "converged", "reynolds", "mach", "sweep", "aspect_ratio",
+               "ground_height", "cd_friction", "cd_pressure", "cd_induced", "xtr_upper", "xtr_lower",
+               "mach_critical", "n_crit", "iterations", "iterations_total", "residual", "path", "method",
+               "ref_chord", "version", "corrections", "warnings")
+
+
 @dataclass(frozen=True)
 class ElementResult:
     """Loads and surface pressure of one element (Selig order, panel midpoints)."""
@@ -129,11 +144,35 @@ class Result:
                  trips=None if self.trips is None else list(self.trips), mach=self.mach,
                  sweep=self.sweep, aspect_ratio=self.aspect_ratio, ground_height=self.ground_height,
                  mach_critical=self.mach_critical, cd_induced=self.cd_induced)
+        d["ch"] = self.ch if sum(e.ch is not None for e in self.elements) <= 1 else None
         d["elements"] = [dict(name=e.name, cl=e.cl, cm=e.cm, cd=e.cd, ch=e.ch,
                               ch_pressure=e.ch_pressure, ch_friction=e.ch_friction,
                               cd_friction=e.cd_friction, xtr_upper=e.xtr_upper, xtr_lower=e.xtr_lower)
                          for e in self.elements]
         return d
+
+    def row(self) -> dict:
+        """One flat row (``ROW_COLUMNS``): scalars only, lists joined with "; "."""
+        d = self.to_dict()
+        out = {k: d.get(k) for k in ROW_COLUMNS}
+        out["corrections"] = "; ".join(d["corrections"])
+        out["warnings"] = "; ".join(d["warnings"])
+        return out
+
+    def to_dataframe(self):
+        """One-row pandas DataFrame of :meth:`row`."""
+        return _pandas().DataFrame([self.row()], columns=list(ROW_COLUMNS))
+
+    def elements_dataframe(self):
+        """pandas DataFrame with one row per element (name, cl, cm, cd, ch, ...)."""
+        return _pandas().DataFrame(self.to_dict()["elements"])
+
+    def surface_dataframe(self):
+        """pandas DataFrame of the surface pressure: element, panel, x, y, surface, cp."""
+        rows = [dict(element=k, name=e.name, panel=i, x=float(e.x[i]), y=float(e.y[i]),
+                     surface=str(e.surface[i]), cp=float(e.cp[i]))
+                for k, e in enumerate(self.elements) for i in range(e.num_panels)]
+        return _pandas().DataFrame(rows)
 
 
 @dataclass(frozen=True)
@@ -170,6 +209,14 @@ class Polar:
 
     def to_dicts(self) -> list:
         return [r.to_dict() for r in self.results]
+
+    def rows(self) -> list:
+        """Flat rows (``ROW_COLUMNS``), one per angle."""
+        return [r.row() for r in self.results]
+
+    def to_dataframe(self):
+        """pandas DataFrame, one row per angle, columns ``ROW_COLUMNS``."""
+        return _pandas().DataFrame(self.rows(), columns=list(ROW_COLUMNS))
 
 
 def _prepare(geometry: Geometry, repanel: bool, num_panels: Optional[int]):

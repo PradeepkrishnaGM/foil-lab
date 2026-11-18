@@ -3144,8 +3144,59 @@ limits printed next to them.
   effect at h/c 1 converges, image drag excluded; viscous sweep equals the normal-plane solve scaled).
 - No benchmark number changes (all corrections are off in the benchmark, which runs at Mach 0).
 
+## M7: Interfaces and data
+
+### Decisions (autonomous, for review; 2026-11-18)
+
+- **Q1 The public API** is `fl.analyze`, `fl.polar`, `fl.flap_polars`, `Airfoil` / `Element` /
+  `Configuration`, `Result` / `Polar` / `FlapPolarSet`, `fl.PolarDatabase`, and the modules
+  `foil_lab.plot`, `foil_lab.export`, `foil_lab.batch`, `foil_lab.cli`. Reference: docs/api.md. The
+  v1.3.1-shaped layer (`solver.solve_flow`, `SolutionData`, `analysis.run_alpha_sweep`,
+  `ground_effect.solve_ground_effect`, `advanced`, `design`) stays for the GUI until M8 and uses the
+  same cores and corrections; whether it stays public after M8 is decided there.
+- **Q2 pandas is optional** (`foil-lab[pandas]`); `to_dataframe` methods raise an ImportError with
+  the install line without it. Exports (CSV, JSON, polar text) need only the standard library.
+- **Q3 Plot helpers** (`foil_lab.plot`, replaces `plotting.py`, deleted) return `(figure, axes)`,
+  take an existing axes, never call `show()`; overlays take `Polar`, `FlapSlice`, XFOIL reference
+  polars and DataFrames.
+- **Q4 XFOIL-style polar text** (`export.to_polar_text`): XFOIL's column layout (alpha, CL, CD, CDp,
+  CM, Top_Xtr, Bot_Xtr) so that polar readers can read it, but the first line says Foil-Lab wrote it
+  (no XFOIL version line: the file must not pass for XFOIL output). Only converged points, as XFOIL
+  writes. Tested by reading it back with the benchmark's XFOIL polar parser.
+- **Q5 Import by name** (`Airfoil.from_name`, `foil_lab.catalog`): NACA names from our generators,
+  any other name from the UIUC database, downloaded on demand into the cache of SPEC.md 4.4 (the
+  benchmark's download now goes through the same function, with its checksums). Names are limited
+  to letters, digits, `_`, `-`, `.` (no paths). Coordinate files are read in Selig or Lednicer
+  format (`utils.io.parse_coordinates`, moved from the benchmark; `load_dat` uses it).
+- **Q6 Polar database**: SQLite (standard library), one table; key = geometry hash, conditions
+  (canonical JSON, numbers to 9 significant digits), angle, method, code version. Geometry hash:
+  SHA-256 of every element's placed coordinates rounded to 1e-12, plus the reference chord and
+  point. `db.polar(...)` reuses rows of the running version and computes the rest.
+- **Q7 Batch runner** on the API: cases that differ only in alpha form one `fl.polar` call (warm
+  starts); backends serial and process (spawn start method). The thread backend and the airfoil
+  registry of v1.3.1 are gone (the registry did not reach spawned workers). Old batch/CLI tests
+  were rewritten for the new interfaces, keeping what they checked.
+- **Q8 Supported Python versions**: `requires-python >= 3.10`; tested here on 3.10.22 and 3.12.16
+  (throwaway venvs, uv-managed interpreters in the user directory, nothing installed system-wide)
+  and 3.14.7: the fast suite passes on each (435 passed, 35 skipped for JAX and the optional
+  writers that were not installed there) and the process-pool batch test passes on 3.10.
+  Classifiers list only these three; 3.11 and 3.13 are left to the CI matrix of M9.
+- **Q9 Command line** (`foillab`) on the API: `analyze`, `polar` (with `--db`), `coords`,
+  `benchmark` (passes its arguments to `python -m foil_lab.benchmark`), `info`; section by `--naca`,
+  `--dat` or `--name`; `--flap`; the M6 corrections; `--output` .csv / .json / .pol. Any error is one
+  "error: ..." line and a non-zero exit status.
+- **Full suite before the M7 commit:** 593 passed in 28 min 27 s (slowest: maximize_ld 391 s).
+- **Q10 Example notebook** `examples/tour.ipynb` (geometry and flaps, Cp, a viscous polar against the
+  committed XFOIL reference, corrections, a table): 26.8 s on this machine, tested (slow test,
+  limit 60 s). The viscous part runs the default repanelled section (4 points, 2 deg apart). On the
+  benchmark's canonical file the same polar took 44 s for 3 points, and 3 deg steps took longer than
+  2 deg steps (continuation): see Later.
+
 ## Later
 
+- M7 (measured while making the notebook): the viscous polar of NACA 2412 at Re 1e6 takes about 6 s
+  per point on the arc-length repanelled section but about 15 s on the canonical benchmark file
+  (generator spacing), and 3 deg steps take longer than 2 deg steps. Part of the solver-speed item.
 - M6: compressible viscous analysis (Mach in the boundary-layer closures and the coupling); the
   finite-wing correction evaluated at the effective angle (profile drag at alpha_eff) instead of the
   geometric angle; spanwise friction in simple sweep theory.

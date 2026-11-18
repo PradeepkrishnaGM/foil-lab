@@ -83,6 +83,11 @@ class FlapSlice:
     converged: np.ndarray            # False where a value is NaN (not converged, or a node was not)
     interpolated: bool               # False when the deflection is one of the solved ones
 
+    def to_dataframe(self):
+        """pandas DataFrame of :meth:`to_dicts`."""
+        from .api import _pandas
+        return _pandas().DataFrame(self.to_dicts())
+
     def to_dicts(self) -> list:
         return [dict(alpha=float(a), deflection=self.deflection, cl=float(cl), cd=float(cd), cm=float(cm),
                      ch=float(ch), converged=bool(c), interpolated=self.interpolated)
@@ -118,6 +123,13 @@ class FlapPolarSet:
         if gaps.max() > MAX_SPACING + 1e-9:
             warnings.warn(f"flap deflections are {gaps.max():g} deg apart (more than {MAX_SPACING:g}); "
                           f"interpolation between them can be inaccurate", stacklevel=3)
+
+    def to_dataframe(self):
+        """pandas DataFrame in long form: one row per (deflection, alpha) of the solved tables."""
+        from .api import _pandas
+        rows = [dict(deflection=float(d), alpha=float(a), **{q: float(self.tables[q][i, j]) for q in QUANTITIES})
+                for i, d in enumerate(self.deflections) for j, a in enumerate(self.alphas)]
+        return _pandas().DataFrame(rows)
 
     @classmethod
     def from_tables(cls, deflections, alphas, cl, cd, cm, ch, **meta) -> "FlapPolarSet":
