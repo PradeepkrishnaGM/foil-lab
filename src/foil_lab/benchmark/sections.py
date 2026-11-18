@@ -11,17 +11,15 @@ benchmark (written by :func:`foil_lab.benchmark.xfoil.write_coordinate_file`).
 
 from __future__ import annotations
 
-import hashlib
 import re
-import os
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
+from ..catalog import cache_dir  # noqa: F401  (re-exported: the download cache of SPEC.md 4.4)
 from ..generators import generate_naca4, generate_naca5
+from ..utils.io import parse_coordinates  # noqa: F401  (used below and by the tests)
 from ..geometry import normalize_airfoil, repanel_cosine
 from ..params import BENCHMARK
 
@@ -73,17 +71,9 @@ class CanonicalSection:
     flap_panels: np.ndarray | None = None        # flap cases: True for the panels of the flap
 
 
-def cache_dir() -> Path:
-    """Download cache: ``$FOIL_LAB_CACHE`` or ``~/.cache/foil-lab``, plus ``airfoils/``."""
-    root = os.environ.get("FOIL_LAB_CACHE") or Path.home() / ".cache" / "foil-lab"
-    return Path(root) / "airfoils"
-
-
 def fetch(spec: SectionSpec, timeout_s: float = 30.0) -> bytes:
-    """Return the downloaded coordinate file for a UIUC section, using the cache if possible.
-
-    The file's SHA-256 must match ``spec.sha256``; a mismatch is an error, so a changed
-    upstream file is noticed rather than silently used.
+    """The UIUC coordinate file of a benchmark section, from the cache if possible
+    (:func:`foil_lab.catalog.fetch_uiuc`). Its SHA-256 must match ``spec.sha256``.
 
     Raises
     ------
@@ -92,70 +82,11 @@ def fetch(spec: SectionSpec, timeout_s: float = 30.0) -> bytes:
     ValueError
         If the checksum does not match.
     """
-    path = cache_dir() / f"{spec.name.lower()}.dat"
-    if path.exists():
-        data = path.read_bytes()
-    else:
-        try:
-            with urllib.request.urlopen(spec.url, timeout=timeout_s) as resp:
-                data = resp.read()
-        except (urllib.error.URLError, OSError) as exc:
-            raise SectionUnavailable(f"{spec.name}: not cached and download failed ({exc})") from exc
-        digest = hashlib.sha256(data).hexdigest()
-        if digest != spec.sha256:
-            raise ValueError(f"{spec.name}: checksum {digest} does not match {spec.sha256}")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != spec.sha256:
-        raise ValueError(f"{spec.name}: cached file checksum {digest} does not match {spec.sha256}")
-    return data
-
-
-def parse_coordinates(text: str) -> tuple[np.ndarray, int]:
-    """Parse a coordinate file in Selig or Lednicer format; return Selig order.
-
-    Selig: name line, then points from the trailing edge over the upper surface to the leading
-    edge and back over the lower surface. Lednicer: name line, a line with the point counts of
-    the two surfaces (values above 1), then the upper surface from leading to trailing edge and,
-    after a blank line, the lower surface from leading to trailing edge.
-
-    Consecutive duplicate points are removed; their number is returned with the coordinates.
-    """
-    rows: list[list[float]] = []
-    blocks: list[list[list[float]]] = [[]]
-    for raw in text.replace("\r", "").splitlines():
-        parts = raw.split()
-        if not parts:
-            if blocks[-1]:
-                blocks.append([])
-            continue
-        try:
-            vals = [float(v) for v in parts[:2]]
-        except ValueError:
-            continue  # name or comment line
-        if len(vals) < 2:
-            continue
-        rows.append(vals)
-        blocks[-1].append(vals)
-    blocks = [b for b in blocks if b]
-    if not rows:
-        raise ValueError("no coordinates found")
-    if rows[0][0] > 1.5 and rows[0][1] > 1.5:   # Lednicer: point counts first
-        n_up, n_lo = int(rows[0][0]), int(rows[0][1])
-        data = [b for b in blocks if not (len(b) == 1 and b[0] == rows[0])]
-        if len(data) != 2 or len(data[0]) != n_up or len(data[1]) != n_lo:
-            raise ValueError("Lednicer file: surface blocks do not match the point counts")
-        upper = np.array(data[0])[::-1]          # TE -> LE
-        lower = np.array(data[1])                 # LE -> TE
-        if np.allclose(upper[-1], lower[0]):
-            lower = lower[1:]
-        coords = np.vstack((upper, lower))
-    else:
-        coords = np.array(rows)
-    seg = np.hypot(*np.diff(coords, axis=0).T)
-    keep = np.concatenate(([True], seg > 0.0))
-    return coords[keep], int((~keep).sum())
+    from ..catalog import AirfoilUnavailable, fetch_uiuc
+    try:
+        return fetch_uiuc(spec.name.lower(), timeout_s, sha256=spec.sha256)[0]
+    except AirfoilUnavailable as exc:
+        raise SectionUnavailable(str(exc)) from exc
 
 
 def _polyline_distance(points: np.ndarray, poly: np.ndarray) -> np.ndarray:

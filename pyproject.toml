@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "foil-lab"
 version = "2.0.0.dev0"
-description = "2D airfoil analysis via a linear-vortex panel method, with viscous-inviscid coupling, e^n transition, a differentiable JAX core, and inverse design."
+description = "2D panel-method solver for single, flapped and multi-element airfoil sections, with a coupled viscous-inviscid solver and its accuracy against XFOIL published."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -16,6 +16,9 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
@@ -28,8 +31,11 @@ dependencies = [
 gui = ["PySide6>=6.5"]
 dev = ["pytest>=7.0"]
 batch = ["pyarrow>=12.0", "h5py>=3.8"]
+pandas = ["pandas>=1.5"]
 jax = ["jax>=0.4.0"]
-all = ["PySide6>=6.5", "pyarrow>=12.0", "h5py>=3.8", "jax>=0.4.0", "pytest>=7.0"]
+notebook = ["nbformat>=5", "nbclient>=0.7", "ipykernel>=6"]
+all = ["PySide6>=6.5", "pyarrow>=12.0", "h5py>=3.8", "jax>=0.4.0", "pytest>=7.0", "pandas>=1.5",
+       "nbformat>=5", "nbclient>=0.7", "ipykernel>=6"]
 
 [project.scripts]
 foillab = "foil_lab.cli:main"

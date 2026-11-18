@@ -60,6 +60,23 @@ class Airfoil:
         return cls(load_dat(str(path)), name or Path(path).stem, f"file {path}")
 
     @classmethod
+    def from_name(cls, name: str, num_panels: Optional[int] = None) -> "Airfoil":
+        """A section by name: "NACA 2412" / "naca23012" from Foil-Lab's generators (open trailing
+        edge), any other name from the UIUC Airfoil Coordinates Database, downloaded on demand into
+        the cache of :mod:`foil_lab.catalog` (never bundled). ``source`` records the URL and SHA-256.
+        Raises ``foil_lab.catalog.AirfoilUnavailable`` if the file is neither cached nor
+        downloadable."""
+        from .catalog import fetch_uiuc, naca_code
+        from .utils.io import parse_coordinates
+        code = naca_code(name)
+        if code is not None:
+            return cls.naca(code, num_panels)
+        data, url, digest = fetch_uiuc(name)
+        coords, _ = parse_coordinates(data.decode("ascii", errors="replace"))
+        title = data.decode("ascii", errors="replace").strip().splitlines()[0].strip() or name
+        return cls(coords, title, f"{url} (sha256 {digest})")
+
+    @classmethod
     def from_coords(cls, coords, name: str = "airfoil", source: str = "coordinates") -> "Airfoil":
         return cls(coords, name, source)
 

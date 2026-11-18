@@ -96,7 +96,8 @@ def test_cli_routes_reynolds_to_the_coupled_solver(fake_viscous, capsys):
     from foil_lab.cli import main
     main(["analyze", "--naca", "2412", "--alpha", "4", "--re", "1e6", "--ncrit", "7"])
     out = capsys.readouterr().out
-    assert fake_viscous[-1][:4] == ("point", 4.0, 1e6, 7.0) and "converged" in out
+    assert fake_viscous[-1][0] == "point" and fake_viscous[-1][1] == 4.0 and fake_viscous[-1][3] == 7.0
+    assert "converged" in out
     main(["polar", "--naca", "2412", "--start", "0", "--end", "2", "--re", "1e6"])
     assert fake_viscous[-1][:2] == ("sweep", [0.0, 1.0, 2.0])
     assert capsys.readouterr().out.count("converged") == 3
@@ -105,19 +106,27 @@ def test_cli_routes_reynolds_to_the_coupled_solver(fake_viscous, capsys):
 def test_cli_reports_invalid_input_without_a_traceback():
     from foil_lab.cli import main
     with pytest.raises(SystemExit) as exc:
-        main(["analyze", "--naca", "2412", "--re", "-5"])
-    assert exc.value.code == 2
-    with pytest.raises(SystemExit) as exc:
-        main(["analyze", "--naca", "241"])
-    assert "error" in str(exc.value.code)
+        main(["analyze", "--naca", "2412", "--alpha", "2", "--re", "-5"])
+    assert exc.value.code == 2                       # argparse usage error
+    for argv in (["analyze", "--naca", "241", "--alpha", "2"],
+                 ["analyze", "--dat", "no_such_file.dat", "--alpha", "2"],
+                 ["analyze", "--naca", "2412", "--alpha", "2", "--re", "1e6", "--mach", "0.3"],
+                 ["analyze", "--naca", "2412", "--alpha", "2", "--ncrit", "7"],
+                 ["polar", "--naca", "2412", "--step", "0"],
+                 ["analyze", "--naca", "2412", "--flap", "0.75", "45", "--alpha", "2"]):
+        with pytest.raises(SystemExit) as exc:
+            main(argv)
+        assert str(exc.value.code).startswith("error:"), argv
 
 
 def test_batch_rows_carry_the_solver_flag_and_drag_parts(fake_viscous):
     from foil_lab import batch
-    batch.register_airfoils({"a": generate_naca4("2412", 120)})
-    row = batch._solve_one(batch.Case(airfoil="a", alpha_deg=4.0, reynolds=1e6, n_crit=6.0))
-    assert fake_viscous[-1][:4] == ("point", 4.0, 1e6, 6.0)
-    assert row["converged"] is True and row["cd_friction"] == 0.006 and row["path"] == "march"
+    af = generate_naca4("2412", 120)
+    rows = batch.run_batch([batch.Case("a", 4.0, re=1e6, n_crit=6.0)], {"a": af})
+    assert fake_viscous[-1][0] == "sweep" and fake_viscous[-1][3] == 6.0
+    row = rows[0]
+    assert row["converged"] is True and row["path"] == "march"
+    assert row["cd_friction"] == pytest.approx(0.006 / fl.Airfoil.from_coords(af).chord)
 
 
 def test_maximize_ld_uses_the_coupled_solver(monkeypatch):
@@ -188,8 +197,8 @@ def test_run_alpha_sweep_and_batch_end_to_end():
     af = generate_naca4("2412", 120)
     pol = run_alpha_sweep(af, 0.0, 2.0, 2.0, reynolds=3e6)
     assert all(s.converged for s in pol.solutions) and np.all(pol.cds > 0.003)
-    rows = run_batch(build_matrix({"a": af}, alpha=[2.0], reynolds=[3e6]))
-    assert rows[0]["converged"] and abs(rows[0]["cd_total"] - pol.cds[1]) <= 1e-3
+    rows = run_batch(build_matrix({"a": af}, alpha=[2.0], re=[3e6]), {"a": af})
+    assert rows[0]["converged"] and abs(rows[0]["cd"] - pol.cds[1]) <= 1e-3
 
 
 @pytest.mark.slow

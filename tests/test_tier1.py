@@ -64,17 +64,20 @@ def test_trip_wire_monotonic():
 def test_batch_matrix_and_run():
     from foil_lab.batch import build_matrix, run_batch
     afs = {"a": generate_naca4("2412", 120), "b": generate_naca4("0012", 120)}
-    cases = build_matrix(afs, alpha=[0, 5], reynolds=[1e6])
+    cases = build_matrix(afs, alpha=[0, 5], re=[1e6])
     assert len(cases) == 4
-    rows = run_batch(cases, workers=1)
-    assert len(rows) == 4
+    rows = run_batch(cases, afs)
+    assert len(rows) == 4 and [r["airfoil"] for r in rows] == ["a", "a", "b", "b"]
     assert all(r["converged"] for r in rows)
+    par = run_batch(cases, afs, backend="process", workers=2)
+    for r, q in zip(rows, par):          # same results in the same order from the process pool
+        assert (r["alpha"], r["cl"], r["cd"]) == (q["alpha"], q["cl"], q["cd"])
 
 
 def test_batch_export_roundtrip(tmp_path):
     from foil_lab.batch import build_matrix, run_batch, write_table
     afs = {"a": generate_naca4("2412", 120)}
-    rows = run_batch(build_matrix(afs, alpha=[0, 5, 10]), workers=1)
+    rows = run_batch(build_matrix(afs, alpha=[0, 5, 10]), afs)
     # CSV always works; parquet/h5 require optional deps — skip if absent.
     fmt_deps = {"csv": None, "parquet": "pyarrow", "h5": "h5py"}
     for ext, dep in fmt_deps.items():
@@ -86,12 +89,10 @@ def test_batch_export_roundtrip(tmp_path):
 
 
 def test_batch_handles_failures_gracefully():
-    """A bad case should be flagged, not crash the batch."""
-    from foil_lab.batch import Case, run_batch, register_airfoils
-    register_airfoils({"good": generate_naca4("2412", 120)})
-    cases = [Case(airfoil="good", alpha_deg=5.0),
-             Case(airfoil="missing", alpha_deg=5.0)]  # KeyError in worker
-    rows = run_batch(cases, workers=1)
+    """A missing airfoil or a failing group is flagged in its rows, never crashes the batch."""
+    from foil_lab.batch import Case, run_batch
+    cases = [Case("good", 5.0), Case("missing", 5.0), Case("bad", 5.0, mach=1.5)]
+    rows = run_batch(cases, {"good": generate_naca4("2412", 120), "bad": generate_naca4("2412", 120)})
     statuses = {r["airfoil"]: r["converged"] for r in rows}
-    assert statuses["good"] is True
-    assert statuses["missing"] is False
+    assert statuses == {"good": True, "missing": False, "bad": False}
+    assert "missing" in rows[1]["error"] and "ValueError" in rows[2]["error"]
