@@ -3038,8 +3038,66 @@ release stay with the user.
   with sign convention and test; flap cases in the benchmark with hinge moment; flap polar set with
   interpolation in deflection).
 
+## M5: Multi-element
+
+### Decisions (autonomous, for review; 2026-11-18)
+
+- **Q1 Inviscid validation.** The exact two-element case of SPEC.md 4.2 is the Williams solution
+  (tests/test_williams.py, from M2); it is the M5 inviscid validation. Nothing new was added.
+- **Q2 One solver for one or several elements.** `viscous.py` was already written per body (two
+  branches, a stagnation point and a wake each; residuals vectorised over all stations). M5 adds
+  the missing coupling: the sources of each body's wake induce a velocity along every other body's
+  wake (`wake.cross_wake_velocity`, the same half-panel distribution as the wake's own term). The
+  airfoil-to-wake and wake-to-airfoil terms already covered all bodies.
+- **Q3 Wake length per body.** The wake node count N_w = floor(N/10 + 10 d_w) used the node count of
+  all bodies; it now uses the body's own N (FID's N is the airfoil's), and the length d_w = 1 chord of
+  that body. Single-body results are bit-identical (checked on NACA 2412, Re 1e6, 0/3/8 deg: Cl, Cd,
+  Cdf, Cm, x_tr and iterations equal to the last bit against the M3 code on main).
+- **Q4 Per-element forces.** Element Cl and Cm from its surface pressure about the configuration's
+  reference point; element Cd = Squire-Young at the end of the element's own wake; total Cd = the
+  sum (each wake carries its element's momentum deficit to its end; the wakes do not merge, so the
+  sum counts each once). Friction drag and transition per element (`ElementResult.cd_friction`,
+  `xtr_upper`, `xtr_lower`); `ViscousResult.bodies` holds the solver's per-body values.
+- **Q5 Transition location** of an element is the global x coordinate of the transition point
+  (for element 0 at the origin with unit chord this is x/c). Stated in the example's limits.
+- **Q6 Trips** (`trip_upper`, `trip_lower`) apply to element 0 only; the other elements have free
+  transition. Per-element trips: Later.
+- **Q7 Closed trailing edges** are opened per element as for one element (`open_closed_te_bodies`);
+  each correction names its element.
+- **Q8 No viscous benchmark.** XFOIL is single-element, so the multi-element viscous result has
+  consistency tests only: wake-to-wake velocity against Gauss quadrature, wake coupling fading with
+  distance, operators of far-apart bodies equal to the single body's, and two NACA 2412 sections 200
+  chords apart each reproducing the single-section viscous result (dCl 3e-4, the size of the induced
+  velocity at that distance). This is stated with the example and goes into the README limits (M9).
+- **Q9 `solver.solve_flow`** (the v1.3.1-shaped interface) stays single-body for viscous runs; its
+  message points to `fl.analyze` with a `Configuration`.
+
+### Slotted-flap example (examples/slotted_flap.py)
+
+NACA 2412 main element; NACA 2412 flap of 0.3 c, deflected 20 deg, leading edge at (0.97, -0.04).
+Re 3e6, N_crit 9; every point converged; about 35 s per point.
+
+| alpha | Cl inviscid | Cl viscous | Cd | Cl main / flap | Cd main / flap |
+|---|---|---|---|---|---|
+| 0 | 1.905 | 1.744 | 0.0159 | 1.398 / 0.346 | 0.0120 / 0.0039 |
+| 4 | 2.474 | 2.233 | 0.0228 | 1.898 / 0.334 | 0.0192 / 0.0036 |
+| 8 | 3.030 | 2.611 | 0.0336 | 2.313 / 0.298 | 0.0305 / 0.0031 |
+
+No reference is available to judge these numbers; they are shown as what the code gives, with the
+limits printed next to them.
+
+### Fast suite
+
+55.1 s on the idle machine before this step (447 tests); two tests over 2 s
+(`test_closed_te_jax_gradient_matches_finite_difference`, the transition case of
+`test_interval_jacobians_agree`) moved to `slow` (decision 5 after the M4 pilot).
+
 ## Later
 
+- M5: per-element forced transition (trips apply to element 0 only); transition location of an
+  element as x/c of the element's own chord instead of the global x.
+- M5: wake merging with a downstream boundary layer and slot-flow separation (SPEC.md 4.6: not in
+  v2.0); a multi-element viscous reference (MSES or wind-tunnel data with a usable licence).
 - M4 (after the full run): Foil-Lab does not converge at several low angles (-4 to 4 deg) of the flap cases at
   Re 6e6 (NACA 0012 F15: -4, -1, 0, 1; NACA 2412 F20: -4 to 1; in the filter 2-6 points per case) and at 10 deg
   Re 2e5 (91.7 % of the pooled filter points). Find the cause (start from the march or the

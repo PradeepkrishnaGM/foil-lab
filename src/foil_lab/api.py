@@ -1,7 +1,7 @@
 """Public analysis interface: ``analyze`` and ``polar`` returning ``Result`` and ``Polar``.
 
 Without a Reynolds number: the inviscid core of :mod:`foil_lab.inviscid`. With ``re``: the coupled
-viscous-inviscid solver of :mod:`foil_lab.viscous` (M3; one element, Mach 0), with transition by
+viscous-inviscid solver of :mod:`foil_lab.viscous` (M3; several elements from M5, Mach 0), with transition by
 the e^n envelope method (``n_crit``) and forced trip locations per surface (``trip_upper``,
 ``trip_lower``, x/c), as SPEC.md 4.3 states. A viscous result carries the total drag and its
 friction and pressure parts, the transition location on each surface, the Newton iterations, the
@@ -48,6 +48,11 @@ class ElementResult:
     ch: Optional[float] = None
     ch_pressure: Optional[float] = None
     ch_friction: Optional[float] = None
+    #: viscous results only: this element's friction drag and transition x (nan: laminar to the
+    #: trailing edge); ``cd`` above is the Squire-Young drag at the end of this element's wake
+    cd_friction: Optional[float] = None
+    xtr_upper: Optional[float] = None
+    xtr_lower: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -116,7 +121,8 @@ class Result:
                  warnings=list(self.warnings), n_crit=self.n_crit,
                  trips=None if self.trips is None else list(self.trips))
         d["elements"] = [dict(name=e.name, cl=e.cl, cm=e.cm, cd=e.cd, ch=e.ch,
-                              ch_pressure=e.ch_pressure, ch_friction=e.ch_friction)
+                              ch_pressure=e.ch_pressure, ch_friction=e.ch_friction,
+                              cd_friction=e.cd_friction, xtr_upper=e.xtr_upper, xtr_lower=e.xtr_lower)
                          for e in self.elements]
         return d
 
@@ -180,37 +186,46 @@ def _hinge(ps, cp_all, k, flap, chord, shear=None):
 
 def _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params):
     from .solver import trips_dict, viscous_params
-    if len(bodies) != 1:
-        raise NotImplementedError("viscous analysis (re) of several elements is added in M5; "
-                                  "omit re for an inviscid multi-element result")
     if not re > 0:
         raise ValueError(f"re must be a positive Reynolds number, got {re!r}")
     return viscous_params(n_crit, params), trips_dict(trip_upper, trip_lower)
 
 
-def _viscous_result(vres, body, names, config, repanel: bool, prm, trip_upper, trip_lower,
-                    corrections=(), flap=None) -> Result:
-    """``Result`` of one viscous solution on ``body``, the geometry that was solved (a closed
-    trailing edge already opened, see ``corrections``)."""
+def _viscous_result(vres, bodies, names, config, repanel: bool, prm, trip_upper, trip_lower,
+                    corrections=(), flaps=()) -> Result:
+    """``Result`` of one viscous solution on ``bodies``, the geometry that was solved (closed
+    trailing edges already opened, see ``corrections``)."""
     from . import __version__
-    b = body
     chord, point = config.reference()
-    ps = core.PanelSet.from_bodies([b])
+    ps = core.PanelSet.from_bodies(list(bodies))
     cp_all = np.asarray(vres.cp) if vres.cp is not None else np.full(ps.num_panels, np.nan)
-    # the solver's loads are about the quarter chord of the unit chord at the origin; recompute them
-    # from the viscous surface pressure about the configuration's reference (as the inviscid path)
-    cl, _, cm = core.pressure_loads(ps, cp_all, vres.alpha, 0, chord, point)
-    cp = cp_all[::-1] if ps.reversed_input[0] else cp_all             # Selig (input) order
-    mid = 0.5 * (b[:-1] + b[1:])
-    te_mid = 0.5 * (b[0] + b[-1])
-    le = int(np.argmax(np.hypot(*(b - te_mid).T)))
-    surface = np.where(np.arange(len(mid)) < le, "upper", "lower")
+    shear = None if vres.shear is None else np.asarray(vres.shear)
+    per = vres.bodies or [{}] * len(bodies)
+    elements = []
+    cl_t = cm_t = 0.0
+    for k, b in enumerate(bodies):
+        # the solver's loads are about the quarter chord of the unit chord at the origin; recompute
+        # them from the viscous surface pressure about the configuration's reference (as inviscid)
+        cl, _, cm = core.pressure_loads(ps, cp_all, vres.alpha, k, chord, point)
+        sl = ps.body_panels[k]
+        cp_k = cp_all[sl]
+        cp = cp_k[::-1] if ps.reversed_input[k] else cp_k             # Selig (input) order
+        mid = 0.5 * (b[:-1] + b[1:])
+        te_mid = 0.5 * (b[0] + b[-1])
+        le = int(np.argmax(np.hypot(*(b - te_mid).T)))
+        surface = np.where(np.arange(len(mid)) < le, "upper", "lower")
+        cd_k = float(per[k].get("cd", vres.cd if len(bodies) == 1 else np.nan)) / chord
+        ch, ch_p, ch_f = _hinge(ps, cp_all, k, flaps[k] if flaps else None, chord, shear)
+        elements.append(ElementResult(
+            names[k], float(cl), float(cm), cd_k, mid[:, 0].copy(), mid[:, 1].copy(),
+            np.asarray(cp).copy(), surface, len(mid), ch, ch_p, ch_f,
+            cd_friction=float(per[k].get("cdf", vres.cdf if len(bodies) == 1 else np.nan)) / chord,
+            xtr_upper=float(per[k].get("xtr_upper", vres.xtr_upper if len(bodies) == 1 else np.nan)),
+            xtr_lower=float(per[k].get("xtr_lower", vres.xtr_lower if len(bodies) == 1 else np.nan))))
+        cl_t += float(cl)
+        cm_t += float(cm)
     cd = float(vres.cd) / chord
-    ch, ch_p, ch_f = _hinge(ps, cp_all, 0, flap, chord,
-                            None if vres.shear is None else np.asarray(vres.shear))
-    el = ElementResult(names[0], float(cl), float(cm), cd, mid[:, 0].copy(), mid[:, 1].copy(),
-                       np.asarray(cp).copy(), surface, len(mid), ch, ch_p, ch_f)
-    return Result(float(vres.alpha), float(cl), float(cm), cd, (el,), chord, point,
+    return Result(float(vres.alpha), cl_t, cm_t, cd, tuple(elements), chord, point,
                   bool(vres.converged), METHOD_VISCOUS, tuple(corrections), repanel, __version__,
                   float(vres.reynolds) * chord,
                   cd_friction=float(vres.cdf) / chord, cd_pressure=float(vres.cdp) / chord,
@@ -218,6 +233,11 @@ def _viscous_result(vres, body, names, config, repanel: bool, prm, trip_upper, t
                   iterations=int(vres.iterations), iterations_total=int(vres.iterations_total),
                   residual=vres.residual, path=vres.path, warnings=tuple(vres.warnings),
                   n_crit=prm.n_crit, trips=(trip_upper or None, trip_lower or None))
+
+
+def _solver_input(bodies):
+    """One body as an array (bit-identical to M3/M4), several as a list (M5)."""
+    return bodies[0] if len(bodies) == 1 else list(bodies)
 
 
 def _result(ps, asm, bodies, names, config, alpha: float, repanel: bool, flaps=()) -> Result:
@@ -270,10 +290,11 @@ def analyze(geometry: Geometry, alpha: float, re: Optional[float] = None, repane
     if re:
         from . import viscous
         prm, trips = _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params)
-        body, corr = viscous.open_closed_te(bodies[0], prm)
-        vres = viscous.solve_single(body, float(alpha), float(re) / config.reference()[0], prm, trips)
-        return _viscous_result(vres, body, names, config, repanel, prm, trip_upper, trip_lower, corr,
-                               flaps[0])
+        solved, corr = viscous.open_closed_te_bodies(bodies, prm)
+        vres = viscous.solve_single(_solver_input(solved), float(alpha), float(re) / config.reference()[0],
+                                    prm, trips)
+        return _viscous_result(vres, solved, names, config, repanel, prm, trip_upper, trip_lower, corr,
+                               flaps)
     ps = core.PanelSet.from_bodies(bodies)
     return _result(ps, core.assemble(ps), bodies, names, config, float(alpha), repanel, flaps)
 
@@ -294,10 +315,10 @@ def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = Non
     if re:
         from . import viscous
         prm, trips = _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params)
-        body, corr = viscous.open_closed_te(bodies[0], prm)
-        res = viscous.sweep(body, alphas, float(re) / config.reference()[0], prm, trips)
-        return Polar(tuple(_viscous_result(r, body, names, config, repanel, prm, trip_upper, trip_lower,
-                                           corr, flaps[0]) for r in res))
+        solved, corr = viscous.open_closed_te_bodies(bodies, prm)
+        res = viscous.sweep(_solver_input(solved), alphas, float(re) / config.reference()[0], prm, trips)
+        return Polar(tuple(_viscous_result(r, solved, names, config, repanel, prm, trip_upper, trip_lower,
+                                           corr, flaps) for r in res))
     ps = core.PanelSet.from_bodies(bodies)
     asm = core.assemble(ps)
     return Polar(tuple(_result(ps, asm, bodies, names, config, a, repanel, flaps) for a in alphas))

@@ -5,7 +5,7 @@ Sources (DECISIONS.md M3, C4):
 * Wake line: the inviscid streamline from the trailing-edge panel midpoint (LNE89 p. 8; FID
   p. 7). Its discretisation is FID's (p. 7): first point eps_w c = 1e-5 c downstream of the
   midpoint, N_w = floor(N/10 + 10 d_w) nodes (N airfoil nodes), spaced geometrically to a total
-  length d_w c = 1 chord, traced with a predictor-corrector step. The first spacing equals the
+  length d_w c = 1 chord (N and c of the body the wake belongs to), traced with a predictor-corrector step. The first spacing equals the
   mean length of the two trailing-edge panels (our choice; FID does not state it).
 * Wake sources (LNE89 pp. 7-8; FID pp. 3-4, eq. 2): each wake panel carries sigma = dm/ds and is
   split into two half-panels with a source strength varying linearly from the node values (mean
@@ -89,7 +89,7 @@ def build_wake(ps: inviscid.PanelSet, gamma_inv, alpha_deg: float, body: int = 0
     dtdxi = float((t1x * nx + t1y * ny) / (t1x * bx + t1y * by)
                   - ((-t0x) * nx + (-t0y) * ny) / ((-t0x) * bx + (-t0y) * by))
     h_te = float(np.hypot(xa - xb, ya - yb))
-    nw = int(np.floor(ps.num_nodes / 10 + 10 * D_W))
+    nw = int(np.floor((sn.stop - sn.start) / 10 + 10 * D_W))   # N: this body's nodes (M5)
     d0 = 0.5 * (lengths[j0] + lengths[j1])
     total = D_W * chord
     r = brentq(lambda q: d0 * (q ** (nw - 1) - 1.0) / (q - 1.0) - total, 1.0 + 1e-9, 3.0)
@@ -189,3 +189,16 @@ def wake_operators(ps: inviscid.PanelSet, wk: Wake, alpha_deg: float) -> WakeOpe
     a = np.deg2rad(alpha_deg)
     ut_inf = np.cos(a) * wk.tx + np.sin(a) * wk.ty
     return WakeOperators(seg, s_start, s_end, sn_air, ut_wake, ut_gamma, ut_inf)
+
+
+def cross_wake_velocity(target: Wake, op: WakeOperators) -> np.ndarray:
+    """Velocity along the ``target`` wake at its nodes induced by the sources of another body's wake
+    (operators ``op``), per source parameter of that wake's own ``q`` (airfoil panels, then its wake
+    panels): (N_w target, N + N_w - 1). Same half-panel distribution and evaluation point (a tiny
+    distance off the sheet) as the wake's own term in :func:`wake_operators` (M5)."""
+    off = 1e-9
+    qx, qy = target.x - off * target.ty, target.y + off * target.tx
+    tx, ty = target.tx[:, None], target.ty[:, None]
+    ua, va, ub, vb = linear_source_velocity(qx, qy, *op.seg)
+    return (ua * tx + va * ty) @ op.s_start + (ub * tx + vb * ty) @ op.s_end
+

@@ -89,7 +89,7 @@ def _residual(kind, v, re, cs, xp=np):
 
 
 @pytest.mark.parametrize("cs", SETS)
-@pytest.mark.parametrize("kind", ["laminar", "turbulent", "transition"])
+@pytest.mark.parametrize("kind", ["laminar", "turbulent", pytest.param("transition", marks=pytest.mark.slow)])
 def test_interval_jacobians_agree(cs, kind):
     """JAX automatic differentiation and complex step agree to 1e-9 (relative) and both match
     central finite differences to 1e-5 (relative), with respect to all 8 station variables."""

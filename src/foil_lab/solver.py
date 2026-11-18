@@ -117,8 +117,8 @@ def trips_dict(trip_x_upper: Optional[float] = None, trip_x_lower: Optional[floa
 
 def _check_viscous(num_bodies: int, mach: float) -> None:
     if num_bodies != 1:
-        raise NotImplementedError("viscous analysis (a Reynolds number) of several bodies is added in M5; "
-                                  "use reynolds=0 for an inviscid multi-element result")
+        raise NotImplementedError("solver.solve_flow runs one body with a Reynolds number; for several "
+                                  "elements use foil_lab.analyze with a Configuration (M5)")
     if mach > 0.0:
         raise NotImplementedError("viscous results are Mach 0 in this version (compressibility in M6); "
                                   "use mach=0 with a Reynolds number, or reynolds=0")
