@@ -117,7 +117,8 @@ def dcl_dgeom(coords, alpha_rad):
 
 
 def solve_numpy_compatible(coords_ccw_or_cw, alpha_deg):
-    """Any-orientation coords and degrees; returns (cl, cm_qc) floats as solve_flow reports."""
+    """Any-orientation coords and degrees; returns (cl, cm about (0.25, 0)) per unit chord, as
+    :func:`foil_lab.inviscid.body_loads` reports them."""
     cw = ensure_cw_static(coords_ccw_or_cw)
     return solve_cl_cm(cw, np.deg2rad(alpha_deg))
 

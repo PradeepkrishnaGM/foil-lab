@@ -9,8 +9,13 @@ import time
 import numpy as np
 
 from foil_lab.generators import generate_naca4
-from foil_lab.solver import solve_flow
+from foil_lab import inviscid as core
 from foil_lab.jax_backend import HAS_JAX
+
+
+def numpy_cl(coords, alpha):
+    """Cl per unit chord from the NumPy core (the quantity the JAX core computes)."""
+    return core.body_loads(core.solve(core.PanelSet.from_bodies([coords]), alpha), 0).cl
 
 
 def main():
@@ -24,14 +29,14 @@ def main():
 
     print("=== 1. NumPy parity ===")
     for a in (0.0, 5.0, 10.0):
-        cl_np = solve_flow(af, a).cl
+        cl_np = numpy_cl(af, a)
         cl_jx, _ = jax_core.solve_numpy_compatible(af, a)
         print(f"  a={a:4.1f}  NumPy={cl_np:+.6f}  JAX={cl_jx:+.6f}  d={abs(cl_np-cl_jx):.1e}")
 
     print("\n=== 2. vmap batch speedup (200-alpha sweep) ===")
     alphas = np.linspace(-8, 16, 200)
     t = time.perf_counter()
-    _ = [solve_flow(af, a).cl for a in alphas]
+    _ = [numpy_cl(af, a) for a in alphas]
     t_np = time.perf_counter() - t
     cw = jax_core.ensure_cw_static(af)
     aj = np.deg2rad(alphas)

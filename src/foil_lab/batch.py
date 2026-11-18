@@ -29,7 +29,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 import numpy as np
 
 from .api import ROW_COLUMNS
-from .solver import drag_is_plausible
+from .viscous import drag_is_plausible
 
 
 @dataclass(frozen=True)

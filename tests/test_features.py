@@ -1,63 +1,48 @@
-"""Tests for the v0.5 feature set: advanced flight, viscous mods, ground effect,
-generators, and geometry smoothing.
+"""Tests for the v0.5 feature set, through the v2 interface: simple sweep and ground effect
+(``fl.analyze``), generators and geometry smoothing.
 """
 
 import numpy as np
 import pytest
 
+import foil_lab as fl
 from foil_lab.generators import (generate_naca4, generate_biconvex, generate_wedge,
                                   generate_parsec)
 from foil_lab.geometry import smooth_coordinates
-from foil_lab.solver import solve_flow
-from foil_lab.advanced import solve_swept_wing, solve_constant_wing_loading
-from foil_lab.ground_effect import solve_ground_effect
+from tests import section
 
 
-# --- Advanced flight -------------------------------------------------------- #
+# --- Simple sweep ----------------------------------------------------------- #
 def test_simple_sweep_lift_slope_scales_with_cos_sweep():
     """Simple sweep theory (M6): the swept wing's lift equals the normal-plane section's lift at
     alpha_n = atan(tan(alpha)/cos(sweep)) times cos^2(sweep); for the lift slope about the zero-lift
     angle this is the classic cos(sweep) (v1.3.1 gave cos^2)."""
-    af = generate_naca4("0012", 160)
+    af = fl.Airfoil.from_coords(generate_naca4("0012", 160))
     lam = np.radians(30.0)
     a_n = np.degrees(np.arctan(np.tan(np.radians(2.0)) / np.cos(lam)))
-    r = solve_swept_wing(af, 2.0, 30.0)
-    assert r.alpha_eff_deg == pytest.approx(a_n, abs=1e-12)
-    from foil_lab.solver import solve_flow
-    assert r.cl_3d == pytest.approx(solve_flow(af, a_n).cl * np.cos(lam) ** 2, rel=1e-12)
-    slope = (solve_swept_wing(af, 1.0, 30.0).cl_3d - solve_swept_wing(af, -1.0, 30.0).cl_3d) / 2.0
-    slope0 = (solve_swept_wing(af, 1.0, 0.0).cl_3d - solve_swept_wing(af, -1.0, 0.0).cl_3d) / 2.0
+    r = fl.analyze(af, 2.0, sweep=30.0, repanel=False)
+    assert r.cl == pytest.approx(fl.analyze(af, a_n, repanel=False).cl * np.cos(lam) ** 2, rel=1e-12)
+
+    def cl(alpha, sweep):
+        return fl.analyze(af, alpha, sweep=sweep, repanel=False).cl
+    slope = (cl(1.0, 30.0) - cl(-1.0, 30.0)) / 2.0
+    slope0 = (cl(1.0, 0.0) - cl(-1.0, 0.0)) / 2.0
     assert slope / slope0 == pytest.approx(np.cos(lam), rel=1e-3)
-
-
-@pytest.mark.slow
-def test_constant_wing_loading_converges():
-    af = generate_naca4("2412", 160)
-    p = solve_constant_wing_loading(af, 5.0, wing_loading=600.0, chord=1.2)
-    assert p.converged
-    assert p.speed > 0
-    assert p.reynolds > 0
 
 
 # --- Ground effect ---------------------------------------------------------- #
 def test_ground_effect_increases_lift():
-    af = generate_naca4("2412", 160)
-    free = solve_flow(af, 5.0).cl
-    near = solve_ground_effect(af, 5.0, height=0.5).cl
+    af = fl.Airfoil.from_coords(generate_naca4("2412", 160))
+    free = fl.analyze(af, 5.0, repanel=False).cl
+    near = fl.analyze(af, 5.0, ground_height=0.5, repanel=False).cl
     assert near > free, "lift should rise in ground effect"
 
 
 def test_ground_effect_far_field_limit():
-    af = generate_naca4("2412", 160)
-    free = solve_flow(af, 5.0).cl
-    far = solve_ground_effect(af, 5.0, height=50.0).cl
+    af = fl.Airfoil.from_coords(generate_naca4("2412", 160))
+    free = fl.analyze(af, 5.0, repanel=False).cl
+    far = fl.analyze(af, 5.0, ground_height=50.0, repanel=False).cl
     assert abs(far - free) < 0.01
-
-
-def test_ground_effect_free_surface_not_implemented():
-    af = generate_naca4("2412", 120)
-    with pytest.raises(NotImplementedError):
-        solve_ground_effect(af, 5.0, height=1.0, wall_type="free_surface")
 
 
 # --- Generators ------------------------------------------------------------- #
@@ -65,7 +50,7 @@ def test_ground_effect_free_surface_not_implemented():
 def test_symmetric_supersonic_sections(gen):
     af = gen(0.06, 120)
     assert np.allclose(af[0], af[-1], atol=1e-6)  # closed TE
-    assert abs(solve_flow(af, 0.0).cl) < 1e-6      # symmetric
+    assert abs(section.cl(af, 0.0)) < 1e-6      # symmetric
 
 
 def test_parsec_produces_valid_geometry():
@@ -74,8 +59,7 @@ def test_parsec_produces_valid_geometry():
     af = generate_parsec(p, 160)
     assert af.shape[1] == 2
     assert af[:, 1].max() > 0 and af[:, 1].min() < 0  # has thickness
-    sol = solve_flow(af, 0.0)
-    assert np.isfinite(sol.cl)
+    assert np.isfinite(section.cl(af, 0.0))
 
 
 # --- Geometry smoothing ----------------------------------------------------- #

@@ -21,9 +21,12 @@ cheap PARSEC->solve chain (12 fast solves per gradient) and hand them to a
 gradient-based optimizer (SLSQP), with bounds and geometry constraints
 (thickness, trailing-edge closure) enforced directly.
 
-For purely inviscid objectives (target Cl, match Cp) the JAX core is used. For
-L/D, which needs viscous drag, the coupled viscous-inviscid solver (``solve_flow`` with a
-Reynolds number, :mod:`foil_lab.viscous`) is used.
+For purely inviscid objectives (target Cl, match Cp) the JAX core is used (the NumPy core of
+:mod:`foil_lab.inviscid` without JAX). For L/D, which needs viscous drag, the coupled
+viscous-inviscid solver (:func:`foil_lab.viscous.solve_single`) is used.
+
+Loads in this module are per unit chord about the quarter-chord point (0.25, 0): PARSEC sections
+have their leading edge at the origin and a unit chord.
 
 Trailing edge
 -------------
@@ -53,9 +56,24 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from scipy.optimize import minimize
 
+from . import inviscid as core
+from . import viscous
 from .generators import generate_parsec
 from .params import DESIGN
-from .solver import solve_flow
+
+
+def _inviscid(coords: np.ndarray, alpha_deg: float):
+    """(panel set, inviscid solution) of one body at ``alpha_deg``."""
+    ps = core.PanelSet.from_bodies([coords])
+    return ps, core.solve(ps, alpha_deg)
+
+
+def _viscous(coords: np.ndarray, alpha_deg: float, reynolds: float, fallback: bool) -> viscous.ViscousResult:
+    """Coupled viscous solution of one body (a closed trailing edge opened as by ``fl.analyze``);
+    ``fallback=False``: the direct start only, no continuation."""
+    body, _ = viscous.open_closed_te(coords)
+    return viscous.solve_single(body, float(alpha_deg), float(reynolds), viscous.VISCOUS, None,
+                                fallback=fallback)
 
 
 # Canonical PARSEC parameter order used as the optimization vector.
@@ -137,6 +155,12 @@ def _design_space(start: Dict[str, float], bounds: Dict[str, Tuple[float, float]
     return space, x0, [b[k] for k in space.keys]
 
 
+def _inviscid_cp(coords: np.ndarray, alpha_deg: float):
+    """(panel set, surface Cp at the panel midpoints in solver order)."""
+    ps, sol = _inviscid(coords, alpha_deg)
+    return ps, sol.cp
+
+
 def _make_jax_cl(num_panels: int):
     """Return a function coords->(cl,cm) using the pre-compiled JAX core.
 
@@ -151,8 +175,9 @@ def _make_jax_cl(num_panels: int):
         return f
 
     def f(coords, alpha_deg):
-        s = solve_flow(coords, alpha_deg)
-        return s.cl, s.cm_qc
+        _, sol = _inviscid(coords, alpha_deg)
+        b = core.body_loads(sol, 0)
+        return b.cl, b.cm
     return f
 
 
@@ -222,7 +247,7 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
 
     Drag source
     -----------
-    Lift and drag come from the coupled viscous-inviscid solver (``solve_flow`` with
+    Lift and drag come from the coupled viscous-inviscid solver (:func:`_viscous`, at
     ``reynolds``). During the search each candidate is solved from the direct start only (no
     continuation, ``fallback=False``): a candidate that does not converge from it counts as a
     failed candidate, is penalised and is never used for L/D (user, after report 12). The result
@@ -247,14 +272,14 @@ def maximize_ld(alpha_deg: float = 5.0, reynolds: float = 3e6,
 
     def _solve(coords, final=False):
         try:
-            s = solve_flow(coords, alpha_deg, reynolds=reynolds, fallback=final)
+            s = _viscous(coords, alpha_deg, reynolds, fallback=final)
         except (FloatingPointError, np.linalg.LinAlgError, ValueError):
             s = None
         if s is None or not s.converged:
             if not final:
                 n_failed[0] += 1
-            return (np.nan, np.nan, False) if s is None else (s.cl, s.cd_total, False)
-        return s.cl, s.cd_total, True
+            return (np.nan, np.nan, False) if s is None else (float(s.cl), float(s.cd), False)
+        return float(s.cl), float(s.cd), True
 
     def neg_ld(x):
         n_eval[0] += 1
@@ -322,33 +347,24 @@ def match_cp(target_coords: np.ndarray, alpha_deg: float = 5.0,
     n_eval = [0]
 
     # Target Cp sampled vs x on each surface, from the NumPy solver.
-    tgt = solve_flow(target_coords, alpha_deg)
-    tgt_x = target_coords[:-1, 0] if len(tgt.cp_dist) == len(target_coords) - 1 \
-        else np.linspace(0, 1, len(tgt.cp_dist))
-    # Use midpoints aligned with cp; resample by x for comparison.
-    from .solver import compute_panel_geometry
-    g_t = compute_panel_geometry(target_coords)
-    tx, ty = g_t[4], g_t[5]
-    tgt_upper = ty >= 0
-    # Sample target Cp at fixed x stations on each surface.
+    # Sample the Cp (panel midpoints, solver order) at fixed x stations on each surface.
     xs = np.linspace(0.02, 0.98, 40)
 
-    def sample_cp(coords, cp):
-        g = compute_panel_geometry(coords)
-        mx, my = g[4], g[5]
+    def sample_cp(ps, cp):
+        cp = np.asarray(cp)
+        mx, my = ps.mid_x, ps.mid_y
         up = my >= 0
         cu = np.interp(xs, mx[up][np.argsort(mx[up])], cp[up][np.argsort(mx[up])])
         lo = ~up
         cl_ = np.interp(xs, mx[lo][np.argsort(mx[lo])], cp[lo][np.argsort(mx[lo])])
         return cu, cl_
 
-    tgt_cu, tgt_cl = sample_cp(target_coords, tgt.cp_dist)
+    tgt_cu, tgt_cl = sample_cp(*_inviscid_cp(target_coords, alpha_deg))
 
     def objective(x):
         n_eval[0] += 1
         coords = generate_parsec(space.params(x), num_panels)
-        s = solve_flow(coords, alpha_deg)
-        cu, cl_ = sample_cp(coords, s.cp_dist)
+        cu, cl_ = sample_cp(*_inviscid_cp(coords, alpha_deg))
         err = np.mean((cu - tgt_cu) ** 2) + np.mean((cl_ - tgt_cl) ** 2)
         reg = regularization * np.mean(((x - x0) / (np.abs(x0) + 1e-3)) ** 2)
         val = err + reg

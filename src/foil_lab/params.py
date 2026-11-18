@@ -211,7 +211,7 @@ class ViscousParams:
         Default complex step (our choice: 0.08 s per Jacobian against 7.9 s for eager JAX at 161
         stations). Approved.
     closed_te_gap:
-        Viscous analysis through the interfaces (``fl.analyze``, ``fl.polar``, ``solver.solve_flow``
+        Viscous analysis through the interfaces (``fl.analyze``, ``fl.polar``, ``design.maximize_ld``
         and everything built on them) opens a closed (sharp) trailing edge to this gap, as a
         fraction of the chord, with ``geometry.set_trailing_edge_gap``, and records it in the
         result's corrections. The sharp-edge treatment is resolution-dependent and can converge to

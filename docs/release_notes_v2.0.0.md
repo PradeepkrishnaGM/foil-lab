@@ -25,6 +25,9 @@ one command. Flaps and multi-element sections are the headline capability.
 - The aspect-ratio correction no longer applies compressibility a second time; the sweep correction
   uses the normal-plane angle (lift slope proportional to cos(sweep)).
 - The approximate NACA 6-series generator is removed. `plotting.py` is replaced by `foil_lab.plot`.
+- The v1.3.1 interface (`solver.solve_flow`, `SolutionData`, `analysis.run_alpha_sweep`,
+  `advanced`, `ground_effect.solve_ground_effect`, `flowfield.compute_velocity_field`) is removed;
+  `fl.analyze` and `fl.polar` replace it. The constant-wing-loading polar is not carried over.
 
 ## Limits
 

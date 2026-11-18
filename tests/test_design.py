@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from foil_lab.generators import generate_naca4, generate_parsec
-from foil_lab.solver import solve_flow
+from tests import section
 from foil_lab.design import (design_for_cl, match_cp, default_start,
                              _vec_to_params, _params_to_vec, PARSEC_KEYS)
 
@@ -17,7 +17,7 @@ def test_param_vector_roundtrip():
 @pytest.mark.parametrize("target", [0.6, 0.9, 1.1])
 def test_design_for_cl_hits_target(target):
     r = design_for_cl(target_cl=target, alpha_deg=5.0, num_panels=100, max_iter=60)
-    achieved = solve_flow(r.coords, 5.0).cl
+    achieved = section.cl(r.coords, 5.0)
     assert abs(achieved - target) < 0.03, f"got {achieved}, wanted {target}"
 
 
@@ -44,8 +44,8 @@ def test_match_cp_recovers_similar_shape():
     t = r.coords[:, 1].max() - r.coords[:, 1].min()
     assert 0.10 < t < 0.14
     # Recovered Cl close to target Cl.
-    tgt_cl = solve_flow(target, 5.0).cl
-    got_cl = solve_flow(r.coords, 5.0).cl
+    tgt_cl = section.cl(target, 5.0)
+    got_cl = section.cl(r.coords, 5.0)
     assert abs(got_cl - tgt_cl) < 0.10
 
 
@@ -76,14 +76,14 @@ def test_maximize_ld_runs_on_the_coupled_viscous_solver(monkeypatch):
     angle) for about 2 minutes; the full demo is far slower (DECISIONS.md, Later, M7 speed)."""
     from foil_lab import design
     calls = []
-    real = design.solve_flow
+    real = design._viscous
 
-    def spy(*a, **kw):
-        s = real(*a, **kw)
-        calls.append((kw.get("reynolds"), bool(s.converged), s.iterations, kw.get("fallback")))
+    def spy(coords, alpha, reynolds, fallback):
+        s = real(coords, alpha, reynolds, fallback=fallback)
+        calls.append((reynolds, bool(s.converged), s.iterations, fallback))
         return s
 
-    monkeypatch.setattr(design, "solve_flow", spy)
+    monkeypatch.setattr(design, "_viscous", spy)
     r = design.maximize_ld(alpha_deg=4.0, reynolds=3e6, num_panels=60, max_iter=2)
     assert calls and all(re == 3e6 and it > 0 for re, _, it, _ in calls)   # Newton iterations ran
     assert calls[-1][3] is True and all(fb is False for *_, fb in calls[:-1])

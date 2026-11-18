@@ -1,8 +1,8 @@
 """C5 (M3): every interface with a Reynolds number reaches the coupled viscous solver.
 
-``fl.analyze`` / ``fl.polar`` (``re``), ``solver.solve_flow`` / ``solve_flow_sweep``, the command
-line, the batch runner, ``design.maximize_ld``, ``advanced`` and the GUI; the v1.3.1 viscous
-modules are gone. Fast tests check the routing with a stand-in for the solver; the end-to-end
+``fl.analyze`` / ``fl.polar`` (``re``), the command line, the batch runner,
+``design.maximize_ld`` and the GUI; the v1.3.1 viscous modules and the v1.3.1-shaped interface
+(``solver``, ``analysis``, ``advanced``) are gone. Fast tests check the routing with a stand-in for the solver; the end-to-end
 smoke tests run the real solver (about 10 s per point here) and are marked slow.
 """
 
@@ -15,11 +15,12 @@ import numpy as np
 import pytest
 
 import foil_lab as fl
-from foil_lab import solver, viscous
+from foil_lab import viscous
+from tests import section
 from foil_lab.generators import generate_naca4
 
 OLD_MODULES = ("boundary_layer", "bl_integral", "transition", "vii", "vii_newton", "vii_qs",
-               "viscous_mods")
+               "viscous_mods", "solver", "analysis", "advanced")
 
 
 @pytest.mark.parametrize("name", OLD_MODULES)
@@ -51,29 +52,23 @@ def fake_viscous(monkeypatch):
     return calls
 
 
-def test_solve_flow_with_reynolds_uses_the_coupled_solver(fake_viscous):
-    af = generate_naca4("2412", 120)
-    s = solver.solve_flow(af, 4.0, reynolds=1e6, n_crit=7.0, trip_x_upper=0.1)
-    assert fake_viscous == [("point", 4.0, 1e6, 7.0, {(0, "upper"): 0.1})]
-    assert s.converged and s.cd_visc == 0.01 and s.cd_friction == 0.006 and s.xtr_upper == 0.3
-    sols = solver.solve_flow_sweep(af, [0.0, 2.0], 1e6)
-    assert fake_viscous[-1][0] == "sweep" and [x.alpha_deg for x in sols] == [0.0, 2.0]
+def test_analyze_with_re_uses_the_coupled_solver(fake_viscous):
+    af = fl.Airfoil.from_coords(generate_naca4("2412", 120))
+    r = fl.analyze(af, 4.0, re=1e6, n_crit=7.0, trip_upper=0.1, repanel=False)
+    assert fake_viscous == [("point", 4.0, 1e6 / af.chord, 7.0, {(0, "upper"): 0.1})]
+    assert r.converged and r.method != "inviscid" and r.xtr_upper == 0.3
+    p = fl.polar(af, [0.0, 2.0], re=1e6, repanel=False)
+    assert fake_viscous[-1][0] == "sweep" and list(p.alpha) == [0.0, 2.0]
 
 
-def test_solve_flow_without_reynolds_stays_inviscid(fake_viscous):
-    s = solver.solve_flow(generate_naca4("2412", 120), 4.0)
-    assert not fake_viscous and s.cd_visc == 0.0 and s.converged
+def test_analyze_without_re_stays_inviscid(fake_viscous):
+    r = fl.analyze(fl.Airfoil.naca("2412"), 4.0)
+    assert not fake_viscous and r.cd is None and r.converged
 
 
 def test_viscous_requests_outside_the_solver_raise():
-    af = generate_naca4("2412", 120)
     with pytest.raises(NotImplementedError):
-        solver.solve_flow(af, 4.0, reynolds=1e6, mach=0.3)
-    with pytest.raises(NotImplementedError):
-        solver.solve_flow([af, af + [1.5, 0.0]], 4.0, reynolds=1e6)
-    from foil_lab.ground_effect import solve_ground_effect
-    with pytest.raises(NotImplementedError):
-        solve_ground_effect(af, 4.0, 0.5, reynolds=1e6)
+        fl.analyze(fl.Airfoil.naca("2412"), 4.0, re=1e6, mach=0.3)
     with pytest.raises(ValueError):
         fl.analyze(fl.Airfoil.naca("2412"), 4.0, re=-1e6)
 
@@ -130,18 +125,18 @@ def test_batch_rows_carry_the_solver_flag_and_drag_parts(fake_viscous):
 
 
 def test_maximize_ld_uses_the_coupled_solver(monkeypatch):
-    """Every L/D evaluation is ``solve_flow`` with the Reynolds number (no other drag path): the
+    """Every L/D evaluation is the coupled solver at the Reynolds number (no other drag path): the
     search from the direct start only, the final design with the full single-point logic."""
     from foil_lab import design
     seen = []
 
-    def fake(coords, alpha, reynolds=0.0, fallback=True, **kw):
+    def fake(coords, alpha, reynolds, fallback):
         seen.append((reynolds, fallback))
-        s = solver.solve_flow(coords, alpha)
-        s.reynolds, s.cd_visc = reynolds, 0.01
-        return s
+        return viscous.ViscousResult(alpha=alpha, reynolds=reynolds, converged=True, iterations=3,
+                                     reason="", cl=section.cl(coords, alpha), cd=0.01, cdf=0.006,
+                                     cdp=0.004, cm=0.0, xtr_upper=0.3, xtr_lower=0.6, path="march")
 
-    monkeypatch.setattr(design, "solve_flow", fake)
+    monkeypatch.setattr(design, "_viscous", fake)
     res = design.maximize_ld(alpha_deg=4.0, reynolds=2e6, max_iter=1)
     assert seen and {re for re, _ in seen} == {2e6}
     assert seen[-1][1] is True and all(fb is False for _, fb in seen[:-1])
@@ -151,12 +146,12 @@ def test_maximize_ld_uses_the_coupled_solver(monkeypatch):
 def test_maximize_ld_penalises_unconverged_candidates(monkeypatch):
     from foil_lab import design
 
-    def fake(coords, alpha, reynolds=0.0, **kw):
-        s = solver.solve_flow(coords, alpha)
-        s.reynolds, s.cd_visc, s.converged = reynolds, 1e-6, False
-        return s
+    def fake(coords, alpha, reynolds, fallback):
+        return viscous.ViscousResult(alpha=alpha, reynolds=reynolds, converged=False, iterations=3,
+                                     reason="", cl=section.cl(coords, alpha), cd=1e-6, cdf=1e-6,
+                                     cdp=0.0, cm=0.0, xtr_upper=0.3, xtr_lower=0.6, path="march")
 
-    monkeypatch.setattr(design, "solve_flow", fake)
+    monkeypatch.setattr(design, "_viscous", fake)
     res = design.maximize_ld(alpha_deg=4.0, reynolds=2e6, max_iter=1)
     assert not res.success and "NOT converged" in res.message
     assert all(h == 0.0 for h in res.history)
@@ -191,14 +186,17 @@ def test_closed_trailing_edge_kept_sharp_carries_the_wake_drag_warning():
 
 
 @pytest.mark.slow
-def test_run_alpha_sweep_and_batch_end_to_end():
-    from foil_lab.analysis import run_alpha_sweep
+def test_polar_and_batch_end_to_end():
+    """The problem of the former ``run_alpha_sweep`` test: the raw generator points at a Reynolds
+    number of 3e6 per unit length (``re`` is per reference chord, here 1.000078). At ``re=3e6``
+    itself the 0 deg point does not converge on these points (DECISIONS.md, Later)."""
     from foil_lab.batch import build_matrix, run_batch
     af = generate_naca4("2412", 120)
-    pol = run_alpha_sweep(af, 0.0, 2.0, 2.0, reynolds=3e6)
-    assert all(s.converged for s in pol.solutions) and np.all(pol.cds > 0.003)
+    foil = fl.Airfoil.from_coords(af)
+    pol = fl.polar(foil, [0.0, 2.0], re=3e6 * foil.chord, repanel=False)
+    assert np.all(pol.converged) and np.all(pol.cd > 0.003)
     rows = run_batch(build_matrix({"a": af}, alpha=[2.0], re=[3e6]), {"a": af})
-    assert rows[0]["converged"] and abs(rows[0]["cd"] - pol.cds[1]) <= 1e-3
+    assert rows[0]["converged"] and abs(rows[0]["cd"] - pol.cd[1]) <= 1e-3
 
 
 @pytest.mark.slow
@@ -318,8 +316,6 @@ def test_closed_trailing_edge_is_opened_and_recorded():
 
 
 def test_interfaces_record_the_opened_trailing_edge(fake_viscous):
-    s = solver.solve_flow(generate_naca4("2412", 120, "closed"), 4.0, reynolds=1e6)
-    assert len(s.corrections) == 1 and "opened" in s.corrections[0]
     r = fl.analyze(fl.Airfoil.naca("2412", trailing_edge="closed"), 4.0, re=1e6)
     assert len(r.corrections) == 1 and "opened" in r.corrections[0]
     assert fl.analyze(fl.Airfoil.naca("2412"), 4.0, re=1e6).corrections == ()
@@ -331,6 +327,7 @@ def test_sharp_naca2412_re3e6_0deg_now_agrees_with_xfoil_at_the_small_gap():
     sharp 0.2336). With the default opening (0.0005 c), Cl is within 0.03 of XFOIL 6.99 at 0.001 c
     (Cl 0.2425; PANE 160, N_crit 9; step 1 after report 10), or the point is reported as not
     converged."""
-    s = solver.solve_flow(generate_naca4("2412", 160, "closed"), 0.0, reynolds=3e6)
+    s = fl.analyze(fl.Airfoil.from_coords(generate_naca4("2412", 160, "closed")), 0.0, re=3e6,
+                   repanel=False)
     assert s.corrections
     assert (not s.converged) or abs(s.cl - 0.2425) <= 0.03, (s.cl, s.path)

@@ -3263,10 +3263,54 @@ limits printed next to them.
 - **Release**: a draft of the release notes is in docs/release_notes_v2.0.0.md, for the user to publish
   (tag and GitHub release are the user's).
 
+## After M9: v1.3.1-shaped layer retired
+
+### Decisions (autonomous, for review; 2026-11-18)
+
+Reason: the project rules ask for replaced code to be deleted, with no parallel implementations; the old
+layer was a second load and correction path beside `fl.analyze` (its own 3D correction, its own
+ground-effect solve, unit chord and moment about (0.25, 0) whatever the geometry).
+
+- **Deleted**: `foil_lab/solver.py` (`solve_flow`, `solve_flow_sweep`, `SolutionData`,
+  `compute_panel_geometry`, `loads_from_cp`), `foil_lab/analysis.py` (`run_alpha_sweep`,
+  `find_zero_lift_angle`, `calculate_aerodynamic_center`), `foil_lab/advanced.py`
+  (`solve_swept_wing`, `solve_constant_wing_loading`), `ground_effect.solve_ground_effect`,
+  `corrections.apply_3d_corrections`, `flowfield.compute_velocity_field`.
+- **Moved**: `drag_is_plausible`, `viscous_params`, `trips_dict` to `foil_lab.viscous`.
+  `flowfield.field_on_points` is the one grid evaluation, used by `velocity_field` and the
+  far-field lift test.
+- **design.py** calls the cores directly: the inviscid core for target Cl and match Cp (per unit
+  chord, moment about (0.25, 0), as before; PARSEC sections have a unit chord at the origin) and
+  `viscous.solve_single` for L/D (direct start only during the search, as before). Not through
+  `fl.analyze`, because `maximize_ld` needs `fallback=False`, which the API does not expose. The
+  numbers are those of the old path (same calls).
+- **Benchmark baseline adapter** (`baseline_v131`): inviscid rows from `inviscid.body_loads`, the
+  same numbers as before.
+- **Constant wing loading** is removed without a replacement: it is not in SPEC.md, not in the README
+  and had no validation. Recoverable from git history (`advanced.py` at `c37b127`) if wanted on the
+  new API.
+- **Tests**: inviscid checks on raw coordinates use `tests/section.py` (the core's unit-chord loads,
+  identical to what `solve_flow` returned, so no tolerance changed). Viscous, sweep and ground tests
+  go through `fl.analyze` with `repanel=False`. Removed as duplicates of stricter API tests in
+  `tests/test_corrections.py`: the legacy ground-effect mirror and ground-streamline tests (API:
+  1e-12 and 1e-10 against 1e-6 and 1e-8), Kármán-Tsien once and aspect ratio with Mach (API: 1e-12
+  against 1e-3). Removed with their features: constant wing loading, the free-surface
+  `NotImplementedError`, the `solve_flow` routing tests (the API routing tests remain).
+  `tests/test_viscous_interfaces.py` checks that `solver`, `analysis` and `advanced` no longer
+  import.
+- `fl.analyze` on the same points gives the same surface Cp as the old path; its Cl and Cm differ by
+  up to 5e-4 for a cambered NACA section because they use the section's own chord and
+  quarter-chord point (SPEC.md 3), not a unit chord at the origin.
+
 ## Later
 
-- M8: retire the v1.3.1-shaped layer (`solver.solve_flow`, `SolutionData`, `analysis`, `advanced`,
-  `ground_effect.solve_ground_effect`) after moving `design.py` and the examples to the API.
+- After M9 (found while retiring the old layer): NACA 2412 from the generator (120 panels, not
+  repanelled), Re 3e6: the 0 deg point converges at Re 3e6 per unit length (Cl 0.2453, reached from
+  2 deg by continuation) but not at 3e6 / 1.000078 (the same Re per the section's own chord): the
+  start from the march diverges (Cl -7.9e6, reported `converged=False`) and `reach_from_nearest`
+  from the converged 2 deg point does not recover it. A 0.008 % change in Re flips the outcome. Part
+  of the single-point convergence item below; not checked on the repanelled `fl.Airfoil.naca`.
+  The ported test keeps the old problem (Re 3e6 per unit length).
 - M7 (measured while making the notebook): the viscous polar of NACA 2412 at Re 1e6 takes about 6 s
   per point on the arc-length repanelled section but about 15 s on the canonical benchmark file
   (generator spacing), and 3 deg steps take longer than 2 deg steps. Part of the solver-speed item.

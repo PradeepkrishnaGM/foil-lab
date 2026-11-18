@@ -12,9 +12,14 @@ import time
 
 import numpy as np
 
+import foil_lab as fl
 from foil_lab.generators import generate_naca4
-from foil_lab.solver import solve_flow
 from foil_lab.design import design_for_cl, match_cp, maximize_ld
+
+
+def inviscid_cl(coords, alpha):
+    """Inviscid Cl of a coordinate array (no repanelling)."""
+    return fl.analyze(fl.Airfoil.from_coords(coords), alpha, repanel=False).cl
 
 
 def main():
@@ -23,17 +28,17 @@ def main():
         t = time.perf_counter()
         r = design_for_cl(target_cl=target, alpha_deg=5.0, num_panels=120,
                           max_iter=60)
-        got = solve_flow(r.coords, 5.0).cl
+        got = inviscid_cl(r.coords, 5.0)
         tc = r.coords[:, 1].max() - r.coords[:, 1].min()
         print(f"  target Cl={target:.2f} -> achieved {got:.4f}  "
               f"(t/c={tc:.3f}, {r.n_evals} evals, {time.perf_counter()-t:.1f}s)")
 
     print("\n=== 2. Inverse design: match a target Cp (recover NACA 2412) ===")
     target = generate_naca4("2412", 120)
-    tgt_cl = solve_flow(target, 5.0).cl
+    tgt_cl = inviscid_cl(target, 5.0)
     t = time.perf_counter()
     r = match_cp(target, alpha_deg=5.0, num_panels=120, max_iter=60)
-    got_cl = solve_flow(r.coords, 5.0).cl
+    got_cl = inviscid_cl(r.coords, 5.0)
     tc = r.coords[:, 1].max() - r.coords[:, 1].min()
     print(f"  target: NACA 2412 (t/c=0.12, Cl={tgt_cl:.3f})")
     print(f"  recovered: t/c={tc:.3f}, Cl={got_cl:.3f}, {r.message}")
@@ -49,9 +54,9 @@ def main():
     print("\n=== 3. Maximize L/D at 4 deg, Re 3e6 (coupled viscous solver; reduced: 60 panels, "
           "2 iterations) ===")
     t = time.perf_counter()
-    start = solve_flow(generate_naca4("2412", 120), 4.0, reynolds=3e6)
-    print(f"  reference NACA 2412: Cl={start.cl:.3f} Cd={start.cd_total:.5f} "
-          f"L/D={start.cl / start.cd_total:.1f} converged={start.converged}")
+    start = fl.analyze(fl.Airfoil.naca("2412"), 4.0, re=3e6)
+    print(f"  reference NACA 2412: Cl={start.cl:.3f} Cd={start.cd:.5f} "
+          f"L/D={start.cl / start.cd:.1f} converged={start.converged}")
     r = maximize_ld(alpha_deg=4.0, reynolds=3e6, num_panels=60, max_iter=2)
     print(f"  optimised PARSEC: {r.message}, success={r.success}")
     print(f"  ({r.n_evals} evals, {time.perf_counter()-t:.0f}s)")
