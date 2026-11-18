@@ -249,9 +249,34 @@ class ViscousParams:
     single_point_max_cold: int = 10
 
 
+@dataclass(frozen=True)
+class CorrectionParams:
+    """Compressibility, sweep and finite-wing corrections (``foil_lab.corrections``; M6).
+
+    Attributes
+    ----------
+    gamma:
+        Ratio of specific heats of the gas, for the critical pressure coefficient.
+    oswald:
+        Span efficiency e of the induced drag CL^2 / (pi e AR); 1 is the elliptic loading that the
+        lifting-line lift factor assumes.
+    lift_slope_step:
+        Angle step (deg) of the central difference that gives the infinite wing's lift slope for the
+        aspect-ratio correction (two extra inviscid solves of the same geometry and conditions).
+    max_sweep:
+        Largest sweep angle magnitude (deg) accepted by simple sweep theory.
+    """
+
+    gamma: float = 1.4
+    oswald: float = 1.0
+    lift_slope_step: float = 0.5
+    max_sweep: float = 60.0
+
+
 XFOIL = XfoilParams()
 SWEEP = SweepParams()
 BENCHMARK = BenchmarkParams()
 GEOMETRY = GeometryParams()
 DESIGN = DesignParams()
 VISCOUS = ViscousParams()
+CORRECTIONS = CorrectionParams()

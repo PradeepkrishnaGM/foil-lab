@@ -6,9 +6,9 @@ Two features:
    instead of fixed Reynolds number, iterating speed/Re to convergence so the
    polar reflects a real trimmed flight condition.
 
-2. Busemann simple-sweep approximation -- estimate the aerodynamics of a swept
-   wing by running the 2D solver on the freestream component normal to the
-   leading edge and recombining.
+2. Simple sweep theory -- estimate the aerodynamics of an infinite swept wing by
+   running the 2D solver on the freestream component normal to the leading edge and
+   recombining (foil_lab.corrections).
 
 Both are thin wrappers around :func:`solver.solve_flow`; they add no per-panel
 cost beyond the solves they request. With a Reynolds number each solve is the coupled
@@ -140,43 +140,24 @@ def solve_swept_wing(
     aspect_ratio: float = 0.0,
     v_inf: float = 1.0,
 ) -> SweptResult:
-    """Busemann simple-sweep: solve in the plane normal to the leading edge.
+    """Simple sweep theory (:func:`foil_lab.corrections.to_normal_plane`, the same correction
+    ``fl.analyze(..., sweep=...)`` applies): the section is solved in the plane normal to the leading
+    edge at alpha_n = atan(tan(alpha) / cos(sweep)), Mach and Reynolds number times cos(sweep); lift
+    and moment are referred to the freestream with cos^2(sweep), drag with cos^3(sweep).
 
-    Decomposition
-    -------------
-    Only the freestream component normal to the leading edge develops pressure
-    on the section; the spanwise (tangential) component sweeps along it. With
-    sweep angle ``Lambda``:
-
-        V_n = V_inf * cos(Lambda)
-
-    The section is solved at the *same geometric incidence* but with the reduced
-    normal dynamic pressure. Coefficients defined on the full freestream q are
-    therefore scaled by ``cos^2(Lambda)``. The normal-plane Mach and Reynolds
-    are likewise based on ``V_n`` (Mach scales with cos(Lambda), Re with
-    cos(Lambda)). This is the classic infinite-swept-wing result and is exact in
-    the limit of an infinite-span constant-section wing.
+    v1.3.1 solved the normal plane at the geometric alpha, which made the lift slope scale with
+    cos^2(sweep) instead of cos(sweep) (DECISIONS.md M6).
     """
-    lam = np.deg2rad(sweep_deg)
-    cos_l = np.cos(lam)
-    if cos_l <= 1e-6:
-        raise ValueError("Sweep angle too close to 90 degrees.")
-
-    # Normal-plane flight parameters.
-    mach_n = mach * cos_l
-    re_n = reynolds * cos_l
-
-    # The section sees the same geometric alpha; solve in the normal plane.
-    sol_n = solve_flow(coords, alpha_deg, v_inf=v_inf, mach=mach_n,
-                       reynolds=re_n, aspect_ratio=aspect_ratio)
-
-    # Coefficients on the full freestream q_inf are reduced by cos^2(Lambda).
-    scale = cos_l ** 2
+    from .corrections import from_normal_plane, to_normal_plane
+    plane = to_normal_plane(alpha_deg, sweep_deg, mach, reynolds)
+    sol_n = solve_flow(coords, plane.alpha, v_inf=v_inf, mach=plane.mach,
+                       reynolds=plane.reynolds, aspect_ratio=aspect_ratio)
+    cl, cd, cm = from_normal_plane(sol_n.cl, sol_n.cd_total, sol_n.cm_qc, plane)
     return SweptResult(
         sweep_deg=sweep_deg,
-        alpha_eff_deg=alpha_deg,
-        cl_3d=sol_n.cl * scale,
-        cd_3d=sol_n.cd_total * scale,
-        cm_qc_3d=sol_n.cm_qc * scale,
+        alpha_eff_deg=plane.alpha,
+        cl_3d=cl,
+        cd_3d=cd,
+        cm_qc_3d=cm,
         normal_solution=sol_n,
     )
