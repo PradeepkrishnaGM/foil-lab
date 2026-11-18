@@ -21,10 +21,9 @@ from foil_lab.geometry import (repanel_cosine, rotate, scale, scale_thickness_ca
 
 # --------------------------------------------------------------------------------------- #
 # Closed NACA geometry pinned (SHA-256 recorded before the default changed, M2). The reference
-# arrays in tests/data/closed_naca are checked against those hashes bit for bit; the generated
-# geometry is compared with them to 4 units in the last place, because numpy's sin/cos/power can
-# differ in the last bit between CPU types (GitHub runners). Entries that are round-off zeros
-# (|value| < 1e-12, at the leading and trailing edge) are compared to 4 ulp of the unit chord.
+# arrays in tests/data/closed_naca are checked against those hashes bit for bit; every generated
+# coordinate is within 4 ulp of the unit chord (8.9e-16) of them, because numpy's sin/cos/power can
+# differ in the last bit between CPU types (GitHub runners: at most 3.4e-17 chord, DECISIONS.md).
 # --------------------------------------------------------------------------------------- #
 _CLOSED_DIR = Path(__file__).parent / "data" / "closed_naca"
 _MAX_ULP = 4
@@ -47,14 +46,8 @@ def test_closed_naca_pinned(code, n):
     gen = generate_naca5 if len(code) == 5 else generate_naca4
     a = gen(code, n, trailing_edge="closed")
     assert a.shape == ref.shape and a.dtype == ref.dtype
-    big = np.abs(ref) >= 1e-12
     d = np.abs(a - ref)
-    ulp = d[big] / np.spacing(np.abs(ref[big]))
-    k = int(np.argmax(ulp))
-    info = (f"max abs diff {d.max():.3e}; max {ulp[k]:.0f} ulp at value {ref[big][k]:.3e} "
-            f"(abs diff {d[big][k]:.3e})")
-    assert ulp.max() <= _MAX_ULP, info
-    assert np.all(d[~big] <= _MAX_ULP * np.spacing(1.0)), info
+    assert d.max() <= _MAX_ULP * np.spacing(1.0), f"max abs diff {d.max():.3e} chord"
 
 
 def test_naca_default_is_open():

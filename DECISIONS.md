@@ -3320,12 +3320,14 @@ ground-effect solve, unit chord and moment about (0.25, 0) whatever the geometry
   the 8 `test_closed_naca_pinned` cases, which compared a SHA-256 of the generated closed NACA
   coordinates. 3.12 and 3.13 both had numpy 2.5.5, so the last-bit difference comes from the
   runner's CPU (numpy's vectorised sin/cos/power), not from our code.
-- User's decision: compare to 4 ulp. The reference arrays (tests/data/closed_naca, 8 files, 32 KB)
-  were regenerated here and match the M2 hashes bit for bit; the test checks each file against its
-  hash, then the generated geometry against it to 4 ulp per entry. Entries that are round-off zeros
-  (|value| < 1e-12; about 1.7e-17 at the leading and trailing edge) are compared to 4 ulp of the
-  unit chord (8.9e-16), because a relative ulp is meaningless there (our choice, for review). The
-  bit-for-bit determinism test on one machine is unchanged.
+- Reference arrays (tests/data/closed_naca, 8 files, 32 KB) regenerated here; they match the M2
+  hashes bit for bit, and the test checks each file against its hash.
+- First rule (user): 4 ulp per entry. It failed in the next CI runs (3 and then 4 of 5 jobs): up to
+  2448 ulp, on small coordinates near the leading edge (|y| 1e-4 to 2e-3). Measured absolute
+  difference on the runners: at most 3.4e-17 chord (identical on every failing job).
+- Rule now (user's decision): every coordinate within 4 ulp of the unit chord, 4 x 2.2e-16 =
+  8.9e-16 chord (26 times the measured difference). The bit-for-bit determinism test on one machine
+  is unchanged.
 
 ## Later
 
