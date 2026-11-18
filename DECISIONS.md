@@ -3255,6 +3255,11 @@ limits printed next to them.
   Co-Authored-By trailer or a Gmail address; no added line in any commit contains those. One
   committed docstring (M7, tests/test_notebook.py) named the local brief file; removed at
   HEAD; it remains in the history of that one commit (rewriting history needs the user's approval).
+- **Release benchmark rerun** on commit 379f3e9 (version 2.0.0): the viscous matrix (49 cases, 1225
+  rows; 60 min on 5 workers) and the flap cases (60 cases; 58 min) are identical, cell for cell apart
+  from the run time, to the M4 runs the earlier reports used (`benchmark_output/m4_m3check`,
+  `benchmark_output/m4_full`). VALIDATION.md is generated from the release run
+  (`benchmark_output/v2_release`, `benchmark_output/v2_flaps`; not in git).
 - **Release**: a draft of the release notes is in docs/release_notes_v2.0.0.md, for the user to publish
   (tag and GitHub release are the user's).
 
