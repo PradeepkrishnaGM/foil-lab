@@ -3223,6 +3223,41 @@ limits printed next to them.
 - Fast suite 475 tests, 52-56 s depending on load (no single fast test above 2 s).
 - **Not ticked:** the M8 box "Reviewed by me over remote desktop" waits for the user.
 
+## M9: Release
+
+### Decisions (autonomous, for review; 2026-11-18)
+
+- **README** rewritten for users (what it is, install, a 30-second example whose printed numbers were
+  checked, images, capabilities, validation summary linking VALIDATION.md, SPEC.md section 5 limits
+  plus the flap and multi-element limits, methods). The v1.x "What's new" sections moved to
+  CHANGELOG.md (archived, marked as describing v1.x), with a v2.0.0 entry on top. TESTING.md replaced
+  by a short current guide.
+- **Images** made headless by `docs/make_images.py` (committed PNGs, 450 KB in total): a viscous polar
+  against XFOIL on the same file, a plain flap with Cp, slotted-flap streamlines.
+- **VALIDATION.md** is generated: `python -m foil_lab.benchmark validation` (`benchmark/validation.py`)
+  reads the viscous and flap benchmark rows and the committed references and writes the tables with
+  the targets marked. The release document is generated from a full rerun on the release code (see
+  below), not from the M4 run.
+- **Flap references committed** (120 CSV files, 0.5 MB) into the package data with tests for their
+  provenance, Chinge column and canonical-file checksums, as SPEC.md 4.1 asks for every reference.
+- **LICENSE** (MIT, copyright holder the GitHub user name), **THIRD_PARTY.md** (dependencies with
+  licences, XFOIL as an external program only, the UIUC database downloaded on demand, the Williams
+  tables in the tests), **docs/methods.md** (every method with its source and whether the citation
+  was checked with the source at hand; the unverified ones are listed as such, not removed).
+- **Packaging**: version 2.0.0; SPDX licence expression and licence files (setuptools >= 77; the old
+  table form is deprecated); sdist and wheel build cleanly; the wheel installed into a separate
+  Python 3.12 environment runs and finds its reference data.
+- **GitHub Actions** (`.github/workflows/build.yml`): on `v*` tags and manual start only; the fast
+  suite on Python 3.10 to 3.14, then sdist and wheel as an artifact. Not run yet (no tag, no manual
+  start). No tag is created and nothing is published (project rules).
+- **History check** (all branches, 154 commits): every author and committer email is
+  125736196+PradeepkrishnaGM@users.noreply.github.com; no commit message mentions an AI tool, a
+  Co-Authored-By trailer or a Gmail address; no added line in any commit contains those. One
+  committed docstring (M7, tests/test_notebook.py) named the local brief file; removed at
+  HEAD; it remains in the history of that one commit (rewriting history needs the user's approval).
+- **Release**: a draft of the release notes is in docs/release_notes_v2.0.0.md, for the user to publish
+  (tag and GitHub release are the user's).
+
 ## Later
 
 - M8: retire the v1.3.1-shaped layer (`solver.solve_flow`, `SolutionData`, `analysis`, `advanced`,

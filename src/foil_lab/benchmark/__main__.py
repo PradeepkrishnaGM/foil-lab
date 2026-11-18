@@ -7,6 +7,7 @@
     python -m foil_lab.benchmark all          # all three, in order
     python -m foil_lab.benchmark viscous      # run the coupled viscous solver (M3, both closure sets)
     python -m foil_lab.benchmark viscous-report  # its SPEC.md 4.1 tables (m3_viscous/report.md)
+    python -m foil_lab.benchmark validation --output DIR --flap-output DIR --file VALIDATION.md
 
 Generated output goes to ``benchmark_output/`` (gitignored). Reference CSVs are written into
 the package data directory so that they can be committed. No command writes the committed before
@@ -24,7 +25,8 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point; returns the process exit code."""
     p = argparse.ArgumentParser(prog="python -m foil_lab.benchmark", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=["references", "run", "report", "all", "viscous", "viscous-report"])
+    p.add_argument("command", choices=["references", "run", "report", "all", "viscous", "viscous-report",
+                                          "validation"])
     p.add_argument("--output", default="benchmark_output", help="output folder (default: %(default)s)")
     p.add_argument("--workers", type=int, default=None, help="parallel processes")
     p.add_argument("--sections", default=None,
@@ -33,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="comma-separated closure sets for 'viscous' (default: fidkowski2022; "
                         "drela1987 is parked and not benchmarked)")
     p.add_argument("--reynolds", default=None, help="comma-separated Reynolds numbers for 'viscous'")
+    p.add_argument("--flap-output", default="benchmark_output/m4_full",
+                   help="flap benchmark folder for 'validation' (default: %(default)s)")
+    p.add_argument("--file", default="VALIDATION.md", help="document written by 'validation'")
     args = p.parse_args(argv)
     out = Path(args.output)
     if args.command in ("references", "all"):
@@ -51,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
                    closure_sets=tuple(args.closure_sets.split(",")) if args.closure_sets else CLOSURE_SETS,
                    sections=tuple(args.sections.split(",")) if args.sections else None,
                    reynolds=tuple(float(v) for v in args.reynolds.split(",")) if args.reynolds else None)
+    if args.command == "validation":
+        from .validation import write_validation
+        print(f"wrote {write_validation(out, Path(args.flap_output), Path(args.file))}")
     if args.command in ("viscous", "viscous-report"):
         from .viscous_run import write_report as write_viscous_report
         write_viscous_report(output_root=out)

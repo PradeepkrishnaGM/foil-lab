@@ -1,20 +1,20 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "foil-lab"
-version = "2.0.0.dev0"
+version = "2.0.0"
 description = "2D panel-method solver for single, flapped and multi-element airfoil sections, with a coupled viscous-inviscid solver and its accuracy against XFOIL published."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "Foil Lab contributors" }]
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY.md"]
+authors = [{ name = "PradeepkrishnaGM" }]
 keywords = ["aerodynamics", "airfoil", "panel-method", "CFD", "XFOIL", "aircraft"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.12",
