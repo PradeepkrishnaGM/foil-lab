@@ -10,12 +10,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import foil_lab as fl
 from foil_lab import inviscid as core
-from foil_lab.flowfield import compute_velocity_field
+from foil_lab.flowfield import field_on_points
 from foil_lab.generators import generate_naca4, generate_naca5
 from foil_lab.geometry import repanel_cosine, rotate, scale, translate
-from foil_lab.ground_effect import solve_ground_effect
-from foil_lab.solver import loads_from_cp, solve_flow
+from tests import section
 
 
 def _xfail(milestone: str, why: str):
@@ -67,10 +67,10 @@ def _kt(n_panels: int, alpha_deg: float):
 
 def _kt_error(n_panels: int, alpha_deg: float) -> float:
     coords, z_mid, cp_exact = _kt(n_panels, alpha_deg)
-    sol = solve_flow(coords, alpha_deg)
+    sol = section.solve(coords, alpha_deg)
     g = core.PanelSet.from_bodies(coords)
     # The solver orders panels clockwise; our nodes are counter-clockwise: reverse to match.
-    cp_num = sol.cp_dist[::-1]
+    cp_num = np.asarray(sol.cp)[::-1]
     assert np.allclose(g.mid_x[::-1], 0.5 * (coords[:-1, 0] + coords[1:, 0]))
     x_le, x_te = coords[:, 0].min(), coords[0, 0]
     xc = (z_mid.real - x_le) / (x_te - x_le)
@@ -104,8 +104,8 @@ def test_two_different_bodies_far_apart_recover_isolated_lift():
     """
     a, b = generate_naca4("0012", 160), generate_naca4("4412", 160)
     cl_a, cl_b = _two_body_cl([a, translate(b, 0.0, 50.0)], 4.0)
-    assert abs(cl_a / solve_flow(a, 4.0).cl - 1.0) <= 0.005
-    assert abs(cl_b / solve_flow(b, 4.0).cl - 1.0) <= 0.005
+    assert abs(cl_a / section.cl(a, 4.0) - 1.0) <= 0.005
+    assert abs(cl_b / section.cl(b, 4.0) - 1.0) <= 0.005
 
 
 def test_mirrored_pair_lift_equal_and_opposite():
@@ -117,24 +117,10 @@ def test_mirrored_pair_lift_equal_and_opposite():
 
 
 # --------------------------------------------------------------------------------------- #
-# Ground effect against the mirrored two-body problem in free air
+# Ground effect against the mirrored two-body problem: tests/test_corrections.py
+# (``fl.analyze`` with ``ground_height`` equals the free-air mirrored pair to 1e-12; the normal
+# velocity on the ground is below 1e-10)
 # --------------------------------------------------------------------------------------- #
-def test_ground_effect_matches_mirror_problem():
-    """Section rotated 4 deg about c/4 at h/c = 0.5, stream parallel to the ground: the image
-    solution and the free-air mirrored pair agree to |dCl| <= 1e-6."""
-    sec = rotate(generate_naca4("2412", 160), 4.0, pivot=(0.25, 0.0))
-    ge = solve_ground_effect(sec, 0.0, height=0.5)
-    real = translate(sec, 0.0, 0.5)
-    cl_pair = _two_body_cl([real, real * np.array([1.0, -1.0])], 0.0)[0]
-    assert abs(ge.cl - cl_pair) <= 1e-6
-
-
-def test_ground_plane_is_a_streamline():
-    """Normal velocity on the ground plane y = 0 is zero to 1e-8."""
-    sec = rotate(generate_naca4("2412", 160), 4.0, pivot=(0.25, 0.0))
-    ge = solve_ground_effect(sec, 0.0, height=0.5)
-    _, _, _, v = compute_velocity_field(ge, x_bounds=(-1.0, 2.0), y_bounds=(0.0, 0.0), grid_res=61)
-    assert np.max(np.abs(v)) <= 1e-8
 
 
 # --------------------------------------------------------------------------------------- #
@@ -142,7 +128,7 @@ def test_ground_plane_is_a_streamline():
 # --------------------------------------------------------------------------------------- #
 def _pressure_and_circulation_cl(af, alpha_deg):
     sol = core.solve(core.PanelSet.from_bodies(af), alpha_deg)
-    cl_p = solve_flow(af, alpha_deg).cl
+    cl_p = section.cl(af, alpha_deg)
     cl_g = abs(2.0 * float(sol.circulation[0]))               # Kutta-Joukowski, c = V = 1
     return cl_p, cl_g
 
@@ -155,8 +141,8 @@ def test_pressure_lift_equals_circulation_lift():
 
 def _farfield_cl(sol, alpha_deg, half=10.0, res=801):
     """Lift from momentum flux and pressure on a square contour of side 2*half (rho = V = 1)."""
-    x, y, u, v = compute_velocity_field(sol, x_bounds=(0.5 - half, 0.5 + half),
-                                        y_bounds=(-half, half), grid_res=res)
+    x, y = np.meshgrid(np.linspace(0.5 - half, 0.5 + half, res), np.linspace(-half, half, res))
+    u, v = field_on_points(sol.panels, sol.gamma, alpha_deg, x, y)
     p = 0.5 * (1.0 - (u**2 + v**2))
     fx = fy = 0.0
     # (edge selector, outward normal) for bottom, top, left, right
@@ -176,8 +162,8 @@ def _farfield_cl(sol, alpha_deg, half=10.0, res=801):
 def test_farfield_lift_equals_pressure_lift():
     """Within 0.5 %."""
     af = generate_naca4("2412", 200)
-    sol = solve_flow(af, 4.0)
-    assert abs(_farfield_cl(sol, 4.0) / sol.cl - 1.0) <= 0.005
+    sol = section.solve(af, 4.0)
+    assert abs(_farfield_cl(sol, 4.0) / core.body_loads(sol, 0).cl - 1.0) <= 0.005
 
 
 # --------------------------------------------------------------------------------------- #
@@ -212,23 +198,8 @@ def test_repanelling_preserves_transformed_shape(op):
 
 
 # --------------------------------------------------------------------------------------- #
-# Corrections applied exactly once
+# Corrections applied exactly once: tests/test_corrections.py (through ``fl.analyze``)
 # --------------------------------------------------------------------------------------- #
-def test_karman_tsien_applied_once():
-    """Cl at Mach 0.5 equals the integral of the once-corrected incompressible Cp (1e-3)."""
-    from foil_lab.corrections import karman_tsien_correction
-    af = generate_naca4("2412", 160)
-    ps = core.PanelSet.from_bodies(af)
-    cp_inc = solve_flow(af, 4.0).cp_dist
-    cl_once = loads_from_cp(ps, karman_tsien_correction(cp_inc, 0.5), 4.0)[0]
-    assert abs(solve_flow(af, 4.0, mach=0.5).cl - cl_once) <= 1e-3
-
-
-def test_aspect_ratio_correction_does_not_reapply_compressibility():
-    """With a very large aspect ratio the Mach 0.5 Cl equals the 2D Mach 0.5 Cl (1e-3)."""
-    af = generate_naca4("2412", 160)
-    assert abs(solve_flow(af, 4.0, mach=0.5, aspect_ratio=1e6).cl
-               - solve_flow(af, 4.0, mach=0.5).cl) <= 1e-3
 
 
 # --------------------------------------------------------------------------------------- #
@@ -252,16 +223,17 @@ def test_numpy_and_jax_agree(make, alpha):
         pytest.skip("JAX not installed")
     from foil_lab import jax_core
     af = make()
-    assert abs(solve_flow(af, alpha).cl - jax_core.solve_numpy_compatible(af, alpha)[0]) <= 1e-6
+    assert abs(section.cl(af, alpha) - jax_core.solve_numpy_compatible(af, alpha)[0]) <= 1e-6
 
 
 @pytest.mark.slow
 def test_deterministic_inviscid_and_viscous():
     """Same input, bit-identical output (inviscid Cp; coupled viscous Cp, Cd, Cl, transition)."""
     af = generate_naca4("2412", 160)
-    i1, i2 = solve_flow(af, 4.0), solve_flow(af, 4.0)
-    assert np.array_equal(i1.cp_dist, i2.cp_dist)
-    s1, s2 = solve_flow(af, 4.0, reynolds=1e6), solve_flow(af, 4.0, reynolds=1e6)
+    i1, i2 = section.solve(af, 4.0), section.solve(af, 4.0)
+    assert np.array_equal(np.asarray(i1.cp), np.asarray(i2.cp))
+    foil = fl.Airfoil.from_coords(af)
+    s1, s2 = (fl.analyze(foil, 4.0, re=1e6, repanel=False) for _ in range(2))
     assert s1.converged and s2.converged
-    assert np.array_equal(s1.cp_dist, s2.cp_dist) and s1.cd_visc == s2.cd_visc and s1.cl == s2.cl
+    assert np.array_equal(s1.elements[0].cp, s2.elements[0].cp) and s1.cd == s2.cd and s1.cl == s2.cl
     assert (s1.xtr_upper, s1.xtr_lower, s1.iterations) == (s2.xtr_upper, s2.xtr_lower, s2.iterations)

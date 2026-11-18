@@ -150,17 +150,3 @@ def finite_wing(cl_inf: float, lift_slope: float, aspect_ratio: float,
     f = helmbold_factor(lift_slope, aspect_ratio)
     cl = f * cl_inf
     return FiniteWing(cl, cl * cl / (np.pi * params.oswald * aspect_ratio), f, lift_slope)
-
-
-def apply_3d_corrections(cl_2d: float, cm_2d: float, alpha_deg: float, aspect_ratio: float,
-                         mach: float = 0.0, lift_slope: float = 2.0 * np.pi) -> tuple:
-    """(CL, CDi, Cm) of :func:`finite_wing` for the v1.3.1-shaped interfaces (``solver.solve_flow``).
-
-    ``aspect_ratio`` <= 0 means the section (2D) and returns the input. ``mach`` is not used: the
-    section's own lift slope ``lift_slope`` (per radian) already contains the compressibility, which
-    v1.3.1 applied a second time here (CODE_REPORT section 9 #5). ``alpha_deg`` is kept for the
-    signature."""
-    if aspect_ratio <= 0.0:
-        return cl_2d, 0.0, cm_2d
-    fw = finite_wing(cl_2d, lift_slope, aspect_ratio)
-    return fw.cl, fw.cdi, cm_2d

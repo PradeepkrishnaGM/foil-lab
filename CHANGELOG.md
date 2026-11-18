@@ -24,6 +24,12 @@ every decision: DECISIONS.md; accuracy: VALIDATION.md.
   exports, airfoils by name from the UIUC database, a SQLite polar database, the batch runner and the
   command line on one API; an example notebook.
 * **GUI repair** (M8): a thin client of the API with solves in a worker thread.
+* **Removed: the v1.3.1-shaped interface.** `foil_lab.solver` (`solve_flow`, `solve_flow_sweep`,
+  `SolutionData`, `compute_panel_geometry`), `foil_lab.analysis` (`run_alpha_sweep` and its
+  helpers), `foil_lab.advanced` (`solve_swept_wing`, `solve_constant_wing_loading`),
+  `ground_effect.solve_ground_effect` and `flowfield.compute_velocity_field`. Use `fl.analyze` and
+  `fl.polar` (with `sweep`, `ground_height`, `aspect_ratio`, `mach`, `re`) and
+  `flowfield.velocity_field`. The constant-wing-loading polar has no replacement in v2.0.
 
 ## Development notes from M2 (kept for the record)
 

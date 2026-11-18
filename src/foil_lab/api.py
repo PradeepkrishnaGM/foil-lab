@@ -285,7 +285,7 @@ def _hinge(ps, cp_all, k, flap, chord, shear=None):
 
 
 def _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params):
-    from .solver import trips_dict, viscous_params
+    from .viscous import trips_dict, viscous_params
     if not re > 0:
         raise ValueError(f"re must be a positive Reynolds number, got {re!r}")
     return viscous_params(n_crit, params), trips_dict(trip_upper, trip_lower)

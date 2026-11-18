@@ -5,8 +5,9 @@ M1 ran four methods of v1.3.1 on the benchmark matrix (DECISIONS.md, M1 Q3 and E
 ``newton`` (Newton VII). The three viscous methods were deleted with their modules in M3 C5
 (DECISIONS.md M3, Q3 and C5); their measured results stay in the committed before pictures
 ``docs/baseline_v1.3.1.md`` and ``docs/benchmark_m2.md``, and :mod:`.report` still reads their rows
-from result files of earlier runs. ``run_baseline`` now writes the inviscid rows only
-(``solver.solve_flow`` without a Reynolds number). The coupled viscous solver is benchmarked by
+from result files of earlier runs. ``run_baseline`` now writes the inviscid rows only (the
+inviscid core of :mod:`foil_lab.inviscid`, loads per unit chord with the moment about (0.25, 0),
+as the v1.3.1 interface reported them). The coupled viscous solver is benchmarked by
 :mod:`.viscous_run`.
 
 Both codes read the same canonical coordinate file (160 panels).
@@ -34,14 +35,14 @@ def _alphas() -> list[float]:
 
 def _run_point(method: str, coords: np.ndarray, alpha: float, reynolds: float,
                bench: BenchmarkParams) -> dict:
-    from ..solver import solve_flow
+    from .. import inviscid as core
 
     t0 = time.perf_counter()
     try:
         if method != "inviscid":
             raise ValueError(f"method {method!r} was deleted in M3 C5; only 'inviscid' runs")
-        s = solve_flow(coords, alpha)
-        row = dict(converged="n/a", cl=s.cl, cd=math.nan, cm=s.cm_qc,
+        s = core.body_loads(core.solve(core.PanelSet.from_bodies([coords]), alpha), 0)
+        row = dict(converged="n/a", cl=s.cl, cd=math.nan, cm=s.cm,
                    xtr_top=math.nan, xtr_bot=math.nan)
         row["error"] = ""
     except Exception as exc:  # recorded, never hidden

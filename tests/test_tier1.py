@@ -5,7 +5,8 @@ import pytest
 
 from foil_lab.generators import generate_naca4
 from foil_lab.geometry import translate, bodies_overlap
-from foil_lab.solver import solve_flow
+import foil_lab as fl
+from tests import section
 from foil_lab import inviscid as core
 
 
@@ -13,7 +14,7 @@ from foil_lab import inviscid as core
 def test_multielement_far_separation_recovers_isolated():
     front = generate_naca4("2412", 160)
     rear = translate(generate_naca4("2412", 160), 20.0, 0.0)
-    solo = solve_flow(front, 5.0).cl
+    solo = section.cl(front, 5.0)
 
     sol = core.solve(core.PanelSet.from_bodies([front, rear]), 5.0)
     cl_front = core.body_loads(sol, 0).cl
@@ -43,17 +44,16 @@ def test_overlap_detection():
 # --- Trip wires (coupled viscous solver) ------------------------------------ #
 @pytest.mark.slow
 def test_trip_wire_increases_drag():
-    af = generate_naca4("2412", 200)
-    natural = solve_flow(af, 5.0, reynolds=3e6).cd_visc
-    tripped = solve_flow(af, 5.0, reynolds=3e6,
-                         trip_x_upper=0.05, trip_x_lower=0.05).cd_visc
+    af = fl.Airfoil.from_coords(generate_naca4("2412", 200))
+    natural = fl.analyze(af, 5.0, re=3e6, repanel=False).cd
+    tripped = fl.analyze(af, 5.0, re=3e6, repanel=False, trip_upper=0.05, trip_lower=0.05).cd
     assert tripped > natural
 
 
 @pytest.mark.slow
 def test_trip_wire_monotonic():
-    af = generate_naca4("2412", 200)
-    cds = [solve_flow(af, 5.0, reynolds=3e6, trip_x_upper=t, trip_x_lower=t).cd_visc
+    af = fl.Airfoil.from_coords(generate_naca4("2412", 200))
+    cds = [fl.analyze(af, 5.0, re=3e6, repanel=False, trip_upper=t, trip_lower=t).cd
            for t in (0.6, 0.4, 0.2, 0.05)]
     # Earlier trip (smaller x/c, later in list) => more drag.
     assert all(cds[i] <= cds[i + 1] + 1e-6 for i in range(len(cds) - 1))

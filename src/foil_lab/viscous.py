@@ -1206,7 +1206,7 @@ def _steps(a_from: float, a_to: float, step: float) -> list:
 
 def solve_single(coords, alpha: float, reynolds: float, params: ViscousParams = VISCOUS, trips=None,
                  geometry: Geometry | None = None, fallback: bool = True) -> ViscousResult:
-    """One operating point on its own (``fl.analyze``, ``solver.solve_flow``), reached as a polar
+    """One operating point on its own (``fl.analyze``, ``design.maximize_ld``), reached as a polar
     reaches its angles when the direct start fails (user, after reports 11 and 12). In order, until
     one converges:
 
@@ -1307,3 +1307,28 @@ def open_closed_te(coords, params: ViscousParams = VISCOUS):
     chord = float(np.max(np.hypot(*(c - te).T)))
     return set_trailing_edge_gap(c, gap * chord), [
         f"closed trailing edge opened to {gap:g} c for viscous analysis (params.ViscousParams.closed_te_gap)"]
+
+
+def drag_is_plausible(cd: float) -> bool:
+    """False for non-finite drag, Cd < 0 or Cd > 1: such a viscous result is never reported as
+    converged (DECISIONS.md, M2 check 3)."""
+    return bool(np.isfinite(cd) and 0.0 <= cd <= 1.0)
+
+
+def viscous_params(n_crit: float | None = None, params: ViscousParams | None = None) -> ViscousParams:
+    """``params`` (default ``params.VISCOUS``) with ``n_crit`` replaced when it is given."""
+    import dataclasses
+    prm = VISCOUS if params is None else params
+    return prm if n_crit is None else dataclasses.replace(prm, n_crit=float(n_crit))
+
+
+def trips_dict(trip_x_upper: float | None = None, trip_x_lower: float | None = None,
+               body: int = 0) -> dict | None:
+    """Forced transition locations (x of the body, x/c for a unit chord) in the form of
+    :func:`solve_viscous`; ``None`` or 0 means free transition."""
+    trips = {}
+    if trip_x_upper:
+        trips[(body, "upper")] = float(trip_x_upper)
+    if trip_x_lower:
+        trips[(body, "lower")] = float(trip_x_lower)
+    return trips or None

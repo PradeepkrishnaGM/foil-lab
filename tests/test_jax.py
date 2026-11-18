@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from foil_lab.generators import generate_naca4
-from foil_lab.solver import solve_flow
+from tests import section
 from foil_lab.jax_backend import HAS_JAX
 
 pytestmark = pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.skipif(not HAS_JAX, reason="JAX not installed")
 def test_jax_matches_numpy(naca, alpha):
     from foil_lab import jax_core
     af = generate_naca4(naca, 200)
-    cl_np = solve_flow(af, alpha).cl
+    cl_np = section.cl(af, alpha)
     cl_jax, _ = jax_core.solve_numpy_compatible(af, alpha)
     assert abs(cl_jax - cl_np) < 1e-5
 
@@ -64,7 +64,7 @@ def test_vmap_batch_matches_loop():
     af = generate_naca4("2412", 160)
     alphas = np.linspace(-5, 12, 18)
     cls_batch, _ = jax_core.batch_polar(af, alphas)
-    cls_loop = np.array([solve_flow(af, a).cl for a in alphas])
+    cls_loop = np.array([section.cl(af, a) for a in alphas])
     assert np.max(np.abs(cls_batch - cls_loop)) < 1e-5
 
 

@@ -5,7 +5,7 @@ import pytest
 
 from foil_lab import batch
 from foil_lab.generators import generate_naca4
-from foil_lab.solver import drag_is_plausible
+from foil_lab.viscous import drag_is_plausible
 
 
 @pytest.mark.parametrize("cd,ok", [(0.006, True), (0.0, True), (1.0, True), (-1e-6, False),
