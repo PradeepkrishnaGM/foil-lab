@@ -1,4 +1,4 @@
-# Foil-Lab API reference (v2.0)
+# Foil-Lab API reference (v2.2)
 
 Everything below is importable from the package root (`import foil_lab as fl`) unless a module is
 named. Conventions (SPEC.md section 3): coordinates in Selig order; angles in degrees; Cl, Cd, Cm

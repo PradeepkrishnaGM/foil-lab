@@ -1,12 +1,17 @@
 # Changelog
 
-## Unreleased (v2.1 work on the v2.0 "Later" list; DECISIONS.md v2.1, v2.2)
+## v2.2.0 (2026-11-19)
+
+First published release; includes v2.0.0 below and the work on its "Later" list (DECISIONS.md v2.1,
+v2.2).
 
 * **Sweep recovery** (E3, v2.2): a last pass of `sweep` / `fl.polar` walks to each point still failed
   from the nearest converged angle on both sides, passing over one failed angle
   (`ViscousParams.walk_max_skips`). Earlier results unchanged. Full benchmark: main matrix 1206 of 1225 converged (was 1200), flaps
   1428 of 1500 (was 1403), none lost, every earlier point identical. Flap 5 deg at Re 6e6 now meets
-  the convergence target, so the validated flap range is 5 deg (was 0); see VALIDATION.md.
+  the convergence target, so the validated flap range is 5 deg (was 0); see VALIDATION.md. The pass
+  does not walk to a point whose solve raised, and a solve raising during its walks ends only that
+  walk (found in the v2.2 review).
 * **Finite wing** (E1, v2.2): profile drag, moment and hinge moment come from the section at the
   effective angle alpha - (Cl_inf - CL)/a instead of the geometric angle; lift (Helmbold) and induced
   drag unchanged. One more section solve per point with an aspect ratio.
@@ -26,7 +31,7 @@
   (was 1398). E387 at Re 5e4 (no claim) now converges at more angles but some to a separated solution
   with a larger error against XFOIL; see VALIDATION.md.
 
-## v2.0.0 (prepared; not yet released)
+## v2.0.0 (prepared; not released on its own, included in v2.2.0)
 
 Foil-Lab v2.0 is a rework of v1.3.1 to SPEC.md: every result path is checked against an exact
 solution or against XFOIL, and flaps and several elements are the headline capability. Details of
