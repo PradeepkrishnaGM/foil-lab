@@ -109,6 +109,7 @@ def polars(polar_list, labels: Optional[Sequence[str]] = None,
     (inviscid Cd) stay empty for it."""
     pl = polar_list if isinstance(polar_list, (list, tuple)) else [polar_list]
     panels = tuple(panels)
+    own = axes is None
     fig, axes = _new(axes, ncols=len(panels), size=(4.6, 4.0))
     axes = np.atleast_1d(axes)
     refs = [] if reference is None else (reference if isinstance(reference, (list, tuple)) else [reference])
@@ -127,7 +128,8 @@ def polars(polar_list, labels: Optional[Sequence[str]] = None,
         ax.set_ylabel(LABELS.get(yq, yq))
         ax.grid(True, ls=":", alpha=0.6)
     axes[0].legend(fontsize="small")
-    fig.tight_layout()
+    if own:                                       # a figure passed in keeps the caller's layout
+        fig.tight_layout()
     return fig, axes
 
 

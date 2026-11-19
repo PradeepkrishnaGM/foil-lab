@@ -19,14 +19,14 @@ from typing import List, Optional
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import (QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
-                               QHBoxLayout, QLabel, QLineEdit, QMainWindow, QProgressBar, QPushButton,
+                               QHBoxLayout, QLineEdit, QMainWindow, QProgressBar, QPushButton,
                                QScrollArea, QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
 import foil_lab as fl
 from foil_lab import export
 from foil_lab.api import Cancelled
 
-from .views import AirfoilPlotCanvas
+from .views import AirfoilPlotCanvas, StatusBox
 
 
 class SolveWorker(QObject):
@@ -75,11 +75,7 @@ class FoilLabMainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QHBoxLayout(central)
         splitter = QSplitter(Qt.Horizontal)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self._create_sidebar())
-        scroll.setMinimumWidth(320)
-        splitter.addWidget(scroll)
+        splitter.addWidget(self._create_left_column())
         self.tabs = QTabWidget()
         self.single_plot = AirfoilPlotCanvas(self)
         self.polar_plot = AirfoilPlotCanvas(self)
@@ -99,6 +95,29 @@ class FoilLabMainWindow(QMainWindow):
         self._worker: Optional[SolveWorker] = None
 
     # ------------------------------------------------------------------ sidebar
+    def _create_left_column(self) -> QWidget:
+        """The input tabs (scrollable) above the progress bar, Cancel and the status text, which stay
+        visible whatever the input tab's height."""
+        col = QWidget()
+        lay = QVBoxLayout(col)
+        lay.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._create_sidebar())
+        scroll.setMinimumWidth(320)
+        lay.addWidget(scroll, 1)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.cancel)
+        self.lbl_status = StatusBox("No section loaded.")
+        lay.addWidget(self.progress)
+        lay.addWidget(self.btn_cancel)
+        lay.addWidget(self.lbl_status)
+        return col
+
     def _create_sidebar(self) -> QWidget:
         w = QWidget()
         outer = QVBoxLayout(w)
@@ -114,18 +133,6 @@ class FoilLabMainWindow(QMainWindow):
             for g in groups:
                 lay.addWidget(g)
             side.addTab(tab, title)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 1)
-        self.progress.setValue(0)
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setEnabled(False)
-        self.btn_cancel.clicked.connect(self.cancel)
-        self.lbl_status = QLabel("No section loaded.")
-        self.lbl_status.setWordWrap(True)
-        self.lbl_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        outer.addWidget(self.progress)
-        outer.addWidget(self.btn_cancel)
-        outer.addWidget(self.lbl_status)
         return w
 
     def _spin(self, lo, hi, val, step=None, decimals=None, suffix=""):
@@ -497,8 +504,13 @@ class FoilLabMainWindow(QMainWindow):
             ax1.plot(e.x, e.y, "k-", lw=1.0)
         ax1.set_aspect("equal", adjustable="datalim")
         ax1.axis("off")
-        cd = "-" if r.cd is None else f"{r.cd:.5f}"
-        ax1.set_title(f"alpha {r.alpha:g} deg: Cl {r.cl:.4f}, Cd {cd}, Cm {r.cm:+.4f}"
+        if r.cd is not None:
+            cd = f"Cd {r.cd:.5f}"
+        elif r.cd_induced is not None:
+            cd = f"Cd induced {r.cd_induced:.5f}"
+        else:
+            cd = "Cd -"
+        ax1.set_title(f"alpha {r.alpha:g} deg: Cl {r.cl:.4f}, {cd}, Cm {r.cm:+.4f}"
                       + ("" if r.converged else "  (NOT converged)"))
         for k, e in enumerate(r.elements):
             name = "main" if k == 0 else f"element {k}"
@@ -510,7 +522,6 @@ class FoilLabMainWindow(QMainWindow):
         ax2.set_ylabel("Cp" + (" (normal plane)" if r.sweep else ""))
         ax2.grid(True, alpha=0.3)
         ax2.legend(fontsize="small")
-        fig.tight_layout()
         self.single_plot.redraw()
         self.tabs.setCurrentIndex(0)
         self.show_flowfield(r)
@@ -543,7 +554,6 @@ class FoilLabMainWindow(QMainWindow):
         ax.set_title(f"Streamlines of the inviscid solution, alpha {r.alpha:g} deg"
                      + (" (viscous result: displacement effect not shown)" if r.reynolds else ""), fontsize=10)
         fig.colorbar(strm.lines, ax=ax, label="speed / freestream", fraction=0.04, pad=0.03)
-        fig.tight_layout()
         self.flow_plot.redraw()
 
     def show_polar(self, pol: fl.Polar) -> None:
@@ -559,7 +569,6 @@ class FoilLabMainWindow(QMainWindow):
         plot.polars(pol, labels=[self.configuration().name], axes=axes)
         for ax, title in zip(axes, ("Lift", "Drag polar (total Cd)", "Moment")):
             ax.set_title(title)
-        fig.tight_layout()
         self.polar_plot.redraw()
         self.btn_export_csv.setEnabled(True)
         self.tabs.setCurrentIndex(1)
@@ -584,7 +593,6 @@ class FoilLabMainWindow(QMainWindow):
         plot.geometry(self.configuration(), ax=ax)
         ax.set_title(f"{self.configuration().name}: {len(self.elements)} element(s)")
         ax.legend(fontsize="small")
-        fig.tight_layout()
         self.single_plot.redraw()
         self.tabs.setCurrentIndex(0)
 
