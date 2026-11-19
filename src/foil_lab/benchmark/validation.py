@@ -88,13 +88,14 @@ def main_tables(output_root: Path, bench: BenchmarkParams = BENCHMARK) -> tuple[
     return open_md, dict(sharp=sharp_md, per=per_md, verdicts=verdicts, n_cases=len(cases), n_sec=n_sec)
 
 
-def flap_tables(flap_root: Path, bench: BenchmarkParams = BENCHMARK) -> str:
+def flap_tables(flap_root: Path, bench: BenchmarkParams = BENCHMARK) -> tuple[str, float | None]:
+    """Flap tables in Markdown and the validated flap range in degrees (None if none or no output)."""
     from . import flap_run as fr
     names = fr.case_names(bench)
     cases = [fr.compare_case(n, re, flap_root / "xfoil_ref", flap_root, bench) for n in names
              for re in bench.reynolds_validated if fr._ours_path(flap_root, n, re).exists()]
     if not cases:
-        return "(flap benchmark output not found)\n"
+        return "(flap benchmark output not found)\n", None
     defl = sorted({c.deflection for c in cases})
     res = sorted({c.re for c in cases})
     ok_all = {}
@@ -132,12 +133,13 @@ def flap_tables(flap_root: Path, bench: BenchmarkParams = BENCHMARK) -> str:
            f"reports it (loose target mean <= {fr.TARGET_B['mean']}, max <= {fr.TARGET_B['max']}; XFOIL's "
            "definition of Chinge is not known, docs/xfoil_hinge_calibration.md).\n\n")
     md += _md(["flap deg", "points", "(a) mean / max", "(b) mean / max", "mean abs ch (XFOIL)"], rows)
-    return md
+    return md, run_ok
 
 
 def build(output_root: Path, flap_root: Path, bench: BenchmarkParams = BENCHMARK) -> str:
     from .. import __version__
     open_md, extra = main_tables(output_root, bench)
+    flap_md, flap_ok = flap_tables(flap_root, bench)
     v = extra["verdicts"]
     met = [re for re, vv in v.items() if all(ok for _, ok in vv.values())]
     lines = [
@@ -193,7 +195,7 @@ def build(output_root: Path, flap_root: Path, bench: BenchmarkParams = BENCHMARK
         "Same comparison on the flapped coordinate files, deflections 0 to 20 deg, Re 1e5 to 6e6; both "
         "sections pooled per (deflection, Re).",
         "",
-        flap_tables(flap_root, bench),
+        flap_md,
         "",
         "## Exact solutions and consistency (tests, no XFOIL)",
         "",
@@ -212,8 +214,9 @@ def build(output_root: Path, flap_root: Path, bench: BenchmarkParams = BENCHMARK
         "compressibility (Kármán-Tsien) applies to inviscid results.",
         "- Validated at Re from 1e5 to 6e6 (the targets above); Re 5e4 is reported, not validated.",
         "- Maximum lift and post-stall behaviour are approximate (outside the attached-flow filter).",
-        "- Plain flaps are validated at 0 deg only; 5 to 20 deg are reported without a claim.",
-        "- At 20 deg flap the boundary layer on the flap"s upper surface separates (H up to 13 at the trailing edge in both codes, also inside the attached-flow filter). There Foil-Lab"s displacement thickness grows 7-15 % faster than XFOIL"s while theta agrees, which gives Cl about 0.04 and Cd about 10 % below XFOIL (NACA 2412 F20, Re 3e6, 4 deg; `tests/diagnostics/flap_bl_compare.py`). Upstream of the separation the states agree within a few per cent.",
+        ("- Plain flaps are not validated; all deflections are reported without a claim." if flap_ok is None else
+         f"- Plain flaps are validated up to {flap_ok:g} deg; larger deflections are reported without a claim."),
+        "- At 20 deg flap the boundary layer on the flap's upper surface separates (H up to 13 at the trailing edge in both codes, also inside the attached-flow filter). There Foil-Lab's displacement thickness grows 7-15 % faster than XFOIL's while theta agrees, which gives Cl about 0.04 and Cd about 10 % below XFOIL (NACA 2412 F20, Re 3e6, 4 deg; `tests/diagnostics/flap_bl_compare.py`). Upstream of the separation the states agree within a few per cent.",
         "- Multi-element results exclude wake merging and slot separation and have no maximum-lift prediction.",
         "",
         "## Reproducing",

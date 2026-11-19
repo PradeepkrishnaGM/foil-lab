@@ -3592,8 +3592,17 @@ after every earlier attempt, so no earlier result changes. Measured with the ben
 (`run_case`, one BLAS thread): NACA 0012 F15 Re 6e6: 22 -> 23 of 25 (0 deg gained, Cl 0.8893 Cd
 0.00912; XFOIL 0.9019 0.00944); NACA 2412 F20 Re 6e6: 19 -> 19 (-4 to 1 deg still fail: the stagnation
 crawl of the Later list). Max |dCl| on the points converged before: 0.0 in both. Run time 419 s and
-790 s per case. The committed benchmark numbers (flaps 1403/1500) predate E3; a full rerun (about
-1.2 h) is needed to update VALIDATION.md. Also measured: `fl.analyze` of NACA 2412 F20 at Re 3e6, 4 deg
+790 s per case. Full benchmark rerun with E3 (1.3 h, 6 processes; rows in
+`benchmark_output/v22`, `v22_flaps`, not committed): main matrix 1200 -> 1206 of 1225, flaps
+1403 -> 1428 of 1500, no point lost, and every point converged in v2.1 has identical Cl, Cd and Cm
+(max difference 0). All gains carry the path label "(both sides)"; most are low-Re or post-stall
+angles 13-19 deg next to a converged higher angle. The NACA 0012 F05 Re 6e6 8 deg point brings the
+flap 5 deg row at Re 6e6 to the convergence target (94.3 % before), so the generated validated flap
+range is now 5 deg (was 0 deg), with every 5 deg cell meeting every target as measured. Decided
+autonomously, for review: the claim follows the generator; README and the VALIDATION.md limits line
+say 5 deg, and the limits line is now generated from the same range so the two cannot disagree.
+Found while regenerating: the E2 limits line in `benchmark/validation.py` had broken quotes (a
+syntax error no test imported); fixed, and a test now builds the validation document. Also measured: `fl.analyze` of NACA 2412 F20 at Re 3e6, 4 deg
 converges (Cl 1.4774, the benchmark value) but takes 578 s, about 9 failed cold starts at 50
 iterations each; an early exit is not used because converged benchmark points use up to the whole
 budget (iterations: median 8, 99th percentile 43, max 50).
