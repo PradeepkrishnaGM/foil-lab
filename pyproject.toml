@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "foil-lab"
-version = "2.0.0"
+version = "2.2.0"
 description = "2D panel-method solver for single, flapped and multi-element airfoil sections, with a coupled viscous-inviscid solver and its accuracy against XFOIL published."
 readme = "README.md"
 requires-python = ">=3.10"

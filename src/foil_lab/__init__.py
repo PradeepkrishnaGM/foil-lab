@@ -19,7 +19,7 @@ Public interface::
 Lower-level modules (``inviscid``, ``viscous``, ``geometry``, ``corrections``, ...) stay importable.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.2.0"
 
 from .airfoil import Airfoil, Configuration, Element  # noqa: E402
 from .api import ElementResult, Polar, Result, analyze, polar  # noqa: E402
