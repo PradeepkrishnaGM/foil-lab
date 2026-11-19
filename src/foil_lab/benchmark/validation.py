@@ -213,6 +213,7 @@ def build(output_root: Path, flap_root: Path, bench: BenchmarkParams = BENCHMARK
         "- Validated at Re from 1e5 to 6e6 (the targets above); Re 5e4 is reported, not validated.",
         "- Maximum lift and post-stall behaviour are approximate (outside the attached-flow filter).",
         "- Plain flaps are validated at 0 deg only; 5 to 20 deg are reported without a claim.",
+        "- At 20 deg flap the boundary layer on the flap"s upper surface separates (H up to 13 at the trailing edge in both codes, also inside the attached-flow filter). There Foil-Lab"s displacement thickness grows 7-15 % faster than XFOIL"s while theta agrees, which gives Cl about 0.04 and Cd about 10 % below XFOIL (NACA 2412 F20, Re 3e6, 4 deg; `tests/diagnostics/flap_bl_compare.py`). Upstream of the separation the states agree within a few per cent.",
         "- Multi-element results exclude wake merging and slot separation and have no maximum-lift prediction.",
         "",
         "## Reproducing",

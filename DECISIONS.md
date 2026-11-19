@@ -3563,6 +3563,21 @@ with the interval pinned by T1, full Newton steps (omega = 1, no clips) that do 
 residual: a cycle across the non-smooth pinned transition residual. Neither has a small fix; both
 stay open as stated limits (VALIDATION.md already lists the failing points).
 
+**E2. Flap lift and drag deficit at 20 deg: localised, left as a stated limit.** NACA 2412 F20, Re 3e6,
+4 deg, reached as the benchmark reaches it (cold solves at 2-7 deg do not converge: the single-point
+item under Later). Foil-Lab Cl 1.4774, Cd 0.02489, Cm -0.1658, x_tr 0.043/0.649; XFOIL 1.5168, 0.02749,
+-0.1740, 0.036/0.660. Station by station (`tests/diagnostics/flap_bl_compare.py`): theta, delta*, H,
+ue agree within about 2-5 % on both surfaces up to and through the hinge suction peak (x/c 0.76) and on
+the whole lower surface. On the flap's upper surface both codes separate (XFOIL Cf < 0 from x/c 0.85,
+H 5.2 / 8.5 / 12.8 at 0.85 / 0.90 / 0.98); there Foil-Lab's delta* is 8 / 16 / 7 % larger (24.7 / 45.0 /
+76.2 against 22.8 / 38.9 / 71.2 e-3) with theta within 2 % (H 5.6 / 9.6 / 13.6), and its trailing-edge
+ue is 1.048 against 1.061. More displacement decambers the flap (lower Cl); at H ~ 13 the
+Squire-Young drag goes as about ue_TE^9, (1.048/1.061)^9 = 0.89 (lower Cd). Turbulent H* is not the
+cause (FID equals XFOIL's fit to 1.0000 on dumped states, M3 closure table); the difference is in
+the separated-flow terms (dissipation, lag) of the published FID set. Not changed: matching XFOIL
+there would calibrate the confirmed default closures to the reference. Also found: the attached-flow
+filter admits points with a fully separated flap at 20 deg. VALIDATION.md limits state this.
+
 ## Later
 
 - v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re
