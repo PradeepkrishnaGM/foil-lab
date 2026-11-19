@@ -1,4 +1,4 @@
-"""Golden values of the solvers (CLAUDE.md "Golden values": recorded before any speed optimisation,
+"""Golden values of the solvers (project rule: recorded before any speed optimisation,
 unchanged after it). Each case returns a dict of floats; the state of every viscous case enters as
 a SHA-256 of its bytes, so any change of the converged iterate, however small, is caught.
 

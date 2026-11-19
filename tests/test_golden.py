@@ -1,4 +1,4 @@
-"""Golden values (CLAUDE.md): recorded before any speed optimisation and unchanged after it.
+"""Golden values: recorded before any speed optimisation and unchanged after it.
 
 The file ``tests/data/golden/golden_v21.json`` is written by ``python -m tests.golden_cases`` with
 single-threaded BLAS (multi-threaded BLAS changes the last digits; DECISIONS.md M7). The cases run
