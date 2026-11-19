@@ -15,7 +15,8 @@ Order (SPEC.md 4.7; DECISIONS.md M6), as :func:`foil_lab.analyze` applies it:
 5. **Aspect ratio** (finite wing, elliptic loading): the lift of the infinite (swept) wing times
    Helmbold's factor, with the infinite wing's own lift slope (which already contains the
    compressibility and the sweep, so neither is applied twice); induced drag CL^2 / (pi e AR);
-   :func:`finite_wing`. Helmbold, H. B., Jahrbuch der deutschen Luftfahrtforschung, 1942.
+   :func:`finite_wing`. Profile drag and moments: the section at the effective angle
+   alpha - (Cl_inf - CL) / a (lifting-line theory). Helmbold, H. B., Jahrbuch der deutschen Luftfahrtforschung, 1942.
 
 The critical Mach number (:func:`critical_mach`) is the freestream Mach number at which the
 Kármán-Tsien-corrected minimum pressure coefficient reaches the critical (sonic) value; with
@@ -142,9 +143,9 @@ def finite_wing(cl_inf: float, lift_slope: float, aspect_ratio: float,
                 params: CorrectionParams = CORRECTIONS) -> FiniteWing:
     """Finite-wing lift CL = F Cl_inf (F from :func:`helmbold_factor` with the infinite wing's lift
     slope) and induced drag CL^2 / (pi e AR). Lift and slope are those of the infinite wing after
-    sweep and compressibility, so the factor does not contain the Mach number a second time. The
-    profile drag and the moment about the quarter chord stay those of the section at the geometric
-    angle (lifting-line approximation)."""
+    sweep and compressibility, so the factor does not contain the Mach number a second time. Profile
+    drag and moments are not formed here: :func:`foil_lab.analyze` takes them from the section at
+    the effective angle (DECISIONS.md v2.2, E1)."""
     if not aspect_ratio > 0.0:
         raise ValueError(f"aspect_ratio must be positive, got {aspect_ratio!r}")
     f = helmbold_factor(lift_slope, aspect_ratio)

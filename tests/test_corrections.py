@@ -122,7 +122,7 @@ def test_aspect_ratio_large_is_the_section_and_factor_formula():
     f = helmbold_factor(slope, 8.0)
     assert r.cl == pytest.approx(f * two.cl, rel=1e-12)
     assert r.cd_induced == pytest.approx(r.cl ** 2 / (np.pi * 8.0), rel=1e-12)
-    assert r.cm == two.cm
+    assert r.cm != two.cm          # the moment is that of the effective angle (test below)
     k = 2 * np.pi / (np.pi * 20.0)
     assert helmbold_factor(2 * np.pi, 20.0) == pytest.approx(1.0 / (np.sqrt(1 + k * k) + k), rel=1e-15)
     assert helmbold_factor(2 * np.pi, 1e6) == pytest.approx(1.0 / (1.0 + k * 20.0 / 1e6), rel=1e-9)
@@ -186,3 +186,27 @@ def test_viscous_ground_effect_and_sweep():
     n = fl.analyze(AF, a_n, re=1e6 * np.cos(np.radians(30.0)))
     c = np.cos(np.radians(30.0))
     assert s.cl == pytest.approx(n.cl * c * c, rel=1e-12) and s.cd == pytest.approx(n.cd * c ** 3, rel=1e-12)
+
+
+def test_finite_wing_moment_and_profile_drag_at_the_effective_angle():
+    """Profile drag and moment come from the section at alpha_eff = alpha - (Cl_inf - CL)/a, where
+    the section's lift equals the wing's CL (to the lift curve's linearity); lift stays CL
+    (DECISIONS.md v2.2, E1)."""
+    import re as _re
+    r = fl.analyze(AF, 4.0, aspect_ratio=6.0)
+    a_eff = float(_re.search(r"effective angle (-?[\d.]+) deg", " ".join(r.corrections)).group(1))
+    sec = fl.analyze(AF, a_eff)
+    assert a_eff < 4.0
+    assert sec.cl == pytest.approx(r.cl, abs=2e-3)
+    assert r.cm == pytest.approx(sec.cm, abs=1e-4)          # 4 decimals in the correction text
+
+
+@pytest.mark.slow
+def test_finite_wing_viscous_profile_drag_is_the_section_drag_at_the_effective_angle():
+    import re as _re
+    r = fl.analyze(AF, 4.0, re=3e6, aspect_ratio=8.0)
+    a_eff = float(_re.search(r"effective angle (-?[\d.]+) deg", " ".join(r.corrections)).group(1))
+    sec = fl.analyze(AF, a_eff, re=3e6)
+    assert r.converged and sec.converged
+    assert r.cd - r.cd_induced == pytest.approx(sec.cd, rel=1e-3)
+    assert sec.cd < fl.analyze(AF, 4.0, re=3e6).cd

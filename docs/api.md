@@ -39,7 +39,8 @@ fl.flap_polars(airfoil, hinge_x, deflections, alphas, re=None, hinge_y=0.5, **po
 - Corrections, each applied once in this order and listed in `Result.corrections`: ground effect
   (`ground_height` in reference chords above the ground, section pitched about `pivot`), sweep
   (simple sweep theory), compressibility (`mach`, Kármán-Tsien, inviscid only), finite aspect ratio
-  (Helmbold lift factor, induced drag in `cd` and `cd_induced`).
+  (Helmbold lift factor, induced drag in `cd` and `cd_induced`; profile drag and moments of the
+  section at the effective angle, which costs one more section solve per point).
 
 ### `Result`
 

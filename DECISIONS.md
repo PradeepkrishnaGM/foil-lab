@@ -3534,6 +3534,35 @@ Found and fixed:
 3. The single-point title said "Cd -" for an inviscid finite wing; it now shows the induced drag.
 The M8 box is ticked on this review.
 
+## v2.2 (user, 2026-11-19: "go ahead, complete the full project"; decided autonomously, for review)
+
+**E1. Finite wing at the effective angle.** Lifting-line theory has each section work at
+alpha_eff = alpha - alpha_i (Anderson, *Fundamentals of Aerodynamics*, 6th ed., 5.3). Defined as
+alpha_eff = alpha - (Cl_inf - CL)/a with the Helmbold CL and the slope a already used, so that the
+section's linear lift at alpha_eff equals CL (the elliptic alpha_i = CL/(pi AR) would disagree with
+Helmbold's factor at small AR). Lift stays CL; profile drag, Cm, Ch, per-element drag and moments are
+the section's at alpha_eff (sweep and Mach applied to it as to any section). One more section solve
+per point. `converged` needs both solves; a failed effective-angle solve also adds a warning.
+Changed results: every result with an aspect ratio (Cm, Cd); no benchmark case uses one. Tests:
+`test_finite_wing_*` (Cl of the section at alpha_eff within 2e-3 of CL; viscous profile drag equal to
+the section's). The old assertion `r.cm == two.cm` encoded the geometric-angle model and now checks
+that the moment differs.
+
+**Re 6e6 flap convergence: three more experiments, all negative (scratch only, nothing committed).**
+NACA 2412 F20 0 deg, NACA 0012 F15 0 deg, NACA 0012 F10 -1 deg at Re 6e6:
+- `hk_min` 1.05 (equal to the closures' own H_k floor, FID p. 18, so the clip cannot sit where the
+  closures are flat): all three still fail (max_iter, 200 iterations).
+- Continuation in Re from a converged lower-Re state: 0012 F15 converges at 2e6, 3e6, 4.5e6, then
+  fails at 5e6 (transition hardly moves: x_tr 0.132/0.542 -> 0.132/0.542); 2412 F20 fails at 3e6
+  after 2e6; 0012 F10 fails already at 2e6.
+- Backtracking line search on ||R||_2 (Nocedal & Wright ch. 11): all fail, and it breaks the
+  converged 0012 F15 point at Re 4.5e6 (the residual is badly scaled for a merit function).
+Traces show at least two distinct failure modes: (a) the stagnation-node crawl recorded under Later;
+(b) on the warm start 4.5e6 -> 5e6, a laminar/turbulent flip of upper node 20 every iteration, then,
+with the interval pinned by T1, full Newton steps (omega = 1, no clips) that do not reduce the
+residual: a cycle across the non-smooth pinned transition residual. Neither has a small fix; both
+stay open as stated limits (VALIDATION.md already lists the failing points).
+
 ## Later
 
 - v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re
@@ -3563,9 +3592,9 @@ The M8 box is ticked on this review.
 - M7 (measured while making the notebook): the viscous polar of NACA 2412 at Re 1e6 takes about 6 s
   per point on the arc-length repanelled section but about 15 s on the canonical benchmark file
   (generator spacing), and 3 deg steps take longer than 2 deg steps. Part of the solver-speed item.
-- M6: compressible viscous analysis (Mach in the boundary-layer closures and the coupling); the
-  finite-wing correction evaluated at the effective angle (profile drag at alpha_eff) instead of the
-  geometric angle; spanwise friction in simple sweep theory.
+- M6: compressible viscous analysis (Mach in the boundary-layer closures and the coupling);
+  spanwise friction in simple sweep theory. Done in v2.2 E1 (2026-11-19): the finite-wing
+  correction at the effective angle.
 - Done in v2.1 T3 (2026-11-19): M5: per-element forced transition (trips apply to element 0
   only); transition location of an element as x/c of the element's own chord instead of the global x.
 - M5: wake merging with a downstream boundary layer and slot-flow separation (SPEC.md 4.6: not in
