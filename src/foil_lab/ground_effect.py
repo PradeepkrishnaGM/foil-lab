@@ -37,6 +37,17 @@ def ground_frame(alpha_deg: float, pivot, height: float):
     return fn
 
 
+def ground_frame_inverse(alpha_deg: float, pivot, height: float):
+    """The inverse of :func:`ground_frame` (ground frame back to the configuration frame)."""
+    px, py = float(pivot[0]), float(pivot[1])
+
+    def fn(p):
+        out = np.array(p, dtype=float).reshape(-1, 2)
+        out[:, 1] -= height - py
+        return rotate(out, -alpha_deg, pivot=(px, py))
+    return fn
+
+
 def image(coords) -> np.ndarray:
     """Mirror image of a body about the ground y = 0 (the panel set accepts either orientation)."""
     return np.asarray(coords, dtype=float) * np.array([1.0, -1.0])

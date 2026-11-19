@@ -52,7 +52,11 @@ def geometry_hash(geometry) -> str:
 def _r(v):
     """Condition value as stored: 9 significant digits (a Reynolds number that went through
     re / chord * chord compares equal), ``None`` kept."""
-    return None if v is None else float(f"{float(v):.9g}")
+    if v is None:
+        return None
+    if isinstance(v, (tuple, list)):                   # a trip per element
+        return [_r(u) for u in v]
+    return float(f"{float(v):.9g}")
 
 
 def _conditions(r: Result, num_panels: Optional[int]) -> dict:

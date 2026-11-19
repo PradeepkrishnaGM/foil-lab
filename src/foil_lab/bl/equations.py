@@ -197,6 +197,43 @@ def turbulent_interval(s1: Station, s2: Station, xi1, xi2, xp=np, cs="fidkowski2
 ONSET_BISECTIONS = 40
 
 
+_BISECT_CACHE: dict = {}
+
+
+def _bisect_real(s1: Station, theta2, dstar2, ue2, dxi, reynolds, n_crit, r1, csm):
+    """The bisection of :func:`transition_onset` in NumPy on the real parts (its iterates carry no
+    derivative; only the sign of the real part of R_t steers them), cached on those real inputs:
+    a complex-step Jacobian evaluates the same onset again with perturbations that leave the real
+    parts unchanged (speed; the golden values check that the result is unchanged)."""
+    vals = [np.real(np.asarray(v)).astype(float) for v in
+            (s1.theta, s1.dstar, s1.third, s1.ue, theta2, dstar2, ue2, dxi, r1)]
+    key = (csm.NAME, float(reynolds), float(n_crit)) + tuple((v.shape, v.tobytes()) for v in vals)
+    hit = _BISECT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    th1, ds1, n1, u1, th2, ds2, u2, dx, rr1 = vals
+
+    def rt(w):
+        th = th1 + w * (th2 - th1)
+        ds = ds1 + w * (ds2 - ds1)
+        u = u1 + w * (u2 - u1)
+        hk = csm.hk(ds / th, np)
+        rate = csm.dn_dxi(hk, th, reynolds * u * th, n_crit, n_crit, np)
+        return n_crit - n1 - w * dx * 0.5 * (rr1 + rate)
+
+    lo, hi = 0.0 * th1, 0.0 * th1 + 1.0
+    for _ in range(ONSET_BISECTIONS):
+        mid = 0.5 * (lo + hi)
+        pos = rt(mid) > 0.0
+        lo = np.where(pos, mid, lo)
+        hi = np.where(pos, hi, mid)
+    w0 = 0.5 * (lo + hi)
+    if len(_BISECT_CACHE) > 4096:
+        _BISECT_CACHE.clear()
+    _BISECT_CACHE[key] = w0
+    return w0
+
+
 def transition_onset(s1: Station, theta2, dstar2, ue2, dxi, reynolds, n_crit, xp=np, cs="fidkowski2022"):
     """Onset fraction w = (xi_t - xi1)/dxi in [0, 1]: root of the amplification residual on the
     laminar subinterval (FID eq. 18), R_t(w) = N_crit - n1 - w dxi (rate(u1) + rate(u_t^-))/2, with
@@ -209,20 +246,30 @@ def transition_onset(s1: Station, theta2, dstar2, ue2, dxi, reynolds, n_crit, xp
     reached, 0 if it was already exceeded (DECISIONS.md M3)."""
     r1 = lam_rate(s1, xp, cs, n_crit)
 
+    csm = closure_sets.get(cs)
+
     def rt(w):
-        st = station(s1.theta + w * (theta2 - s1.theta), s1.dstar + w * (dstar2 - s1.dstar),
-                     n_crit, s1.ue + w * (ue2 - s1.ue), reynolds, False, xp, cs)
-        return n_crit - s1.third - w * dxi * 0.5 * (r1 + lam_rate(st, xp, cs, n_crit))
+        # the laminar rate at the onset needs only H_k, theta and Re_theta: the same operations as
+        # station() for those, without the closures the rate does not use (speed; bit-identical)
+        th = s1.theta + w * (theta2 - s1.theta)
+        ds = s1.dstar + w * (dstar2 - s1.dstar)
+        u = s1.ue + w * (ue2 - s1.ue)
+        hk = csm.hk(ds / th, xp)
+        rate = csm.dn_dxi(hk, th, reynolds * u * th, n_crit, n_crit, xp)
+        return n_crit - s1.third - w * dxi * 0.5 * (r1 + rate)
 
     zero = 0.0 * s1.theta
     r_lo, r_hi = rt(zero), rt(zero + 1.0)
-    lo, hi = zero, zero + 1.0
-    for _ in range(ONSET_BISECTIONS):
-        mid = 0.5 * (lo + hi)
-        pos = _re(rt(mid)) > 0.0
-        lo = xp.where(pos, mid, lo)
-        hi = xp.where(pos, hi, mid)
-    w0 = 0.5 * (lo + hi)
+    if xp is np:
+        w0 = _bisect_real(s1, theta2, dstar2, ue2, dxi, reynolds, n_crit, r1, csm)
+    else:
+        lo, hi = zero, zero + 1.0
+        for _ in range(ONSET_BISECTIONS):
+            mid = 0.5 * (lo + hi)
+            pos = _re(rt(mid)) > 0.0
+            lo = xp.where(pos, mid, lo)
+            hi = xp.where(pos, hi, mid)
+        w0 = 0.5 * (lo + hi)
     h = 1e-7
     drdw = (rt(w0 + h) - rt(w0 - h)) / (2.0 * h)
     w = w0 - rt(w0) / drdw

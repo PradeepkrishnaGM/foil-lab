@@ -228,6 +228,8 @@ class Branch:
     s_trip: float | None = None       # arc length of the forced trip, if any
     trip_xi: float | None = None      # its xi for the current stagnation point
     k0: int = 0                       # 1 if the first node lies on the stagnation point
+    pin: int | None = None            # transition interval held fixed after a two-cycle (see solve_viscous)
+    limited: bool = False             # transition interval moves by at most transition_max_move nodes
 
 
 @dataclass
@@ -244,6 +246,7 @@ class Structure:
     dmat: np.ndarray | None = None    # ue = ue_inv + tie @ ue + dmat @ (ue delta*)
     ue_inv: np.ndarray | None = None
     tie: np.ndarray | None = None     # first wake station: ue = mean of the two trailing-edge ue
+    xloc: np.ndarray | None = None    # per airfoil node: x in its element's own frame (trips, x_tr)
 
 
 def _stagnation_panel(gamma_body: np.ndarray, x_body: np.ndarray, prev: int | None) -> int:
@@ -256,6 +259,23 @@ def _stagnation_panel(gamma_body: np.ndarray, x_body: np.ndarray, prev: int | No
     return int(cand[np.argmin(np.abs(cand - ref))])
 
 
+def element_x(geo: Geometry, trips: dict | None) -> np.ndarray:
+    """x of every airfoil node in its element's own frame, from the ``("xloc", body)`` entries of
+    ``trips`` (one value per input point of the body, in input order); the solver's x where a body
+    has none (a single section in its own frame; DECISIONS.md v2.1, T3)."""
+    ps = geo.ps
+    out = np.array(ps.node_x, dtype=float)
+    for k, sn in enumerate(ps.body_nodes):
+        v = (trips or {}).get(("xloc", k))
+        if v is None:
+            continue
+        v = np.asarray(v, dtype=float)
+        if v.size != sn.stop - sn.start:
+            raise ValueError(f"element frame of body {k}: {v.size} values for {sn.stop - sn.start} nodes")
+        out[sn] = v[::-1] if ps.reversed_input[k] else v
+    return out
+
+
 def make_structure(geo: Geometry, cpl: Coupling, gamma: np.ndarray, prev: Structure | None = None,
                    trips: dict | None = None) -> Structure:
     """Stagnation points and branches for signed airfoil surface speeds ``gamma`` (sheet strengths).
@@ -265,6 +285,7 @@ def make_structure(geo: Geometry, cpl: Coupling, gamma: np.ndarray, prev: Struct
     m = ps.num_nodes
     d = np.ones(cpl.m_total)
     ks, branches = [], []
+    xloc = element_x(geo, trips)
     for k, sn in enumerate(ps.body_nodes):
         prev_k = None if prev is None else int(prev.k_stag[k] - sn.start)
         kl = _stagnation_panel(np.asarray(gamma)[sn], ps.node_x[sn], prev_k)
@@ -276,7 +297,7 @@ def make_structure(geo: Geometry, cpl: Coupling, gamma: np.ndarray, prev: Struct
             s_trip = None
             xt = (trips or {}).get((k, "upper" if up else "lower"))
             if xt is not None:
-                xs, ss = ps.node_x[nodes], geo.s[nodes]
+                xs, ss = xloc[nodes], geo.s[nodes]
                 j = np.flatnonzero(xs[1:] >= xt)
                 if j.size:
                     j = int(j[0]) + 1
@@ -287,11 +308,11 @@ def make_structure(geo: Geometry, cpl: Coupling, gamma: np.ndarray, prev: Struct
             branches.append(Branch(k, up, nodes, s_trip=s_trip, k0=k0))
     turb = np.zeros(cpl.m_total, dtype=bool)
     turb[m:] = True
-    st = Structure(cpl, np.array(ks), d, branches, turb)
+    st = Structure(cpl, np.array(ks), d, branches, turb, xloc=xloc)
     if prev is not None:
         st.turbulent[:m] = prev.turbulent[:m]
         for b, b0 in zip(st.branches, prev.branches):
-            b.p_tr, b.forced_w = b0.p_tr, b0.forced_w
+            b.p_tr, b.forced_w, b.pin, b.limited = b0.p_tr, b0.forced_w, b0.pin, b0.limited
     st.dmat = cpl.dmat(d[:m])
     st.ue_inv = cpl.ue_inv(d[:m])
     # edge velocity continuous across an open trailing edge (our choice; DECISIONS.md M3, decision 1
@@ -543,8 +564,10 @@ def jacobian_jax(x, st: Structure, reynolds, prm):
 # --------------------------------------------------------------------------------------- #
 # Transition re-identification and step limiting
 # --------------------------------------------------------------------------------------- #
-def _march_amplification(x, xi, b: Branch, reynolds, prm, cs):
-    """Laminar n along a branch on the current state (FID p. 8): (n per position, p_tr, forced_w)."""
+def _march_amplification(x, xi, b: Branch, reynolds, prm, cs, full: bool = False):
+    """Laminar n along a branch on the current state (FID p. 8): (n per position, p_tr, forced_w).
+    ``full``: continue the laminar n past N_crit to the end of the branch (p_tr is still the first
+    crossing), for a transition interval that may move by fewer nodes than the march says."""
     nd = b.nodes
     th, ds, ue = x[nd, 0], x[nd, 1], x[nd, 3]
     n = np.zeros(nd.size)
@@ -552,6 +575,7 @@ def _march_amplification(x, xi, b: Branch, reynolds, prm, cs):
     ret = reynolds * ue * th
     xib = xi[nd]
     r_prev = cs.dn_dxi(hk[b.k0], th[b.k0], ret[b.k0], 0.0, prm.n_crit)
+    first = None
     for p in range(1 + b.k0, nd.size):
         dxi = xib[p] - xib[p - 1]
         if b.trip_xi is not None and xib[p - 1] < b.trip_xi <= xib[p]:
@@ -566,10 +590,12 @@ def _march_amplification(x, xi, b: Branch, reynolds, prm, cs):
             if done:
                 break
         n[p] = n2
-        if n2 >= prm.n_crit:
-            return n, p, None
+        if n2 >= prm.n_crit and first is None:
+            first = p
+            if not full:
+                return n, p, None
         r_prev = cs.dn_dxi(hk[p], th[p], ret[p], n2, prm.n_crit)
-    return n, None, None
+    return n, first, None
 
 
 def update_transition(x, st: Structure, reynolds, prm) -> bool:
@@ -581,7 +607,15 @@ def update_transition(x, st: Structure, reynolds, prm) -> bool:
     moved = False
     for b in st.branches:
         b.trip_xi = None if b.s_trip is None else float(st.d[b.nodes[0]] * (b.s_trip - ss[b.body]))
-        n, p_tr, w = _march_amplification(x, xi, b, reynolds, prm, cs)
+        lim = prm.transition_max_move if b.limited else 0
+        n, p_tr, w = _march_amplification(x, xi, b, reynolds, prm, cs,
+                                          full=lim > 0 or b.pin is not None)
+        if b.pin is not None:
+            p_tr, w = b.pin, None
+        elif lim > 0 and w is None and b.p_tr is not None and b.forced_w is None:
+            p_tr = b.p_tr + lim if p_tr is None else int(np.clip(p_tr, b.p_tr - lim, b.p_tr + lim))
+            if p_tr >= b.nodes.size:
+                p_tr = None
         nd = b.nodes
         if p_tr != b.p_tr or (w is None) != (b.forced_w is None):
             moved = True
@@ -602,6 +636,60 @@ def update_transition(x, st: Structure, reynolds, prm) -> bool:
             st.turbulent[nd[p_tr:]] = True
         b.p_tr, b.forced_w = p_tr, w
     return moved
+
+
+def _freeze_two_cycles(st: Structure, p_hist: list, r_hist: list, prm) -> bool:
+    """Record every branch's transition interval; once it has alternated between two neighbouring
+    intervals ``transition_cycle_switches`` times in a row, pin it to the one of the two whose
+    iterations had the smaller largest residual (DECISIONS.md v2.1, T1). ``r_hist`` holds the
+    largest residual of every earlier iteration. Returns True if a branch was pinned now."""
+    k = prm.transition_cycle_switches
+    pinned = False
+    for b, h in zip(st.branches, p_hist):
+        h.append(b.p_tr)
+        if not b.limited and _reversals(h) >= 2:
+            b.limited = True
+        if b.pin is not None or b.forced_w is not None or len(h) < k + 2 or k <= 0:
+            continue
+        tail = h[-(k + 1):]
+        if any(p is None for p in tail):
+            continue
+        a, c = tail[-1], tail[-2]
+        if abs(a - c) == 1 and all(tail[i] == (a if (k - i) % 2 == 0 else c) for i in range(k + 1)):
+            ra = min(r_hist[i] for i in range(len(r_hist)) if h[i] == a and i >= len(h) - k - 1)
+            rc = min(r_hist[i] for i in range(len(r_hist)) if h[i] == c and i >= len(h) - k - 1)
+            b.pin = a if ra <= rc else c
+            pinned = True
+    return pinned
+
+
+def _reversals(h: list) -> int:
+    """Number of direction reversals of the transition interval in its history."""
+    steps = [b - a for a, b in zip(h, h[1:]) if a is not None and b is not None and b != a]
+    return sum(1 for u, v in zip(steps, steps[1:]) if u * v < 0)
+
+
+def transition_mismatch(x, st: Structure, reynolds, prm) -> list:
+    """Pinned transition intervals that disagree with the amplification of the state x: the march
+    of n on x must find the pinned interval itself (DECISIONS.md v2.1, T1). Returns [(branch,
+    interval found by the march)] for those that disagree.
+
+    A neighbouring interval with the onset fraction at its clamp (w = 0 or 1) is not accepted: the
+    clamp only says that N_crit was already exceeded at, or not reached by, the shared node, not
+    that n equals N_crit there."""
+    out = []
+    if not any(b.pin is not None for b in st.branches):
+        return out
+    cs = closure_sets.get(prm.closure_set)
+    ss = stagnation_s(st, x[:, 3])
+    xi = st.d * (st.cpl.s - ss[st.cpl.body_of_node])
+    for b in st.branches:
+        if b.pin is None:
+            continue
+        _, p_new, _ = _march_amplification(x, xi, b, reynolds, prm, cs)
+        if p_new != b.p_tr:
+            out.append((b, p_new))
+    return out
 
 
 def step_scale(x, dx, st, reynolds, prm) -> tuple[float, str]:
@@ -770,7 +858,8 @@ def _initial_state(geo, cpl: Coupling, reynolds, prm, trips):
         trip_xi = None if b.s_trip is None else float(st.d[nd[0]] * (b.s_trip - ss[b.body]))
         mn = nd[b.k0:]
         r = march_init(xi[mn], np.maximum(ue_inv[mn], 1e-6), reynolds, prm.n_crit, trip_xi,
-                       prm.closure_set, prm.init_hk_max_lam, prm.init_hk_max_turb)
+                       prm.closure_set, prm.init_hk_max_lam, prm.init_hk_max_turb,
+                       prm.init_march_guards)
         x[mn, 0], x[mn, 1], x[mn, 2], x[mn, 3] = r.theta, r.dstar, r.third, r.ue
         st.turbulent[mn] = r.turbulent
         if b.k0:                                   # the node on the stagnation point
@@ -800,24 +889,88 @@ def solve_viscous(coords, alpha: float, reynolds: float, params: ViscousParams =
                   ) -> ViscousResult:
     """Coupled solution at one angle of attack (degrees), Reynolds number per unit chord, Mach 0.
 
-    ``trips``: {(body, 'upper'|'lower'): x/c} forced transition locations. ``start``: the
+    ``trips``: {(body, 'upper'|'lower'): x/c} forced transition locations, x in the body's element
+    frame given as ``("xloc", body)``: array of the x of the body's input points in that frame (the
+    solver's x where absent); the reported transition x/c is in the same frame. ``start``: the
     ``state`` of a previous result on the same geometry (warm start; DG87 p. 1353), else the
     starting march of :func:`foil_lab.bl.march.march_init` and :func:`march_wake`.
     """
+    import dataclasses
     prm = params
     geo = geometry or build_geometry(coords)
     cpl = build_coupling(geo, alpha, prm.closure_set)
     if start is not None:
         x, st0 = start
         x = np.array(x, dtype=float)
-        st0 = Structure(cpl, st0.k_stag, st0.d, st0.branches, st0.turbulent)
+        st0 = Structure(cpl, st0.k_stag, st0.d, st0.branches, st0.turbulent, xloc=st0.xloc)
         st, _ = relocate(x, geo, st0, trips)
+        out, total, cycles = _solve_from(x, st, geo, trips, reynolds, prm)
+        path = "warm start"
     else:
-        x, st = _initial_state(geo, cpl, reynolds, prm, trips)
+        # the v2.0 starting march first; the guarded march (DECISIONS.md v2.1, T2) only when the
+        # solve from it fails, so that no cold start that converged in v2.0 changes or is lost
+        unguarded = dataclasses.replace(prm, init_march_guards=False)
+        x, st = _initial_state(geo, cpl, reynolds, unguarded, trips)
+        out, total, cycles = _solve_from(x, st, geo, trips, reynolds, prm)
+        path = "march"
+        if not out[0] and prm.init_march_guards:
+            x, st = _initial_state(geo, cpl, reynolds, prm, trips)
+            again, n, cyc = _solve_from(x, st, geo, trips, reynolds, prm)
+            total += n
+            if again[0]:
+                out, cycles, path = again, cyc, "guarded march"
+    converged, it, reason, hist, scaled, limits, x, st, _ = out
+    res = _loads(x, geo, st, alpha, reynolds, prm)
+    if cycles:
+        path += " + transition cycle handling"
+    return ViscousResult(alpha=alpha, reynolds=reynolds, converged=converged, iterations=it,
+                         iterations_total=total, reason=reason, residual_history=hist,
+                         scaled_steps=scaled, step_limits=limits, state=(x.copy(), st),
+                         closure_set=prm.closure_set, path=path, **res)
+
+
+def _solve_from(x, st: Structure, geo, trips, reynolds, prm) -> tuple[tuple, int, bool]:
+    """Newton from the state (x, st): first without the transition-cycle handling, then, if that
+    failed while the transition interval oscillated, again from the same state with it
+    (DECISIONS.md v2.1, T1; a fallback, so that every solve that converges without it keeps its
+    v2.0 path and result). Returns (the :func:`_newton` tuple used, iterations of all attempts,
+    whether the cycle handling gave it)."""
+    import dataclasses
+    plain = dataclasses.replace(prm, transition_cycle_switches=0, transition_max_move=0)
+    first = _newton(x.copy(), _clone(st), geo, trips, reynolds, plain)
+    total = first[1]
+    if (not first[0] and prm.transition_cycle_switches > 0
+            and any(_reversals(h) >= 2 for h in first[-1])):
+        second = _newton(x, st, geo, trips, reynolds, prm)
+        total += second[1]
+        if second[0]:
+            return second, total, True
+    return first, total, False
+
+
+def _clone(st: Structure) -> Structure:
+    """A copy of a structure whose branch data and turbulent flags can change independently."""
+    import dataclasses
+    return dataclasses.replace(st, k_stag=st.k_stag.copy(), d=st.d.copy(),
+                               branches=[dataclasses.replace(b) for b in st.branches],
+                               turbulent=st.turbulent.copy())
+
+
+def _newton(x, st: Structure, geo, trips, reynolds, prm):
+    """The Newton iteration of :func:`solve_viscous` from the state (x, st). Returns (converged,
+    iterations, reason, residual history, scaled steps, step limits, x, st, transition-interval
+    history per branch)."""
+    for b in st.branches:
+        b.pin, b.limited = None, False
     hist, scaled, upd, limits = [], 0, np.inf, {}
     converged, reason, it, changed = False, "max_iter", 0, True
-    for it in range(prm.max_iter + 1):
-        update_transition(x, st, reynolds, prm) if it == 0 else None
+    p_hist: list[list] = [[] for _ in st.branches]
+    budget, moves, it0 = prm.max_iter, 0, 0
+    while True:
+        if it == 0:
+            update_transition(x, st, reynolds, prm)
+        if _freeze_two_cycles(st, p_hist, hist, prm):
+            update_transition(x, st, reynolds, prm)
         finalize(st)
         r = residual(x, st, reynolds, prm)
         rmax = float(np.max(np.abs(r)))
@@ -826,9 +979,22 @@ def solve_viscous(coords, alpha: float, reynolds: float, params: ViscousParams =
             reason = "non-finite residual"
             break
         if rmax <= prm.residual_tol and upd <= prm.update_tol and not changed:
-            converged, reason = True, "converged"
-            break
-        if it == prm.max_iter:
+            bad = transition_mismatch(x, st, reynolds, prm)
+            if not bad:
+                converged, reason = True, "converged"
+                break
+            # a pinned interval disagrees with the amplification: move it one node towards the
+            # interval of the march and solve again (DECISIONS.md v2.1, T1)
+            if moves >= prm.transition_pin_moves or any(p is None for _, p in bad):
+                reason = "pinned transition interval inconsistent with the amplification"
+                break
+            for b, p_new in bad:
+                b.pin += 1 if p_new > b.pin else -1
+            moves += 1
+            it0, changed, upd = it, True, np.inf
+            update_transition(x, st, reynolds, prm)
+            continue
+        if it - it0 >= budget:
             break
         if prm.jacobian == "jax":
             j = jacobian_jax(x, st, reynolds, prm)
@@ -850,12 +1016,8 @@ def solve_viscous(coords, alpha: float, reynolds: float, params: ViscousParams =
         st, moved_stag = relocate(x, geo, st, trips)
         moved_tr = update_transition(x, st, reynolds, prm)
         changed = moved_stag or moved_tr
-    res = _loads(x, geo, st, alpha, reynolds, prm)
-    return ViscousResult(alpha=alpha, reynolds=reynolds, converged=converged, iterations=it,
-                         iterations_total=it, reason=reason, residual_history=hist,
-                         scaled_steps=scaled, step_limits=limits, state=(x.copy(), st),
-                         closure_set=prm.closure_set, path="march" if start is None else "warm start",
-                         **res)
+        it += 1
+    return converged, it, reason, hist, scaled, limits, x, st, p_hist
 
 
 def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
@@ -916,7 +1078,8 @@ def _loads(x, geo, st, alpha, reynolds, prm) -> dict:
                 s_ = eq.station(th[nd[p - 1]], dsx[nd[p - 1]], c[nd[p - 1]], ue[nd[p - 1]], reynolds, False, cs=cs)
                 w = float(np.real(eq.transition_onset(s_, th[nd[p]], dsx[nd[p]], ue[nd[p]],
                                                       xi_[p] - xi_[p - 1], reynolds, prm.n_crit, cs=cs)))
-            xtr = float(px[p - 1] + w * (px[p] - px[p - 1]))
+            xl = st.xloc[nd] if st.xloc is not None else px
+            xtr = float(xl[p - 1] + w * (xl[p] - xl[p - 1]))
         per[b.body]["xtr_" + key] = xtr
         surfaces[b.body][key] = dict(x=px, y=py, xi=st.d[nd] * (geo.s[nd] - ss[b.body]), ue=ue[nd],
                                      theta=th[nd], dstar=dsx[nd], h=h[nd], cf=cf[nd], third=c[nd],
@@ -1324,8 +1487,9 @@ def viscous_params(n_crit: float | None = None, params: ViscousParams | None = N
 
 def trips_dict(trip_x_upper: float | None = None, trip_x_lower: float | None = None,
                body: int = 0) -> dict | None:
-    """Forced transition locations (x of the body, x/c for a unit chord) in the form of
-    :func:`solve_viscous`; ``None`` or 0 means free transition."""
+    """Forced transition locations of one body (x in its own frame: x/c of a unit-chord section) in
+    the form of :func:`solve_viscous`; ``None`` or 0 means free transition. Other bodies and the
+    element frames (``("xloc", body)``) are added by the caller (``foil_lab.api``)."""
     trips = {}
     if trip_x_upper:
         trips[(body, "upper")] = float(trip_x_upper)

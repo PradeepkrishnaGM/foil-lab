@@ -188,13 +188,18 @@ def test_closed_trailing_edge_kept_sharp_carries_the_wake_drag_warning():
 @pytest.mark.slow
 def test_polar_and_batch_end_to_end():
     """The problem of the former ``run_alpha_sweep`` test: the raw generator points at a Reynolds
-    number of 3e6 per unit length (``re`` is per reference chord, here 1.000078). At ``re=3e6``
-    itself the 0 deg point does not converge on these points (DECISIONS.md, Later)."""
+    number of 3e6 per unit length (``re`` is per reference chord, here 1.000078), and at ``re=3e6``
+    itself, where the 0 deg point did not converge in v2.0 (spurious root of the starting march's
+    transition interval, H_k 457; fixed by the march guards, DECISIONS.md v2.1, T2)."""
     from foil_lab.batch import build_matrix, run_batch
     af = generate_naca4("2412", 120)
     foil = fl.Airfoil.from_coords(af)
     pol = fl.polar(foil, [0.0, 2.0], re=3e6 * foil.chord, repanel=False)
     assert np.all(pol.converged) and np.all(pol.cd > 0.003)
+    same = fl.polar(foil, [0.0, 2.0], re=3e6, repanel=False)
+    assert np.all(same.converged)
+    assert same.cl[0] == pytest.approx(pol.cl[0], abs=1e-4)
+    assert same.results[0].path == "guarded march"           # the v2.0 march fails, the guarded one not
     rows = run_batch(build_matrix({"a": af}, alpha=[2.0], re=[3e6]), {"a": af})
     assert rows[0]["converged"] and abs(rows[0]["cd"] - pol.cd[1]) <= 1e-3
 

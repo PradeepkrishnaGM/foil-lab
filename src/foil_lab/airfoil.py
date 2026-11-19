@@ -246,6 +246,17 @@ class Element:
     def coords(self) -> np.ndarray:
         return self.placed.coords
 
+    def to_local(self, points) -> np.ndarray:
+        """Points of the configuration frame in the airfoil's own frame: the inverse of
+        :attr:`placed` (offset, then rotation about ``pivot``, then scale)."""
+        p = np.array(points, dtype=float).reshape(-1, 2)
+        p = p - np.asarray(self.offset, dtype=float)
+        if self.rotation_deg != 0.0:
+            p = geo.rotate(p, -self.rotation_deg, pivot=self.pivot)
+        if self.scale != 1.0:
+            p = p / self.scale
+        return p
+
 
 @dataclass(frozen=True)
 class Configuration:

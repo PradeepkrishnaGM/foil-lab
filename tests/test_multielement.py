@@ -94,3 +94,76 @@ def test_far_apart_elements_reproduce_the_single_element():
     assert two.cd == pytest.approx(sum(e.cd for e in two.elements), rel=1e-12)
     assert two.cl == pytest.approx(sum(e.cl for e in two.elements), rel=1e-12)
     assert two.cd_friction == pytest.approx(sum(e.cd_friction for e in two.elements), rel=1e-12)
+
+
+# --------------------------------------------------------------------------------------------- #
+# Per-element trips and transition x/c in each element's own frame (DECISIONS.md v2.1, T3)
+# --------------------------------------------------------------------------------------------- #
+def test_element_to_local_inverts_the_placement():
+    rng = np.random.default_rng(3)
+    af = fl.Airfoil.naca("2412")
+    el = fl.Element(af, offset=(0.97, -0.04), scale=0.3, rotation_deg=20.0, pivot=(0.1, 0.02))
+    back = el.to_local(el.coords)
+    assert np.allclose(back, af.coords, atol=1e-14)
+    p = rng.standard_normal((5, 2))
+    assert np.allclose(el.to_local(fl.Element(fl.Airfoil.from_coords(p), offset=el.offset, scale=el.scale,
+                                              rotation_deg=el.rotation_deg, pivot=el.pivot).coords), p,
+                       atol=1e-14)
+
+
+def test_trips_per_element_and_frames_reach_the_solver():
+    from foil_lab.api import _viscous_setup
+    af = fl.Airfoil.naca("2412")
+    conf = fl.Configuration((fl.Element(af), fl.Element(af, offset=(0.97, -0.04), scale=0.3, rotation_deg=20.0)))
+    bodies = [np.asarray(e.coords) for e in conf.elements]
+    _, trips = _viscous_setup(conf, bodies, 1e6, None, (None, 0.3), 0.5, None)
+    assert trips[(1, "upper")] == 0.3 and trips[(0, "lower")] == 0.5
+    assert (0, "upper") not in trips and (1, "lower") not in trips
+    assert np.allclose(trips[("xloc", 1)], np.asarray(af.coords)[:, 0], atol=1e-14)
+    assert np.allclose(trips[("xloc", 0)], np.asarray(af.coords)[:, 0], atol=1e-14)
+    # a number trips element 0 only (SPEC.md 4.3); a sequence of the wrong length is an error
+    _, trips = _viscous_setup(conf, bodies, 1e6, None, 0.2, None, None)
+    assert trips[(0, "upper")] == 0.2 and (1, "upper") not in trips
+    with pytest.raises(ValueError, match="elements"):
+        _viscous_setup(conf, bodies, 1e6, None, (0.1, 0.2, 0.3), None, None)
+    # a single section in its own frame: no frames, the solver's x is used (bit-identical to v2.0)
+    single = fl.Configuration.of(af)
+    _, trips = _viscous_setup(single, [np.asarray(af.coords)], 1e6, None, 0.2, None, None)
+    assert trips == {(0, "upper"): 0.2}
+
+
+def test_ground_images_carry_the_mirrored_trips():
+    from foil_lab.api import _from_ground, _problem, _viscous_setup
+    af = fl.Airfoil.naca("2412")
+    conf = fl.Configuration.of(af)
+    pb = _problem(conf, af, True, None, 4.0, 0.5, None)
+    _, trips = _viscous_setup(conf, pb.bodies, 1e6, None, 0.2, 0.6, None, pb.n_real,
+                              _from_ground(conf, 4.0, 0.5, None))
+    # the mirror reverses the orientation: the image of the upper surface is the image's lower branch
+    assert trips[(0, "upper")] == trips[(1, "lower")] == 0.2
+    assert trips[(0, "lower")] == trips[(1, "upper")] == 0.6
+    # frames: the real body and its image both map back to the airfoil's own x
+    x_own = np.asarray(af.repanelled().coords)[:, 0]
+    assert np.allclose(trips[("xloc", 0)], x_own, atol=1e-12)
+    assert np.allclose(trips[("xloc", 1)], x_own, atol=1e-12)
+
+
+@pytest.mark.slow
+def test_trip_on_a_placed_element_is_at_its_own_x_over_c():
+    """Element 1 scaled, pitched and moved far away (no interaction): a trip at x/c 0.3 of its own
+    chord is reported there, and its loads equal the isolated element tripped the same way."""
+    warnings.simplefilter("ignore")
+    af = fl.Airfoil.naca("2412")
+    one = fl.analyze(af, 2.0, re=1e6, trip_upper=0.3)
+    el1 = fl.Element(af, offset=(0.0, 200.0), scale=1.0, rotation_deg=0.0)
+    two = fl.analyze(fl.Configuration((fl.Element(af), el1)), 2.0, re=1e6, trip_upper=(None, 0.3))
+    assert one.converged and two.converged
+    assert one.xtr_upper == pytest.approx(0.3, abs=1e-9)
+    assert two.elements[1].xtr_upper == pytest.approx(0.3, abs=1e-9)
+    assert two.elements[0].xtr_upper > 0.35                           # element 0 free
+    assert two.elements[1].cd == pytest.approx(one.cd, rel=3e-3)
+    # pitched by 2 deg at 0 deg incidence: the same flow, trip still at its own x/c 0.3
+    el2 = fl.Element(af, offset=(5.0, 200.0), scale=0.5, rotation_deg=2.0, pivot=(0.0, 0.0))
+    three = fl.analyze(fl.Configuration((fl.Element(af), el2)), 0.0, re=1e6, trip_upper=(None, 0.3))
+    assert three.converged
+    assert three.elements[1].xtr_upper == pytest.approx(0.3, abs=1e-9)

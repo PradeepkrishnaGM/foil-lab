@@ -3360,12 +3360,165 @@ Deliverable: `docs/study_re5e4.md`; diagnostic script `tests/diagnostics/re5e4_s
   transition position, Drela 1989; or cycle detection with a consistency condition); no claim at
   Re 5e4 or 7e4; no SPEC.md change.
 
+## v2.1: fixing the Later list (user, 2026-11-19: "go full non stop, fix all the issues")
+
+The user asked for the open items to be fixed without waiting for plan approval. Every decision
+below is ours, for review. Numbers are measured; a target that is still missed says so.
+
+### T1: transition-interval cycle (docs/study_re5e4.md, recommendation 1)
+
+Decisions (autonomous, for review; 2026-11-19):
+
+0. The handling below is a fallback: `solve_viscous` first runs the v2.0 Newton iteration; only if
+   that fails and some transition interval reversed its direction of motion at least twice is the
+   solve repeated from the same start with the handling on (`path` then ends in "+ transition
+   cycle handling"; `iterations_total` counts both). Every solve that converges without it keeps
+   its v2.0 path and result. Rejected first: the handling always on. It slowed real drifts of the
+   interval (one node per iteration after two early reversals) and lost flap points (flap
+   benchmark 1398 -> 1389 of 1500 converged; NACA 2412 F15 Re 2e5 24 -> 17); limiting only moves
+   against the last direction was worse still (NACA 4412 Re 5e4 21 -> 19).
+1. The transition interval stays re-identified outside the Newton system, as in M3. Two additions
+   in `viscous.solve_viscous`, both active only where the interval oscillates:
+   - once a branch's interval has reversed its direction of motion twice in one solve, it moves at
+     most `transition_max_move` (1) node per Newton iteration towards the interval the amplification
+     march gives (the march then continues past N_crit so that the laminar n of the nodes passed
+     are set);
+   - once it has alternated between two neighbouring intervals `transition_cycle_switches` (4)
+     times in a row, it is pinned to the one of the two whose iterations had the smaller largest
+     residual.
+2. `converged` with a pinned interval also requires `transition_mismatch` to be empty: the march
+   of n on the converged state must find the pinned interval itself. The residual criteria are
+   unchanged. A first version also accepted the neighbouring interval when the onset fraction of
+   the pinned one sat at its clamp (w = 0 or 1); that was wrong and is not used: the clamp only
+   says N_crit was already exceeded at (or not reached by) the shared node, and it let NACA 0012,
+   Re 1e6, 4 deg converge to a second solution (Cd 0.4 % off the consistent one) and NACA 4412,
+   Re 5e4, 9-11 deg be counted.
+3. A pinned solve that converges but disagrees moves the pin one node towards the march's interval
+   and continues with a fresh `max_iter` budget, at most `transition_pin_moves` (6) times. Then the
+   result is not converged ("pinned transition interval inconsistent with the amplification").
+4. New parameters (documented in `params.ViscousParams`): `transition_cycle_switches` 4,
+   `transition_max_move` 1, `transition_pin_moves` 6. No existing default changed.
+
+Rejected: route (a) of the study (transition position as a continuous Newton unknown across node
+boundaries): a larger change of the discretisation with the same discontinuity at the node switch
+(the residual is continuous there, the interval identification is not).
+
+Measured (NACA 4412, Re 5e4, benchmark sweep, `run_case`, with T2): 21/25 converged against 15/25
+in v2.0; every point converged in v2.0 is bit-identical; 5 deg Cl 0.7110 (XFOIL 0.6987, pinned
+interval), 6 deg 0.7992 (0.7783), 8 deg 0.9545 (0.9637), 12-20 deg now converge (e.g. 13 deg 1.3418
+against 1.3906). 7, 9, 10 and 11 deg still fail: e.g. at 7 deg the pin moves to 47, where Newton
+steps back and forth across the clamp of the onset fraction (w alternates 1.000 / 0.979), and no
+pinned interval is consistent. Reported, not hidden. Full benchmark: section "Benchmark" below.
+
+### T2: starting march guards (flap points and the single-point item)
+
+Found while tracing the flap points of Re 6e6 and the NACA 2412 (generator, 120 panels) 0 deg point
+of the Later list: the starting march accepted spurious roots of its local Newton solves.
+- NACA 2412, Re 3e6, 0 deg: the lower-surface transition interval landed on H 457 (the H_k limit
+  is not applied on the transition interval); every station after it inherited it; Newton then
+  diverged (Cl -5e6). This, not the 0.008 % change in Re, made the point fail.
+- Flap sections: after a separated turbulent stretch (inverse mode), the next direct solve found
+  H 1.3 within one station (a reattachment in one step), and Newton stalled on the H_k clip there.
+
+Decisions (autonomous, for review; 2026-11-19), one parameter `init_march_guards` (True):
+1. A transition interval whose downstream H_k jumps above both the upstream H_k and
+   `init_hk_max_lam` is solved in the inverse mode (FID eqs. 20-21) instead.
+2. A turbulent station after a station above `init_hk_max_turb` stays in the inverse mode until the
+   prescribed H_k has relaxed to that limit.
+Only the starting state changes; equations, tolerances and `converged` are unchanged.
+
+Measured, start from the march only (no continuation), 72 flap points (NACA 0012 and 2412, flaps 5-20
+deg, Re 1e6/3e6/6e6, 0/2/4 deg) and 48 plain points (four NACA sections, Re 1e5-6e6, 0/4/8 deg):
+| march | flap converged | plain converged |
+|---|---|---|
+| v2.0 | 13/72 | 28/48 |
+| guard 1 only | 18/72 | 28/48 |
+| guards 1 and 2 | 25/72 | 31/48 |
+Lost with the guards: NACA 2412 F20 Re 1e6 0 deg, NACA 0012 Re 6e6 4 deg, NACA 23012 Re 1e6 4 deg
+(cold start only; the polar paths reach them, see the benchmark). Where both converge the results
+agree to 1e-13, except NACA 0012 Re 1e6 0 deg (v2.0 Cl 1.7e-7, now 7e-16: the symmetric solution).
+The Later-list point (NACA 2412 generator, 0 deg) now converges from the march at Re 3e6 and at
+3e6/1.000078 (Cl 0.2453, 7 iterations).
+
+Revised (2026-11-19, after the full test suite): with the guards always on, the cold start of
+NACA 2412 Re 1e6 5 deg (a v2.0 slow test) no longer converged (max_iter, 46 delta* step limits);
+guard 2 alone causes it, guard 1 alone converges in 9 iterations. Decision (autonomous, for
+review): the guarded march is a fallback, like T1. A cold start solves from the v2.0 march first and
+only when that fails from the guarded march (`path` "guarded march"). So no cold start that
+converged in v2.0 changes or is lost, and the gains of the table above are kept. Golden values
+re-recorded: the cold-start cases differ by at most 1.2e-14 in Cl (back on the v2.0 starting
+state; NACA 2412 Re 1e6 2 deg 17 -> 11 iterations); the S1 changes stay bit-identical (checked
+before). The benchmark below is from the always-on version; rerun pending.
+
+### T3: per-element trips and transition x/c in the element's own frame (M5 Later item)
+
+Decisions (autonomous, for review; 2026-11-19):
+
+1. `trip_upper` / `trip_lower` take a number (element 0, as before; SPEC.md 4.3) or a sequence with
+   one value or None per element. The result records them as given.
+2. x/c of a trip and of the reported transition is x in the element's own frame: the airfoil before
+   its scale, rotation and offset (`Element.to_local`). For a single section in its own frame this
+   is the solver's x, so v2.0 results are bit-identical (no frame is passed then). For a flapped
+   section it stays x of the section (as XFOIL reports it), not a chord line to the deflected edge.
+3. Ground effect: the image bodies now carry the mirrored trips (the mirror reverses the
+   orientation, so the image of the upper surface is the image's lower branch). In v2.0 the image
+   had free transition when the real body was tripped (defect found while doing this item).
+
+### S1: speed, first step (golden values first)
+
+Golden values recorded before any optimisation (`tests/golden_cases.py`,
+`tests/data/golden/golden_v21.json`, slow test `tests/test_golden.py`): NACA 2412 Re 1e6 2 and 5 deg,
+NACA 4412 Re 5e4 4 and 5 deg (pinned interval), NACA 2412 F10 Re 1e6 2 deg, NACA 2412 Re 3e6 2 deg
+with a trip, the inviscid NACA 2412 at 4 deg, the slotted-flap example at Re 3e6: Cl, Cd, Cm,
+transition, iterations and a SHA-256 of the converged state. Single-threaded BLAS (the test runs the
+cases in a subprocess so); another CPU may differ in the last bits.
+
+Changes, each checked bit-identical against the golden values:
+1. The onset bisection computes only H_k, theta and Re_theta for the laminar rate (the same
+   operations as `station`), not the closures the rate does not use.
+2. `_xp.branch` evaluates only the selected branch for a scalar NumPy condition (same argument,
+   same final `where`).
+3. The bisection runs on the real parts in NumPy and is cached on those inputs: the complex-step
+   Jacobians repeat it with unchanged real parts. The Newton correction after it keeps the complex
+   path, so derivatives are unchanged.
+Rejected: one vectorised call for the march's complex-step Jacobian (changes the last bit of the
+converged Cl at 5 deg; reverted).
+
+Measured (NACA 2412, Re 1e6, one core): start from the march 2 deg 20.1 s -> 7.5 s; warm start
+5 deg 3.2 s -> 2.5 s. Golden test 241 s -> 120 s.
+
+### Benchmark (T1 as fallback + T2 + S1; 2026-11-19, 6 processes, 62 min)
+
+Rows in `benchmark_output/v21` and `benchmark_output/v21_flaps` (not in git; the flap run used
+`--skip-xfoil` with the committed references and the XFOIL dumps of the release run). VALIDATION.md
+regenerated from them.
+- Main matrix: 1167 -> 1197 of 1225 points converged, none lost. Of the 1167 points converged in
+  both runs, 405 are bit-identical and 761 differ by less than 1e-8 in Cl (the S1 changes reorder
+  no arithmetic, but the T2 guards change some starting states). One point moved to a neighbouring
+  solution: E387 Re 1e6 0 deg, Cl 0.380624 -> 0.380625, Cd 0.0056107 -> 0.0056096. Gains:
+  NACA 4412 Re 5e4 9 -> 21, E387 Re 5e4 8 -> 21, one point each at Clark Y Re 5e4 and 1e5,
+  E387 gap Re 5e4, NACA 23012 Re 5e4, NACA 2412 Re 5e4. Summed run time 3.84 h -> 1.84 h.
+- Re 5e4 (no claim): 72/78 -> 76/78 filter points converged; mean dCl 0.0205 -> 0.0202.
+- **Worse, reported:** E387 (sharp edge, no targets) Re 5e4: 8/13 -> 12/13 filter points converged,
+  but mean / max dCl 0.070 / 0.136 -> 0.102 / 0.372 and mean rel dCd 13.6 % -> 23.3 %. The new
+  points at 6-9 deg and 13-20 deg are converged states (residual met) of a separated solution:
+  Cl 0.66-0.81 at 6-9 deg against XFOIL 0.76-1.17, whose bubble stays short. They were unconverged
+  before and so not counted. Same class as the bubble-regime differences in docs/study_re5e4.md.
+- Flaps: 1398 -> 1402 of 1500 converged. 10 deg Re 2e5 now meets the convergence target (91.7 % ->
+  95.8 %; max dCl 0.102 still fails); 15 deg Re 6e6 77.4 % -> 80.6 %, 20 deg Re 2e5 89.5 % ->
+  94.7 %. Re 6e6 at 5-20 deg still misses 95 %: the Newton trace of the failing points crawls under
+  the delta* step limit (step fraction about 3 %, residual 57 -> 7 in 48 iterations); not fixed.
+
 ## Later
 
 - v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re
-  5e4, 5-9 deg); fix proposed in docs/study_re5e4.md, not started. Flap points at Re 6e6: the
-  starting state is the likely cause (separate study).
-- After M9 (found while retiring the old layer): NACA 2412 from the generator (120 panels, not
+  5e4, 5-9 deg). Partly done in v2.1 T1 (2026-11-19): 9 -> 21 of 25 converged; 4 points still fail.
+  Flap points at Re 6e6: the starting state was the likely cause; after T2 the failing points crawl
+  under the delta* step limit instead (v2.1 Benchmark). Open.
+- v2.1 (2026-11-19): E387 Re 5e4 converges at 6-9 and 13-20 deg to a separated solution (Cl 0.1-0.4
+  below XFOIL). Needs a criterion for which of two converged bubble states is physical; open.
+- Done in v2.1 T2 (2026-11-19; `test_polar_and_batch_end_to_end` checks Re 3e6 now): After M9
+  (found while retiring the old layer): NACA 2412 from the generator (120 panels, not
   repanelled), Re 3e6: the 0 deg point converges at Re 3e6 per unit length (Cl 0.2453, reached from
   2 deg by continuation) but not at 3e6 / 1.000078 (the same Re per the section's own chord): the
   start from the march diverges (Cl -7.9e6, reported `converged=False`) and `reach_from_nearest`
@@ -3378,13 +3531,13 @@ Deliverable: `docs/study_re5e4.md`; diagnostic script `tests/diagnostics/re5e4_s
 - M6: compressible viscous analysis (Mach in the boundary-layer closures and the coupling); the
   finite-wing correction evaluated at the effective angle (profile drag at alpha_eff) instead of the
   geometric angle; spanwise friction in simple sweep theory.
-- M5: per-element forced transition (trips apply to element 0 only); transition location of an
-  element as x/c of the element's own chord instead of the global x.
+- Done in v2.1 T3 (2026-11-19): M5: per-element forced transition (trips apply to element 0
+  only); transition location of an element as x/c of the element's own chord instead of the global x.
 - M5: wake merging with a downstream boundary layer and slot-flow separation (SPEC.md 4.6: not in
   v2.0); a multi-element viscous reference (MSES or wind-tunnel data with a usable licence).
 - M4 (after the full run): Foil-Lab does not converge at several low angles (-4 to 4 deg) of the flap cases at
   Re 6e6 (NACA 0012 F15: -4, -1, 0, 1; NACA 2412 F20: -4 to 1; in the filter 2-6 points per case) and at 10 deg
-  Re 2e5 (91.7 % of the pooled filter points). Find the cause (start from the march or the
+  Re 2e5 (91.7 % of the pooled filter points; 95.8 % after v2.1). Find the cause (start from the march or the
   continuation from 0 deg at a flapped section's hinge); this is what prevents 5 and 10 deg from
   being validated.
 - M4 (after the full run): the Cl error of the flap cases grows with the deflection (mean dCl 0.002-0.008 at
@@ -3398,7 +3551,8 @@ Deliverable: `docs/study_re5e4.md`; diagnostic script `tests/diagnostics/re5e4_s
 - Done (closed 2026-11-18): End of M3 (user's decision, 2026-10-10): extend the validated range
   downward. Approved after report 11 and applied to SPEC.md in commit 17017dc (validated Re 1e5 to
   6e6 with the same targets; Re 5e4 reported without a claim).
-- After M3 (candidate for M7; user, 2026-10-10): solver speed. Reuse the coupling between angles, a
+- Partly done in v2.1 S1 (2026-11-19; benchmark run time 3.84 h -> 1.84 h, golden values unchanged):
+  After M3 (candidate for M7; user, 2026-10-10): solver speed. Reuse the coupling between angles, a
   faster starting march, a compiled JAX path. Golden values recorded first; results must not change.
   Time per point reported before and after; the target is set from measurements.
 - M3 cleanup (C5; user, 2026-10-10): confirm that `design.maximize_ld` and the batch example use the
