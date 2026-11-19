@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased (v2.1 work on the v2.0 "Later" list; DECISIONS.md v2.1)
+## Unreleased (v2.1 work on the v2.0 "Later" list; DECISIONS.md v2.1, v2.2)
+
+* **Finite wing** (E1, v2.2): profile drag, moment and hinge moment come from the section at the
+  effective angle alpha - (Cl_inf - CL)/a instead of the geometric angle; lift (Helmbold) and induced
+  drag unchanged. One more section solve per point with an aspect ratio.
 
 * **Transition-interval cycles** (T1): when a solve fails while the transition interval switches back
   and forth, it is retried with the interval's motion limited and, after a two-cycle, pinned; the

@@ -443,11 +443,16 @@ def _result(ps, asm, bodies, names, config, alpha: float, repanel: bool, flaps=(
 
 
 def _corrected(r: Result, alpha: float, plane, mach: float, sweep: float, aspect_ratio, ground_height,
-               slope) -> Result:
+               slope, at_angle=None) -> Result:
     """Steps 4 and 5 of :mod:`foil_lab.corrections` on a normal-plane result: back to the freestream
     (sweep), then the finite wing; conditions, critical Mach number, corrections and warnings
     recorded. ``slope``: callable giving the infinite wing's lift slope (per rad), used only with an
-    aspect ratio."""
+    aspect ratio. ``at_angle``: callable giving the section result (steps 1-4) at another
+    freestream angle; with an aspect ratio, profile drag and moments are taken from it at the
+    effective angle (lifting-line theory, e.g. Anderson, *Fundamentals of Aerodynamics*, 6th ed.,
+    2017, section 5.3: each section works at alpha_eff = alpha - alpha_i), defined as
+    alpha_eff = alpha - (Cl_inf - CL) / a so that the section's linear lift at alpha_eff equals the
+    wing's Helmbold CL (DECISIONS.md v2.2, E1). Lift stays CL."""
     import dataclasses
     from .corrections import finite_wing
     corr = list(r.corrections)
@@ -461,6 +466,10 @@ def _corrected(r: Result, alpha: float, plane, mach: float, sweep: float, aspect
                     f"Mach {plane.mach:.4f}, Re {plane.reynolds:.6g}; Cl, Cm x cos^2, Cd x cos^3")
     if mach:
         corr.append(f"Kármán-Tsien at Mach {plane.mach:.4f} on the surface pressure")
+    mcr = None if r.mach_critical is None else r.mach_critical / c
+    if mach and mcr is not None and np.isfinite(mcr) and mach > mcr:
+        warn.append(f"Mach {mach:g} is above the critical Mach number {mcr:.4f}: supersonic flow on "
+                    "the surface; the Kármán-Tsien rule and the panel method do not hold there")
     fw_f, cdi = 1.0, None
     if aspect_ratio is not None:
         a = float(slope())
@@ -469,6 +478,23 @@ def _corrected(r: Result, alpha: float, plane, mach: float, sweep: float, aspect
         fw_f, cdi = fw.factor, fw.cdi
         corr.append(f"finite wing: aspect ratio {aspect_ratio:g}, Helmbold factor {fw.factor:.5f} "
                     f"(lift slope {a:.4f} /rad), induced drag CL^2/(pi e AR)")
+        if at_angle is not None:
+            a_eff = float(alpha - np.rad2deg((cl_inf - fw.cl) / a))
+            sec = at_angle(a_eff)
+            corr[-1] += (f"; profile drag and moments of the section at the effective angle "
+                         f"{a_eff:.4f} deg")
+            if not sec.converged:
+                warn.append(f"the section solve at the effective angle {a_eff:.4f} deg did not converge")
+            # lift of the geometric-angle solve (scaled below); the rest from the effective angle,
+            # already back in the freestream (cos factors applied in its own steps 1-4)
+            els = tuple(dataclasses.replace(es, cl=e.cl * c * c * fw_f)
+                        for e, es in zip(r.elements, sec.elements))
+            return dataclasses.replace(
+                sec, alpha=float(alpha), cl=r.cl * c * c * fw_f, elements=els,
+                cd=None if sec.cd is None else sec.cd + cdi, converged=r.converged and sec.converged,
+                corrections=tuple(corr), warnings=tuple(warn) + tuple(w for w in sec.warnings if w not in warn),
+                aspect_ratio=float(aspect_ratio), cd_induced=cdi,
+                mach_critical=mcr)
     els = []
     for e in r.elements:
         els.append(dataclasses.replace(
@@ -478,10 +504,6 @@ def _corrected(r: Result, alpha: float, plane, mach: float, sweep: float, aspect
             ch_pressure=None if e.ch_pressure is None else e.ch_pressure * c * c,
             ch_friction=None if e.ch_friction is None else e.ch_friction * c * c))
     cd = None if r.cd is None else r.cd * c ** 3 + (cdi or 0.0)
-    mcr = None if r.mach_critical is None else r.mach_critical / c
-    if mach and mcr is not None and np.isfinite(mcr) and mach > mcr:
-        warn.append(f"Mach {mach:g} is above the critical Mach number {mcr:.4f}: supersonic flow on "
-                    "the surface; the Kármán-Tsien rule and the panel method do not hold there")
     return dataclasses.replace(
         r, alpha=float(alpha), cl=r.cl * c * c * fw_f, cm=r.cm * c * c, cd=cd, elements=tuple(els),
         cd_friction=None if r.cd_friction is None else r.cd_friction * c ** 3,
@@ -568,7 +590,10 @@ def _run(geometry, alphas, re, repanel, num_panels, n_crit, trip_upper, trip_low
             up, lo = (_run(geometry, [a + d], None, repanel, num_panels, None, None, None, None, mach,
                            sweep, None, ground_height, pivot, True)[0].cl for d in (h, -h))
             return (up - lo) / np.deg2rad(2.0 * h)
-        out.append(_corrected(r, a, p, mach, sweep, aspect_ratio, ground_height, slope))
+        def at_angle(a_eff):
+            return _run(geometry, [a_eff], re, repanel, num_panels, n_crit, trip_upper, trip_lower,
+                        params, mach, sweep, None, ground_height, pivot, True)[0]
+        out.append(_corrected(r, a, p, mach, sweep, aspect_ratio, ground_height, slope, at_angle))
     return out
 
 

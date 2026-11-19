@@ -65,7 +65,7 @@ API reference in [docs/api.md](docs/api.md).
 
 - **Corrections**, each applied once in a fixed order and listed in the result: ground effect (image
   method), simple sweep, Kármán-Tsien compressibility with the critical Mach number, finite aspect
-  ratio (Helmbold's lift factor, induced drag).
+  ratio (Helmbold's lift factor, induced drag, profile drag at the effective angle).
 - **Data:** results to pandas, CSV, JSON and XFOIL-layout polar files; a SQLite polar database keyed by
   geometry hash, conditions and code version; a batch runner (serial or parallel processes); plot
   helpers that return the figure and axes.
