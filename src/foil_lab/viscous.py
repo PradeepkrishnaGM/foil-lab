@@ -1234,7 +1234,7 @@ def reach_from_nearest(coords, alphas, results: list, cold: list, reynolds: floa
     the nearest converged angle of the sweep, walking towards them one angle of the sweep at a time,
     each angle a polar point (:func:`solve_point`) started from the last one reached; the walk stops
     at the first angle that fails (our choice; DECISIONS.md M3, decision 3 after report 8; FID
-    section VIII.C). ``results`` is updated in place where a point converges this way; its ``path``
+    section VIII.C). Points still failed afterwards get :func:`walk_both_sides` in :func:`sweep`. ``results`` is updated in place where a point converges this way; its ``path``
     starts with "from <angle> deg: " and its ``iterations_total`` includes the failed attempts.
     ``on_result(i, result, seconds)`` is called for every point the walk solves.
 
@@ -1275,6 +1275,52 @@ def reach_from_nearest(coords, alphas, results: list, cold: list, reynolds: floa
             start, a_prev = r.state, alphas[k]
 
 
+def walk_both_sides(coords, alphas, results: list, reynolds: float, params: ViscousParams = VISCOUS,
+                    trips=None, geometry: Geometry | None = None, on_result=None) -> None:
+    """Last pass of :func:`sweep` (DECISIONS.md v2.2, E3), after :func:`reach_from_nearest`: every
+    point still not converged (``alphas`` sorted) is walked to from the nearest converged angle
+    below it and then from the nearest converged angle above it, as long as it fails. Unlike
+    :func:`reach_from_nearest`, a walk passes over an angle that fails, starting the next one from
+    the last converged state as :func:`polar` does, for at most ``params.walk_max_skips``
+    consecutive failed angles. Angles that converge on the way are kept. Only points that failed
+    every earlier attempt are solved, so no result that converged before this pass changes.
+    ``on_result(i, result, seconds)`` as for :func:`reach_from_nearest`."""
+    import time
+    if params.walk_max_skips < 1:
+        return
+    geo = geometry or build_geometry(coords)
+    n = len(alphas)
+    for i in range(n):
+        for side in (-1, 1):
+            if results[i].converged:
+                break
+            js = [j for j in (range(i - 1, -1, -1) if side < 0 else range(i + 1, n)) if results[j].converged]
+            if not js:
+                continue
+            j = js[0]
+            step = -side
+            start, a_prev, fails = results[j].state, alphas[j], 0
+            for k in range(j + step, i + step, step):
+                if results[k].converged:
+                    start, a_prev, fails = results[k].state, alphas[k], 0
+                    continue
+                t0 = time.perf_counter()
+                r = solve_point(coords, alphas[k], reynolds, params, trips, start, a_prev, geo)
+                if r.converged:
+                    r.path = f"from {alphas[j]:g} deg (both sides): {r.path}"
+                    r.iterations_total += results[k].iterations_total
+                if on_result is not None:
+                    on_result(k, r, time.perf_counter() - t0)
+                if not r.converged:
+                    fails += 1
+                    if fails > params.walk_max_skips:
+                        break
+                    continue
+                fails = 0
+                results[k] = r
+                start, a_prev = r.state, alphas[k]
+
+
 def polar(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trips=None,
           geometry: Geometry | None = None, start=None, alpha_start: float | None = None) -> list:
     """Results along a sequence of angles, each started from the last converged one (DG87
@@ -1303,7 +1349,8 @@ def sweep(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trip
     through the smaller ones, each a polar point (:func:`solve_point`, started from the last
     converged angle as :func:`polar` does); then every point whose start from the march failed is
     reached from the nearest converged angle of its sweep, and else of the other sweep
-    (:func:`reach_from_nearest`). Only how points are reached is chosen here; each result's
+    (:func:`reach_from_nearest`); last, points still failed are walked to from both sides
+    (:func:`walk_both_sides`). Only how points are reached is chosen here; each result's
     ``path`` says how it was reached and ``converged`` is that of :func:`solve_viscous`.
 
     A point whose solve raises is recorded as not converged (``reason`` "exception") and is never
@@ -1356,6 +1403,7 @@ def sweep(coords, alphas, reynolds: float, params: ViscousParams = VISCOUS, trip
     walked = None if on_result is None else (lambda k, r, s: on_result(a_c[k], r, s, True, None))
     reach_from_nearest(coords, a_c, res_c, [all_cold[q] for q in order], reynolds, params, trips, geo,
                        on_result=walked, group=[group[q] for q in order])
+    walk_both_sides(coords, a_c, res_c, reynolds, params, trips, geo, on_result=walked)
     done.update(dict(zip(a_c, res_c)))
     return [done[float(a)] for a in alphas]
 

@@ -241,6 +241,13 @@ class ViscousParams:
         not counted); when the cap is reached the result is not converged and its ``path`` lists the
         attempts. 10 set by the user after report 12 (no bound on the distance; the two points
         missed in report 12 needed 5 and 9).
+    walk_max_skips:
+        Last pass of :func:`foil_lab.viscous.sweep` (:func:`foil_lab.viscous.walk_both_sides`): a
+        point still failed is walked to from the nearest converged angle on each side, going on past
+        an angle that fails (from the last converged state, as :func:`foil_lab.viscous.polar` does)
+        for at most this many consecutive failed angles. 0 switches the pass off (the v2.1 sweep).
+        It runs after every earlier attempt, so no result that converged before it changes. 1 decided
+        autonomously in v2.2 (DECISIONS.md v2.2, E3; for review).
     transition_cycle_switches:
         A branch whose transition interval has switched back and forth between two neighbouring
         intervals this many times in a row is held at its current interval for the rest of the
@@ -274,6 +281,7 @@ class ViscousParams:
     closed_te_gap: float = 0.0005
     single_point_step: float = 1.0
     single_point_max_cold: int = 10
+    walk_max_skips: int = 1
     transition_cycle_switches: int = 4
     transition_max_move: int = 1
     transition_pin_moves: int = 6
