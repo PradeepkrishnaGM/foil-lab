@@ -3516,7 +3516,14 @@ point to a neighbouring solution; replaced by this one.)
 - v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re
   5e4, 5-9 deg). Partly done in v2.1 T1 (2026-11-19): 9 -> 24 of 25 converged; 1 point still fails.
   Flap points at Re 6e6: the starting state was the likely cause; after T2 the failing points crawl
-  under the delta* step limit instead (v2.1 Benchmark). Open.
+  under the delta* step limit instead (v2.1 Benchmark). Open. Traced (2026-11-19, NACA 2412 F20,
+  0 deg, 20 failing points at Re 6e6 in all): the first steps settle a laminar bubble at the upper
+  transition (x/c 0.06, H 3.1); then the stagnation node (lower surface, x/c 0.016) sits on the H_k
+  clip (1.02) while every Newton step asks for a delta* change there 100-300 times its value, so the
+  global delta* limit scales the whole step to 0.1-1 % for 20+ iterations and the residual never
+  falls. Candidates: the stagnation-point extrapolation (FID p. 7) when the first station's ue is
+  small (0.095 here), or a local limit at the stagnation node. Either changes converged results, so
+  it needs a study with the golden values and the benchmark, not a quick fix.
 - v2.1 (2026-11-19): E387 Re 5e4 converges at 6-9 and 13-20 deg to a separated solution (Cl 0.1-0.4
   below XFOIL). Needs a criterion for which of two converged bubble states is physical; open.
 - Done in v2.1 T2 (2026-11-19; `test_polar_and_batch_end_to_end` checks Re 3e6 now): After M9
