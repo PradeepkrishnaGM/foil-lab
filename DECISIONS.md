@@ -3511,6 +3511,29 @@ point to a neighbouring solution; replaced by this one.)
   the delta* step limit (step fraction about 3 %, residual 57 -> 7 in 48 iterations); not fixed.
   The validated flap range stays 0 deg.
 
+## M8 review (user's delegation, 2026-11-19: "you do the M8 review via screenshots")
+
+Done headless (Qt offscreen), driving the window through 25 steps and reading the screenshots
+(`review-gui/m8_review_2026-11-19/`, not in git): create by NACA digits and a bad UIUC name (clear
+error), inviscid and viscous single points with Cp and the flow field, a viscous polar (9/9
+converged), Cancel during a polar, a plain flap at 10 deg with the hinge moment, re-flapping to
+20 deg (from the undeflected section), a slotted-flap element inviscid and viscous with forces per
+element, removing it, ground effect with the ground line, Mach + sweep + aspect ratio together,
+a scaled / rotated / moved main element, viscous with Mach > 0 (clear NotImplementedError text,
+no crash), and a trip. Every result equals the API's; surface labels and the flow through the slot
+are right. The Cm kink of NACA 2412 at Re 1e6 between 2 and 4 deg is physical (XFOIL has it too:
+the lower-surface transition reaches the trailing edge).
+
+Found and fixed:
+1. The status text was a label at the foot of the scrolling input column: the drag parts, the
+   corrections and the warnings were cut off below the window. It is now a read-only scrollable box
+   under the progress bar and Cancel, outside the scroll area (test added).
+2. Plots were laid out once with `tight_layout` while their tab was hidden (default canvas size),
+   so the polar panels overlapped when shown. The canvases now use matplotlib's constrained layout
+   and draw when shown; `plot.polars` lays out only figures it created itself.
+3. The single-point title said "Cd -" for an inviscid finite wing; it now shows the induced drag.
+The M8 box is ticked on this review.
+
 ## Later
 
 - v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re

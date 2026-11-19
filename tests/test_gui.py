@@ -147,3 +147,23 @@ def test_viscous_multi_element_and_ground_runs(app, win):
     win.btn_run_single.click()
     _wait(app, win)
     assert win.last_result.ground_height == 0.5 and "ground effect" in win.lbl_status.text()
+
+
+def test_status_stays_visible_and_complete(app, win):
+    """M8 review (2026-11-19): the status text was a label at the foot of the scrolling input
+    column, so long results (drag parts, corrections) were cut off below the window edge. It is now
+    a scrollable box outside the scroll area, and the plot title shows the induced drag of an
+    inviscid finite wing instead of "Cd -"."""
+    _create(win, "2412")
+    win.spin_re.setValue(0.0)
+    win.spin_mach.setValue(0.5)
+    win.spin_sweep.setValue(20.0)
+    win.spin_ar.setValue(8.0)
+    win.btn_run_single.click()
+    _wait(app, win)
+    scroll = win.findChild(QtWidgets.QScrollArea)
+    assert not scroll.isAncestorOf(win.lbl_status) and win.lbl_status.isVisible()
+    text = win.lbl_status.text()
+    assert "simple sweep" in text and "Kármán-Tsien" in text and "finite wing" in text
+    title = win.single_plot.fig.axes[0].get_title()
+    assert f"Cd induced {win.last_result.cd_induced:.5f}" in title
