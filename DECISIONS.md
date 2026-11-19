@@ -3546,7 +3546,10 @@ The M8 box is ticked on this review.
   global delta* limit scales the whole step to 0.1-1 % for 20+ iterations and the residual never
   falls. Candidates: the stagnation-point extrapolation (FID p. 7) when the first station's ue is
   small (0.095 here), or a local limit at the stagnation node. Either changes converged results, so
-  it needs a study with the golden values and the benchmark, not a quick fix.
+  it needs a study with the golden values and the benchmark, not a quick fix. Tried (2026-11-19,
+  scratch only): damping the update locally at the two stagnation nodes instead of scaling the whole
+  step; NACA 2412 F20 0 deg, NACA 0012 F15 0 deg and F10 -1 deg still fail (max_iter): the delta*
+  limit then binds at other nodes, so the crawl is not confined to the stagnation point.
 - v2.1 (2026-11-19): E387 Re 5e4 converges at 6-9 and 13-20 deg to a separated solution (Cl 0.1-0.4
   below XFOIL). Needs a criterion for which of two converged bubble states is physical; open.
 - Done in v2.1 T2 (2026-11-19; `test_polar_and_batch_end_to_end` checks Re 3e6 now): After M9
@@ -3609,11 +3612,12 @@ The M8 box is ticked on this review.
   -4 and -3 deg converges to a non-physical solution (Cl 0.19 against XFOIL -0.063).
 - After v2.0: decide the wake treatment of the parked closure set "drela1987" (its far wake drives
   H_k below the 1.02 clip; not converged with the wake; excluded from benchmark runs until then).
-- `requires-python = ">=3.10"` is declared but only Python 3.14 is available and tested here.
+- Done (M9 CI, checked 2026-11-19): the build workflow runs the fast suite on Python 3.10 to 3.14
+  ("First CI run"). Was: `requires-python = ">=3.10"` is declared but only Python 3.14 is available and tested here.
   Decide the supported versions and test them in M7.
-- `examples/basic_alpha_sweep.py` opens `naca2412.dat` relative to the current directory, so it
+- Done (M7, checked 2026-11-19: the script resolves the file next to itself): `examples/basic_alpha_sweep.py` opens `naca2412.dat` relative to the current directory, so it
   only works when run from `examples/`. Fix with the M7 example rework.
-- README and TESTING.md still describe `PYTHONPATH=src` and older test counts; rewrite in M9.
+- Done (M9, checked 2026-11-19: no `PYTHONPATH` in README.md or TESTING.md): README and TESTING.md still describe `PYTHONPATH=src` and older test counts; rewrite in M9.
 - M7 speed (after C5; user): design/maximize_ld with the viscous solver is too slow for interactive
   use. `examples/inverse_design_demo.py --ld` (NACA 2412 reference, 4 deg, Re 3e6, `target_cl` 0.8,
   `max_iter` 3, 120 panels) ran 48 min 25 s of wall time and was stopped unfinished by the user's
@@ -3630,7 +3634,7 @@ The M8 box is ticked on this review.
 - M9 (user, after report 11): Validation statements say 'agreement with XFOIL', not experiment.
   Consider comparing E387 at Re 1e5 to 3e5 with the NASA Langley wind-tunnel data (McGhee et al.,
   NASA TM-4062, 1988); verify the citation and data licence before use, and do not bundle the data.
-- M9 (after C5): the README still describes the deleted v1.3.1 viscous paths (`vii.solve_vii`,
+- Done (M9, checked 2026-11-19: none of them in README.md): M9 (after C5): the README still describes the deleted v1.3.1 viscous paths (`vii.solve_vii`,
   `--vii`, one-way drag, roughness, post-stall); rewrite with the M9 README.
 - (Closed after report 11: `run_case` now calls `viscous.sweep`.)
 - M2: decide which NACA trailing edge (open or closed) is the default in v2.0.
@@ -3648,7 +3652,8 @@ The M8 box is ticked on this review.
   processes over the matrix hang until the timeout. Consider whether E387 stays in the matrix.
 - M3: Newton VII takes 25-60 s per point and converged at 1 of 9 points at Re 5e4 and 5 of 10 at
   Re 2e5 (subset).
-- M7: the benchmark adapter `baseline_v131.py` is removed when the v1.3.1 solvers are replaced.
+- Closed by decision ("After M9": it now writes only the inviscid rows of the benchmark from
+  `inviscid.body_loads`): M7: the benchmark adapter `baseline_v131.py` is removed when the v1.3.1 solvers are replaced.
 - M2: once the trailing-edge gap tool exists, add an E387 variant with a 0.25 % gap as a section
   with targets, and regenerate the Clark Y and E387 references after the new repanelling.
 - M3: on NACA 2412 at Re 1e6 the transpiration VII lift is too low in the linear range (0.73 at
