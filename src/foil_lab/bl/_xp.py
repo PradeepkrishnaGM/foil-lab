@@ -26,7 +26,16 @@ def re(x):
 
 
 def branch(xp, cond, x, safe_true, safe_false, f_true, f_false):
-    """where(cond, f_true(x), f_false(x)), each branch evaluated on safe arguments only."""
+    """where(cond, f_true(x), f_false(x)), each branch evaluated on safe arguments only.
+
+    For a scalar NumPy condition only the selected branch is evaluated, on the same argument and
+    with the same final ``where``, so the value is bit-identical to evaluating both (speed)."""
+    if xp is np and np.ndim(cond) == 0:
+        if cond:
+            a = f_true(xp.where(cond, x, safe_true))
+            return xp.where(cond, a, a)
+        b = f_false(xp.where(cond, safe_false, x))
+        return xp.where(cond, b, b)
     a = f_true(xp.where(cond, x, safe_true))
     b = f_false(xp.where(cond, safe_false, x))
     return xp.where(cond, a, b)

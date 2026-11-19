@@ -182,7 +182,7 @@ def march(xi, reynolds, ue=None, dstar=None, n_crit=9.0, xi_trip=None,
 
 
 def march_init(xi, ue_inv, reynolds, n_crit=9.0, xi_trip=None, cs="fidkowski2022",
-               hk_max_lam=3.8, hk_max_turb=2.5) -> MarchResult:
+               hk_max_lam=3.8, hk_max_turb=2.5, guards: bool = False) -> MarchResult:
     """Starting state of the coupled Newton solver on one branch (FID section V.A, p. 9).
 
     Direct march on the inviscid edge velocity. Where the direct Newton fails or H_k exceeds
@@ -257,9 +257,19 @@ def march_init(xi, ue_inv, reynolds, n_crit=9.0, xi_trip=None, cs="fidkowski2022
         else:
             xtr_i = None
         hk_max = hk_max_turb if new_turb else hk_max_lam
+        # with the guards, a turbulent station after a separated one (H_k above the limit) stays
+        # in the inverse mode until the prescribed H_k has come down to the limit: the direct
+        # Newton can otherwise land on a root with an H_k far below it, a reattachment within one
+        # station (our choice; DECISIONS.md v2.1, T2)
+        relaxing = guards and turbulent and new_turb and prev[1] / prev[0] > hk_max_turb
         # the H_k switch is not applied on the transition interval itself, whose downstream
-        # station still carries the laminar H_k (DECISIONS.md M3, C2)
-        if ok and (x[1] / x[0] <= hk_max or (new_turb and not turbulent)):
+        # station still carries the laminar H_k (DECISIONS.md M3, C2); with the guards, a
+        # transition interval whose downstream H_k jumps above both the upstream H_k and the
+        # laminar limit is a spurious root (H_k in the hundreds was seen) and goes to the inverse
+        # mode (our choice; DECISIONS.md v2.1, T2)
+        jump = (guards and ok and new_turb and not turbulent
+                and x[1] / x[0] > max(prev[1] / prev[0], hk_max_lam))
+        if ok and not relaxing and not jump and (x[1] / x[0] <= hk_max or (new_turb and not turbulent)):
             state = to_state(x, mode)
         else:
             # 2. inverse with prescribed H_k (FID eqs. 20-21)

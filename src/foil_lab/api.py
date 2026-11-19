@@ -25,6 +25,8 @@ from .airfoil import Airfoil, Configuration, Element
 from .params import CORRECTIONS, GEOMETRY, ViscousParams
 
 Geometry = Union[Airfoil, Element, Configuration]
+#: forced trip x/c: a number (element 0) or one value or None per element
+TripSpec = Union[None, float, Tuple[Optional[float], ...]]
 METHOD = "inviscid linear-strength vortex panel method"
 METHOD_VISCOUS = "coupled viscous-inviscid (integral boundary layer and wake, e^n transition)"
 
@@ -103,7 +105,7 @@ class Result:
     path: Optional[str] = None              # how the point was reached ("march", "warm start", ...)
     warnings: Tuple[str, ...] = ()
     n_crit: Optional[float] = None
-    trips: Optional[Tuple[Optional[float], Optional[float]]] = None   # (upper, lower) x/c
+    trips: Optional[Tuple[TripSpec, TripSpec]] = None   # (upper, lower) x/c, as given
     #: conditions and corrections (M6; :mod:`foil_lab.corrections`)
     mach: float = 0.0
     sweep: float = 0.0                       # deg, simple sweep theory
@@ -276,6 +278,14 @@ def _problem(config, geometry, repanel, num_panels, alpha_n: float, ground_heigh
     return _Problem(real + [image(b) for b in real], len(real), names, flaps, chord, ref, 0.0)
 
 
+def _from_ground(config, alpha_n: float, ground_height, pivot):
+    """Point map from the ground frame of :func:`_problem` back to the configuration frame."""
+    from .ground_effect import ground_frame_inverse
+    chord, point = config.reference()
+    pv = tuple(float(v) for v in (pivot if pivot is not None else point))
+    return ground_frame_inverse(alpha_n, pv, float(ground_height) * chord)
+
+
 def _hinge(ps, cp_all, k, flap, chord, shear=None):
     """(ch, ch_pressure, ch_friction) of body ``k`` if it has a flap, else three ``None``."""
     if flap is None:
@@ -284,11 +294,57 @@ def _hinge(ps, cp_all, k, flap, chord, shear=None):
     return ch_p + ch_f, ch_p, (None if shear is None else ch_f)
 
 
-def _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params):
-    from .viscous import trips_dict, viscous_params
+def _trip_record(value):
+    """A trip argument as recorded in the result: None, a number, or a tuple per element."""
+    if value is None or np.isscalar(value):
+        return value or None
+    return tuple(None if v is None else float(v) for v in value)
+
+
+def _per_element(value, n: int, name: str) -> list:
+    """A trip argument as one value per element: a number applies to element 0 (SPEC.md 4.3), a
+    sequence gives one value (or None) per element."""
+    if value is None or np.isscalar(value):
+        return [value] + [None] * (n - 1)
+    vals = list(value)
+    if len(vals) != n:
+        raise ValueError(f"{name}: {len(vals)} values for {n} elements")
+    return vals
+
+
+def _viscous_setup(config, bodies, re, n_crit, trip_upper, trip_lower, params, n_real=None,
+                   to_config=None):
+    """Viscous parameters and the solver's ``trips``: forced transition per element, x/c in each
+    element's own frame (DECISIONS.md v2.1, T3). For a configuration with more than one element, a
+    placed (moved, scaled or pitched) element or ground images, the x of every node in its
+    element's own frame goes with them (``("xloc", body)``), so that trips and the reported
+    transition locations are in that frame. ``bodies`` beyond ``n_real`` are ground images of the
+    first ``n_real`` (mirror about y = 0, which reverses the orientation, so the image of the upper
+    surface is the image's lower branch); ``to_config`` maps the ground frame back."""
+    from .viscous import viscous_params
     if not re > 0:
         raise ValueError(f"re must be a positive Reynolds number, got {re!r}")
-    return viscous_params(n_crit, params), trips_dict(trip_upper, trip_lower)
+    els = config.elements
+    nr = len(bodies) if n_real is None else n_real
+    up = _per_element(trip_upper, len(els), "trip_upper")
+    lo = _per_element(trip_lower, len(els), "trip_lower")
+    trips = {}
+    for k in range(nr):
+        for side, v in (("upper", up[k]), ("lower", lo[k])):
+            if v:
+                trips[(k, side)] = float(v)
+                if nr < len(bodies):
+                    trips[(nr + k, "lower" if side == "upper" else "upper")] = float(v)
+    placed = any(tuple(e.offset) != (0.0, 0.0) or e.scale != 1.0 or e.rotation_deg != 0.0 for e in els)
+    if len(els) > 1 or placed or nr < len(bodies):
+        for k, b in enumerate(bodies):
+            p = np.asarray(b, dtype=float)
+            if k >= nr:
+                p = p * np.array([1.0, -1.0])
+            if to_config is not None:
+                p = to_config(p)
+            trips[("xloc", k)] = els[k % nr].to_local(p)[:, 0]
+    return viscous_params(n_crit, params), (trips or None)
 
 
 def _viscous_result(vres, bodies, names, config, repanel: bool, prm, trip_upper, trip_lower,
@@ -343,7 +399,7 @@ def _viscous_result(vres, bodies, names, config, repanel: bool, prm, trip_upper,
                   xtr_upper=float(vres.xtr_upper), xtr_lower=float(vres.xtr_lower),
                   iterations=int(vres.iterations), iterations_total=int(vres.iterations_total),
                   residual=vres.residual, path=vres.path, warnings=tuple(vres.warnings),
-                  n_crit=prm.n_crit, trips=(trip_upper or None, trip_lower or None),
+                  n_crit=prm.n_crit, trips=(_trip_record(trip_upper), _trip_record(trip_lower)),
                   mach_critical=critical_mach(float(np.min(real))))
 
 
@@ -482,7 +538,8 @@ def _run(geometry, alphas, re, repanel, num_panels, n_crit, trip_upper, trip_low
             raw = []
             for p in planes:
                 pb = _problem(config, geometry, repanel, num_panels, p.alpha, ground_height, pivot)
-                prm, trips = _viscous_setup(config, pb.bodies, re, n_crit, trip_upper, trip_lower, params)
+                prm, trips = _viscous_setup(config, pb.bodies, re, n_crit, trip_upper, trip_lower, params,
+                                            pb.n_real, _from_ground(config, p.alpha, ground_height, pivot))
                 solved, corr = viscous.open_closed_te_bodies(pb.bodies, prm)
                 v = viscous.solve_single(_solver_input(solved), 0.0, p.reynolds / chord, prm, trips)
                 raw.append(_viscous_result(v, solved, pb.names, config, repanel, prm, trip_upper,
@@ -517,7 +574,7 @@ def _run(geometry, alphas, re, repanel, num_panels, n_crit, trip_upper, trip_low
 
 def analyze(geometry: Geometry, alpha: float, re: Optional[float] = None, repanel: bool = True,
             num_panels: Optional[int] = None, n_crit: Optional[float] = None,
-            trip_upper: Optional[float] = None, trip_lower: Optional[float] = None,
+            trip_upper: TripSpec = None, trip_lower: TripSpec = None,
             params: Optional[ViscousParams] = None, mach: float = 0.0, sweep: float = 0.0,
             aspect_ratio: Optional[float] = None, ground_height: Optional[float] = None,
             pivot: Optional[Tuple[float, float]] = None) -> Result:
@@ -534,8 +591,10 @@ def analyze(geometry: Geometry, alpha: float, re: Optional[float] = None, repane
     the result's ``path`` says which). A closed trailing edge is opened to
     ``params.ViscousParams.closed_te_gap`` of the chord first and ``corrections`` says so (0 keeps
     the sharp edge, with a drag warning). e^n transition with ``n_crit`` (default
-    ``params.VISCOUS.n_crit``), forced trips at x/c ``trip_upper`` / ``trip_lower`` on element 0
-    (``None`` = free transition), other solver settings from ``params`` (default
+    ``params.VISCOUS.n_crit``), forced trips at x/c ``trip_upper`` / ``trip_lower``: a number trips
+    element 0, a sequence gives one value per element (``None`` = free transition); x/c and the
+    reported transition locations are in each element's own frame (the airfoil before its scale,
+    rotation and offset). Other solver settings from ``params`` (default
     ``params.VISCOUS``). For several angles use :func:`polar`, which reaches each angle from a
     converged neighbour.
 
@@ -553,7 +612,7 @@ def analyze(geometry: Geometry, alpha: float, re: Optional[float] = None, repane
 
 def polar(geometry: Geometry, alphas: Iterable[float], re: Optional[float] = None,
           repanel: bool = True, num_panels: Optional[int] = None, n_crit: Optional[float] = None,
-          trip_upper: Optional[float] = None, trip_lower: Optional[float] = None,
+          trip_upper: TripSpec = None, trip_lower: TripSpec = None,
           params: Optional[ViscousParams] = None, mach: float = 0.0, sweep: float = 0.0,
           aspect_ratio: Optional[float] = None, ground_height: Optional[float] = None,
           pivot: Optional[Tuple[float, float]] = None, progress=None) -> Polar:

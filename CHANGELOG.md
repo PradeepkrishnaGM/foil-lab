@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (v2.1 work on the v2.0 "Later" list; DECISIONS.md v2.1)
+
+* **Transition-interval cycles** (T1): when a solve fails while the transition interval switches back
+  and forth, it is retried with the interval's motion limited and, after a two-cycle, pinned; the
+  result is accepted only if the amplification of the converged state agrees with the pinned
+  interval. NACA 4412 at Re 5e4: 9 -> 24 of 25 angles converged.
+* **Starting march guards** (T2): the starting march keeps the inverse mode while a turbulent
+  boundary layer relaxes and rejects a transition root with a jump in H. Fixes the diverging start of
+  NACA 2412 (120 panels) at Re 3e6, 0 deg. Used only when the start from the
+  v2.0 march fails, so no point that converged before changes.
+* **Per-element trips** (T3): `trip_upper` / `trip_lower` take one value per element; transition
+  x/c is reported in each element's own chord, also with ground effect.
+* **Speed** (S1): benchmark run time 3.84 h -> 1.21 h; golden values unchanged (new slow test).
+* Benchmark: 1200 of 1225 main-matrix points converged (was 1167, none lost), flaps 1403 of 1500
+  (was 1398). E387 at Re 5e4 (no claim) now converges at more angles but some to a separated solution
+  with a larger error against XFOIL; see VALIDATION.md.
+
 ## v2.0.0 (prepared; not yet released)
 
 Foil-Lab v2.0 is a rework of v1.3.1 to SPEC.md: every result path is checked against an exact

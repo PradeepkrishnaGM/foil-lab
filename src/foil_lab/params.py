@@ -204,6 +204,15 @@ class ViscousParams:
     init_hk_max_lam, init_hk_max_turb:
         H_k above which the starting march switches to its inverse mode (FID p. 9: 3.8 and 2.5;
         the turbulent value also in the wake, where FID gives none of its own). Approved.
+    init_march_guards:
+        Two guards of the starting march against spurious roots of its local Newton solves:
+        a transition interval whose downstream H_k jumps above both the upstream H_k and
+        ``init_hk_max_lam`` is solved in the inverse mode instead, and a turbulent station after a
+        station above ``init_hk_max_turb`` stays in the inverse mode until the prescribed H_k has
+        relaxed to that limit (the direct mode can land on H_k near 1). Only the starting state
+        changes, and only as a fallback: a cold start first uses the march without the guards and
+        retries with them if that solve fails. True decided autonomously, for review
+        (DECISIONS.md v2.1, T2).
     jacobian:
         ``"complex_step"`` (NumPy: complex step of the local residuals with the chain rule through
         the edge velocity and the stagnation point) or ``"jax"`` (automatic differentiation of the
@@ -232,6 +241,23 @@ class ViscousParams:
         not counted); when the cap is reached the result is not converged and its ``path`` lists the
         attempts. 10 set by the user after report 12 (no bound on the distance; the two points
         missed in report 12 needed 5 and 9).
+    transition_cycle_switches:
+        A branch whose transition interval has switched back and forth between two neighbouring
+        intervals this many times in a row is held at its current interval for the rest of the
+        solve; ``converged`` then also requires the amplification of the converged state to agree
+        (:func:`foil_lab.viscous.transition_consistent`). 0 disables the freeze. 4 decided
+        autonomously, for review (DECISIONS.md v2.1, T1).
+    transition_max_move:
+        Once a branch's transition interval has reversed its direction of motion twice during one
+        solve, it moves by at most this many nodes per Newton iteration towards the interval the
+        amplification march gives (0: no limit). 1 decided autonomously, for review (DECISIONS.md
+        v2.1, T1).
+    transition_pin_moves:
+        A solve with a pinned transition interval that converges but disagrees with the
+        amplification (:func:`foil_lab.viscous.transition_mismatch`) moves the pin one node towards
+        the march's interval and continues with a fresh ``max_iter`` budget, at most this many
+        times; then the result is not converged. 6 decided autonomously, for review (DECISIONS.md
+        v2.1, T1).
     """
 
     closure_set: str = "fidkowski2022"
@@ -243,10 +269,14 @@ class ViscousParams:
     re_theta_min: float = 20.0
     init_hk_max_lam: float = 3.8
     init_hk_max_turb: float = 2.5
+    init_march_guards: bool = True
     jacobian: str = "complex_step"
     closed_te_gap: float = 0.0005
     single_point_step: float = 1.0
     single_point_max_cold: int = 10
+    transition_cycle_switches: int = 4
+    transition_max_move: int = 1
+    transition_pin_moves: int = 6
 
 
 @dataclass(frozen=True)

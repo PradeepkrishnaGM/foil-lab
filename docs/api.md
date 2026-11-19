@@ -32,7 +32,10 @@ fl.flap_polars(airfoil, hinge_x, deflections, alphas, re=None, hinge_y=0.5, **po
 
 - `geometry`: `Airfoil`, `Element` or `Configuration`.
 - `re=None`: inviscid. With `re` the coupled viscous-inviscid solver runs (Mach 0) for one or
-  several elements, with e^n transition (`n_crit`, default 9) and optional trips on element 0.
+  several elements, with e^n transition (`n_crit`, default 9) and optional trips (`trip_upper`,
+  `trip_lower`: x/c of the element's own chord; a number applies to element 0, a tuple gives one
+  value or `None` per element). Transition (`xtr_upper`, `xtr_lower`, per element in `elements`) is x/c of
+  the element's own chord.
 - Corrections, each applied once in this order and listed in `Result.corrections`: ground effect
   (`ground_height` in reference chords above the ground, section pitched about `pivot`), sweep
   (simple sweep theory), compressibility (`mach`, Kármán-Tsien, inviscid only), finite aspect ratio
