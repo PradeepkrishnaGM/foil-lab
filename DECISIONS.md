@@ -3631,6 +3631,12 @@ The user asked for the open checks to be done on their behalf ("please do the ch
   raising solve in a walk is reported (`reason` "exception") and ends that walk only. No benchmark row
   has `reason` "exception", so the benchmark numbers are unchanged. New test
   `test_walk_both_sides_skips_exception_points_and_survives_a_raising_solve`.
+- **GUI after E1: no change.** Headless (Qt offscreen; screenshots in `review-gui/v22_review/`, not
+  in git): NACA 2412, 4 deg, aspect ratio 8, inviscid and viscous Re 1e6. The GUI's Cl, Cd and Cm
+  equal `fl.analyze` exactly; the drag parts add up (0.00424 + 0.00176 + 0.01198 = 0.01798); the
+  status names the effective angle (2.58 deg). The Cp plot is the section's at that angle while the
+  title gives the geometric 4 deg; the status says so, so it is left as is. `tests/test_gui.py`: 7
+  passed.
 
 ## Later
 
