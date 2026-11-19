@@ -4,7 +4,9 @@
 
 * **Sweep recovery** (E3, v2.2): a last pass of `sweep` / `fl.polar` walks to each point still failed
   from the nearest converged angle on both sides, passing over one failed angle
-  (`ViscousParams.walk_max_skips`). Earlier results unchanged; NACA 0012 F15 Re 6e6 gains 0 deg.
+  (`ViscousParams.walk_max_skips`). Earlier results unchanged. Full benchmark: main matrix 1206 of 1225 converged (was 1200), flaps
+  1428 of 1500 (was 1403), none lost, every earlier point identical. Flap 5 deg at Re 6e6 now meets
+  the convergence target, so the validated flap range is 5 deg (was 0); see VALIDATION.md.
 * **Finite wing** (E1, v2.2): profile drag, moment and hinge moment come from the section at the
   effective angle alpha - (Cl_inf - CL)/a instead of the geometric angle; lift (Helmbold) and induced
   drag unchanged. One more section solve per point with an aspect ratio.

@@ -85,7 +85,7 @@ range, all sections pooled per Reynolds number:
 
 The SPEC targets (converged >= 95 %; mean / max dCl 0.03 / 0.10; dCd 10 % / 30 %; dCm 0.01 / 0.03)
 are met at every Reynolds number from 1e5 to 6e6. This is agreement with XFOIL, not with
-experiment. Plain flaps meet the same targets at 0 deg; 5 to 20 deg are reported without a claim.
+experiment. Plain flaps meet the same targets up to 5 deg; 10 to 20 deg are reported without a claim.
 Exact-solution tests (Kármán-Trefftz, Williams' two-element solution, the ground-effect mirror
 problem, Blasius) run with the test suite.
 
@@ -96,7 +96,7 @@ problem, Blasius) run with the test suite.
 - Validated at Re from 1e5 to 6e6. Lower Reynolds numbers are reported in the benchmark but not
   validated.
 - Maximum lift and post-stall behaviour are approximate.
-- Plain flaps: validated at 0 deg deflection only (VALIDATION.md).
+- Plain flaps: validated up to 5 deg deflection (VALIDATION.md).
 - Multi-element results exclude wake merging and slot separation, have no maximum-lift prediction,
   and have no viscous reference: they rest on consistency tests only.
 - A closed (sharp) trailing edge is opened to 0.0005 c for viscous analysis by default (recorded in
