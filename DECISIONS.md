@@ -3408,7 +3408,8 @@ in v2.0; every point converged in v2.0 is bit-identical; 5 deg Cl 0.7110 (XFOIL 
 interval), 6 deg 0.7992 (0.7783), 8 deg 0.9545 (0.9637), 12-20 deg now converge (e.g. 13 deg 1.3418
 against 1.3906). 7, 9, 10 and 11 deg still fail: e.g. at 7 deg the pin moves to 47, where Newton
 steps back and forth across the clamp of the onset fraction (w alternates 1.000 / 0.979), and no
-pinned interval is consistent. Reported, not hidden. Full benchmark: section "Benchmark" below.
+pinned interval is consistent. Reported, not hidden. With T1 and T2 as fallbacks the full benchmark
+has 24/25 here (section "Benchmark" below).
 
 ### T2: starting march guards (flap points and the single-point item)
 
@@ -3448,7 +3449,7 @@ only when that fails from the guarded march (`path` "guarded march"). So no cold
 converged in v2.0 changes or is lost, and the gains of the table above are kept. Golden values
 re-recorded: the cold-start cases differ by at most 1.2e-14 in Cl (back on the v2.0 starting
 state; NACA 2412 Re 1e6 2 deg 17 -> 11 iterations); the S1 changes stay bit-identical (checked
-before). The benchmark below is from the always-on version; rerun pending.
+before). The benchmark below was rerun with this version.
 
 ### T3: per-element trips and transition x/c in the element's own frame (M5 Later item)
 
@@ -3487,32 +3488,33 @@ converged Cl at 5 deg; reverted).
 Measured (NACA 2412, Re 1e6, one core): start from the march 2 deg 20.1 s -> 7.5 s; warm start
 5 deg 3.2 s -> 2.5 s. Golden test 241 s -> 120 s.
 
-### Benchmark (T1 as fallback + T2 + S1; 2026-11-19, 6 processes, 62 min)
+### Benchmark (T1 and T2 as fallbacks, S1; 2026-11-19, 6 processes, 46 min)
 
-Rows in `benchmark_output/v21` and `benchmark_output/v21_flaps` (not in git; the flap run used
+Rows in `benchmark_output/v21b` and `benchmark_output/v21b_flaps` (not in git; the flap run used
 `--skip-xfoil` with the committed references and the XFOIL dumps of the release run). VALIDATION.md
-regenerated from them.
-- Main matrix: 1167 -> 1197 of 1225 points converged, none lost. Of the 1167 points converged in
-  both runs, 405 are bit-identical and 761 differ by less than 1e-8 in Cl (the S1 changes reorder
-  no arithmetic, but the T2 guards change some starting states). One point moved to a neighbouring
-  solution: E387 Re 1e6 0 deg, Cl 0.380624 -> 0.380625, Cd 0.0056107 -> 0.0056096. Gains:
-  NACA 4412 Re 5e4 9 -> 21, E387 Re 5e4 8 -> 21, one point each at Clark Y Re 5e4 and 1e5,
-  E387 gap Re 5e4, NACA 23012 Re 5e4, NACA 2412 Re 5e4. Summed run time 3.84 h -> 1.84 h.
-- Re 5e4 (no claim): 72/78 -> 76/78 filter points converged; mean dCl 0.0205 -> 0.0202.
+regenerated from them. (An earlier run with the guards always on gave 1197 and 1402 and moved one
+point to a neighbouring solution; replaced by this one.)
+- Main matrix: 1167 -> 1200 of 1225 points converged, none lost. Of the 1167 points converged in
+  both runs, 996 are bit-identical and 171 differ by less than 1e-8 in Cl. Gains: NACA 4412 Re 5e4
+  9 -> 24, E387 Re 5e4 8 -> 21, one point each at Clark Y Re 5e4 and 1e5, E387 gap Re 5e4,
+  NACA 23012 Re 5e4, NACA 2412 Re 5e4. Summed run time 3.84 h -> 1.21 h.
+- Validated range (Re 1e5 to 6e6): unchanged; the targets are met at every Reynolds number.
+- Re 5e4 (no claim): 72/78 -> 77/78 filter points converged; mean dCl 0.0205 -> 0.0206.
 - **Worse, reported:** E387 (sharp edge, no targets) Re 5e4: 8/13 -> 12/13 filter points converged,
   but mean / max dCl 0.070 / 0.136 -> 0.102 / 0.372 and mean rel dCd 13.6 % -> 23.3 %. The new
   points at 6-9 deg and 13-20 deg are converged states (residual met) of a separated solution:
   Cl 0.66-0.81 at 6-9 deg against XFOIL 0.76-1.17, whose bubble stays short. They were unconverged
   before and so not counted. Same class as the bubble-regime differences in docs/study_re5e4.md.
-- Flaps: 1398 -> 1402 of 1500 converged. 10 deg Re 2e5 now meets the convergence target (91.7 % ->
-  95.8 %; max dCl 0.102 still fails); 15 deg Re 6e6 77.4 % -> 80.6 %, 20 deg Re 2e5 89.5 % ->
+- Flaps: 1398 -> 1403 of 1500 converged. 10 deg Re 2e5 now meets the convergence target (91.7 % ->
+  100 %; max dCl 0.102 still fails); 15 deg Re 6e6 77.4 % -> 80.6 %, 20 deg Re 2e5 89.5 % ->
   94.7 %. Re 6e6 at 5-20 deg still misses 95 %: the Newton trace of the failing points crawls under
   the delta* step limit (step fraction about 3 %, residual 57 -> 7 in 48 iterations); not fixed.
+  The validated flap range stays 0 deg.
 
 ## Later
 
 - v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re
-  5e4, 5-9 deg). Partly done in v2.1 T1 (2026-11-19): 9 -> 21 of 25 converged; 4 points still fail.
+  5e4, 5-9 deg). Partly done in v2.1 T1 (2026-11-19): 9 -> 24 of 25 converged; 1 point still fails.
   Flap points at Re 6e6: the starting state was the likely cause; after T2 the failing points crawl
   under the delta* step limit instead (v2.1 Benchmark). Open.
 - v2.1 (2026-11-19): E387 Re 5e4 converges at 6-9 and 13-20 deg to a separated solution (Cl 0.1-0.4
@@ -3537,7 +3539,7 @@ regenerated from them.
   v2.0); a multi-element viscous reference (MSES or wind-tunnel data with a usable licence).
 - M4 (after the full run): Foil-Lab does not converge at several low angles (-4 to 4 deg) of the flap cases at
   Re 6e6 (NACA 0012 F15: -4, -1, 0, 1; NACA 2412 F20: -4 to 1; in the filter 2-6 points per case) and at 10 deg
-  Re 2e5 (91.7 % of the pooled filter points; 95.8 % after v2.1). Find the cause (start from the march or the
+  Re 2e5 (91.7 % of the pooled filter points; 100 % after v2.1). Find the cause (start from the march or the
   continuation from 0 deg at a flapped section's hinge); this is what prevents 5 and 10 deg from
   being validated.
 - M4 (after the full run): the Cl error of the flap cases grows with the deflection (mean dCl 0.002-0.008 at
@@ -3551,7 +3553,7 @@ regenerated from them.
 - Done (closed 2026-11-18): End of M3 (user's decision, 2026-10-10): extend the validated range
   downward. Approved after report 11 and applied to SPEC.md in commit 17017dc (validated Re 1e5 to
   6e6 with the same targets; Re 5e4 reported without a claim).
-- Partly done in v2.1 S1 (2026-11-19; benchmark run time 3.84 h -> 1.84 h, golden values unchanged):
+- Partly done in v2.1 S1 (2026-11-19; benchmark run time 3.84 h -> 1.21 h, golden values unchanged):
   After M3 (candidate for M7; user, 2026-10-10): solver speed. Reuse the coupling between angles, a
   faster starting march, a compiled JAX path. Golden values recorded first; results must not change.
   Time per point reported before and after; the target is set from measurements.
