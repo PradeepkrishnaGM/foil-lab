@@ -3603,12 +3603,21 @@ autonomously, for review: the claim follows the generator; README and the VALIDA
 say 5 deg, and the limits line is now generated from the same range so the two cannot disagree.
 Found while regenerating: the E2 limits line in `benchmark/validation.py` had broken quotes (a
 syntax error no test imported); fixed, and a test now builds the validation document. Also measured: `fl.analyze` of NACA 2412 F20 at Re 3e6, 4 deg
-converges (Cl 1.4774, the benchmark value) but takes 578 s, about 9 failed cold starts at 50
-iterations each; an early exit is not used because converged benchmark points use up to the whole
-budget (iterations: median 8, 99th percentile 43, max 50).
+converges (Cl 1.4774, the benchmark value). The 578 s first measured ran beside the benchmark; on
+an idle machine with one BLAS thread it takes 237 s: direct start and 0 deg fail (23 s each), 7
+more cold starts fail (17-25 s each, march plus two repair restarts), -1 deg converges (4 s), the walk
+fails at 0 deg (36 s) and converges at 1 to 4 deg (18 s). An early exit is not used because
+converged benchmark points use up to the whole budget (iterations: median 8, 99th percentile 43,
+max 50). Decided autonomously, for review (2026-11-19): not changed. Probing the cold starts without
+repair restarts would save at most about 110 s of the 237 s and changes the path of single points
+that today converge only after a repair; kept on the Later list.
 
 ## Later
 
+- v2.2 (2026-11-19): `fl.analyze` on hard flap points is slow (NACA 2412 F20 Re 3e6 4 deg: 237 s,
+  of which 179 s are 9 failed cold starts). Candidate: first probe the cold starts without repair
+  restarts, then the present sequence; saves about 110 s there but changes the path of points that
+  converge only after a repair, so it needs a comparison over single points before and after.
 - v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re
   5e4, 5-9 deg). Partly done in v2.1 T1 (2026-11-19): 9 -> 24 of 25 converged; 1 point still fails.
   Flap points at Re 6e6: the starting state was the likely cause; after T2 the failing points crawl
@@ -3647,7 +3656,8 @@ budget (iterations: median 8, 99th percentile 43, max 50).
   Re 6e6 (NACA 0012 F15: -4, -1, 0, 1; NACA 2412 F20: -4 to 1; in the filter 2-6 points per case) and at 10 deg
   Re 2e5 (91.7 % of the pooled filter points; 100 % after v2.1). Find the cause (start from the march or the
   continuation from 0 deg at a flapped section's hinge); this is what prevents 5 and 10 deg from
-  being validated.
+  being validated. After v2.2 E3 (2026-11-19) 5 deg meets every target (validated flap range 5 deg);
+  10 deg still misses convergence at Re 6e6 (87.9 %) and max dCl at Re 2e5 (0.1017).
 - M4 (after the full run): the Cl error of the flap cases grows with the deflection (mean dCl 0.002-0.008 at
   0 deg, 0.021-0.040 at 15 deg, 0.034-0.041 at 20 deg) and is mostly Foil-Lab's lift being lower than
   XFOIL's; the inviscid flow agrees to 0.003. Flap boundary layer and wake treatment.
