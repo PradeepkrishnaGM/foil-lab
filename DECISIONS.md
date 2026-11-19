@@ -3612,6 +3612,26 @@ max 50). Decided autonomously, for review (2026-11-19): not changed. Probing the
 repair restarts would save at most about 110 s of the 237 s and changes the path of single points
 that today converge only after a repair; kept on the Later list.
 
+## v2.2 review (delegated by the user, 2026-11-19)
+
+The user asked for the open checks to be done on their behalf ("please do the checks on my behalf").
+
+- **5 deg flap claim: accepted.** Per Re cell (NACA 0012 and 2412 pooled, attached-flow filter): mean
+  |dCl| 0.004-0.011 (target 0.03), max 0.011-0.032 (0.10), mean rel dCd 0.9-2.8 % (10 %), max
+  2.1-6.0 % (30 %), mean |dCm| <= 0.0018 (0.01), max <= 0.0063 (0.03). Convergence 100 % at Re 1e5 to
+  1e6 and 97 % at 3e6 and 6e6 (target 95 %), the only margin that is thin. The gained point (NACA 0012
+  F05 Re 6e6 8 deg, Cl 1.2203, Cd 0.01065, Cm -0.0517) lies between its neighbours and agrees with
+  XFOIL (1.2117, 0.01053, -0.0504).
+- **E1 code: no change.** Lift stays that of the geometric angle (Helmbold); drag, moments and hinge
+  moments come from the effective-angle solve, which has its own sweep factors, so none is applied
+  twice; `converged` is that of both solves.
+- **E3 code: fixed.** `walk_both_sides` walked to points whose solve had raised in the sweep (the
+  `sweep` docstring says such points are never walked to), and a solve raising during its walks would
+  have ended the whole sweep and lost every result. Now such points are skipped as targets, and a
+  raising solve in a walk is reported (`reason` "exception") and ends that walk only. No benchmark row
+  has `reason` "exception", so the benchmark numbers are unchanged. New test
+  `test_walk_both_sides_skips_exception_points_and_survives_a_raising_solve`.
+
 ## Later
 
 - v2.2 (2026-11-19): `fl.analyze` on hard flap points is slow (NACA 2412 F20 Re 3e6 4 deg: 237 s,
