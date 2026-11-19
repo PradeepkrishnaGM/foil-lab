@@ -247,6 +247,38 @@ def test_reach_from_nearest_walks_from_the_nearest_converged_angle(monkeypatch):
     assert res[4].path == "march" and res[8].path == "march"   # not walked to / walk stopped before
 
 
+
+def test_walk_both_sides_passes_over_one_failed_angle(monkeypatch):
+    """Last sweep pass (DECISIONS.md v2.2, E3): a failed point is walked to from the nearest converged
+    angle below, then above; a walk goes on past one failed angle from the last converged state and
+    stops after two in a row; converged points are not solved again."""
+    calls = []
+
+    def fake(coords, alpha, reynolds, params=None, trips=None, start=None, alpha_start=None,
+             geometry=None):
+        calls.append((alpha, alpha_start))
+        ok = start is not None and alpha not in {1.0, 5.0, 6.0} and not (alpha == 7.0 and alpha_start == 4.0)
+        return V.ViscousResult(alpha=alpha, reynolds=reynolds, converged=ok, iterations=5,
+                               iterations_total=7, reason="", state=("x", alpha) if ok else None,
+                               path="warm start")
+
+    monkeypatch.setattr(V, "solve_point", fake)
+    alphas = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    res = [V.ViscousResult(alpha=a, reynolds=1e6, converged=a in (0.0, 4.0, 8.0), iterations=4,
+                           iterations_total=10, reason="", state=("x", a), path="march") for a in alphas]
+    V.walk_both_sides(None, alphas, res, 1e6, geometry=object())
+    assert V.VISCOUS.walk_max_skips == 1
+    # 1: fails from 0; from 4 above: 3 and 2 converge on the way, 1 fails.
+    # 5: fails from 4; from 8: 7 converges, 6 fails, 5 fails from 7's state (passed over 6) -> stop.
+    # 6: from 4 fails at 5, then at 6 from 4's state -> stop; from 7 fails.
+    assert calls == [(1.0, 0.0), (3.0, 4.0), (2.0, 3.0), (1.0, 2.0), (5.0, 4.0), (7.0, 8.0),
+                     (6.0, 7.0), (5.0, 7.0), (5.0, 4.0), (6.0, 4.0), (6.0, 7.0)]
+    assert [r.converged for r in res] == [True, False, True, True, True, False, False, True, True]
+    assert res[2].path == "from 4 deg (both sides): warm start"
+    assert res[7].path == "from 8 deg (both sides): warm start"
+    assert res[0].path == res[4].path == "march"
+
+
 def test_reach_from_nearest_uses_the_other_sweep_when_it_is_nearer(monkeypatch):
     """With ``group`` (the sweep of each angle; user, after report 10) a cold point that its own sweep
     did not reach is walked to from a converged angle of the other sweep, but only where that angle is

@@ -3578,6 +3578,26 @@ the separated-flow terms (dissipation, lag) of the published FID set. Not change
 there would calibrate the confirmed default closures to the reference. Also found: the attached-flow
 filter admits points with a fully separated flap at 20 deg. VALIDATION.md limits state this.
 
+**E3. Last sweep pass: walk to a still-failed point from both sides, passing over one failed angle.**
+Found: `solve_single` reaches NACA 0012 F15 0 deg at Re 6e6 (Cl 0.8893, XFOIL 0.9019; 277 s) by a walk
+from -2 deg that passes over the failing -1 deg (`polar` continues from the last converged state),
+while the benchmark sweep lists the point as failed: `reach_from_nearest` stops at the first failed
+angle and only walks from the nearest converged angle (here 1 deg, one step). First try, letting
+`reach_from_nearest` itself pass over a failure: no gain (its walks to the failed points are one
+step) and it could change the path of points it recovered before, so it was reverted. Kept:
+`viscous.walk_both_sides`, a last pass of `sweep` after both `reach_from_nearest` passes, for points
+still failed: walk from the nearest converged angle below, then above, passing over at most
+`ViscousParams.walk_max_skips` (new, 1; 0 switches the pass off) consecutive failed angles. It runs
+after every earlier attempt, so no earlier result changes. Measured with the benchmark sweep
+(`run_case`, one BLAS thread): NACA 0012 F15 Re 6e6: 22 -> 23 of 25 (0 deg gained, Cl 0.8893 Cd
+0.00912; XFOIL 0.9019 0.00944); NACA 2412 F20 Re 6e6: 19 -> 19 (-4 to 1 deg still fail: the stagnation
+crawl of the Later list). Max |dCl| on the points converged before: 0.0 in both. Run time 419 s and
+790 s per case. The committed benchmark numbers (flaps 1403/1500) predate E3; a full rerun (about
+1.2 h) is needed to update VALIDATION.md. Also measured: `fl.analyze` of NACA 2412 F20 at Re 3e6, 4 deg
+converges (Cl 1.4774, the benchmark value) but takes 578 s, about 9 failed cold starts at 50
+iterations each; an early exit is not used because converged benchmark points use up to the whole
+budget (iterations: median 8, 99th percentile 43, max 50).
+
 ## Later
 
 - v2.2 study (2026-11-18): transition-interval two-cycle in `viscous.solve_viscous` (NACA 4412, Re
