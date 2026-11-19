@@ -1283,7 +1283,10 @@ def walk_both_sides(coords, alphas, results: list, reynolds: float, params: Visc
     :func:`reach_from_nearest`, a walk passes over an angle that fails, starting the next one from
     the last converged state as :func:`polar` does, for at most ``params.walk_max_skips``
     consecutive failed angles. Angles that converge on the way are kept. Only points that failed
-    every earlier attempt are solved, so no result that converged before this pass changes.
+    every earlier attempt are solved, so no result that converged before this pass changes. A point
+    whose solve raised in the sweep (``reason`` "exception") is not walked to, as in :func:`sweep`;
+    a solve that raises during a walk counts as a failed angle there (reported to ``on_result`` with
+    ``reason`` "exception") and ends that walk, so the results already reached are kept.
     ``on_result(i, result, seconds)`` as for :func:`reach_from_nearest`."""
     import time
     if params.walk_max_skips < 1:
@@ -1292,7 +1295,7 @@ def walk_both_sides(coords, alphas, results: list, reynolds: float, params: Visc
     n = len(alphas)
     for i in range(n):
         for side in (-1, 1):
-            if results[i].converged:
+            if results[i].converged or results[i].reason == "exception":
                 break
             js = [j for j in (range(i - 1, -1, -1) if side < 0 else range(i + 1, n)) if results[j].converged]
             if not js:
@@ -1305,12 +1308,18 @@ def walk_both_sides(coords, alphas, results: list, reynolds: float, params: Visc
                     start, a_prev, fails = results[k].state, alphas[k], 0
                     continue
                 t0 = time.perf_counter()
-                r = solve_point(coords, alphas[k], reynolds, params, trips, start, a_prev, geo)
+                try:
+                    r = solve_point(coords, alphas[k], reynolds, params, trips, start, a_prev, geo)
+                except Exception:  # reported below; the walk ends, earlier results are kept
+                    r = ViscousResult(alpha=alphas[k], reynolds=reynolds, converged=False, iterations=0,
+                                      reason="exception")
                 if r.converged:
                     r.path = f"from {alphas[j]:g} deg (both sides): {r.path}"
                     r.iterations_total += results[k].iterations_total
                 if on_result is not None:
                     on_result(k, r, time.perf_counter() - t0)
+                if r.reason == "exception":
+                    break
                 if not r.converged:
                     fails += 1
                     if fails > params.walk_max_skips:

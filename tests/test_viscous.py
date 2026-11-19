@@ -279,6 +279,33 @@ def test_walk_both_sides_passes_over_one_failed_angle(monkeypatch):
     assert res[0].path == res[4].path == "march"
 
 
+def test_walk_both_sides_skips_exception_points_and_survives_a_raising_solve(monkeypatch):
+    """A point whose solve raised in the sweep is not walked to (``sweep`` contract); a solve that
+    raises during a walk ends that walk without losing the results reached."""
+    calls = []
+
+    def fake(coords, alpha, reynolds, params=None, trips=None, start=None, alpha_start=None,
+             geometry=None):
+        calls.append((alpha, alpha_start))
+        if alpha == 3.0:
+            raise RuntimeError("boom")
+        return V.ViscousResult(alpha=alpha, reynolds=reynolds, converged=True, iterations=5,
+                               iterations_total=7, reason="", state=("x", alpha), path="warm start")
+
+    monkeypatch.setattr(V, "solve_point", fake)
+    alphas = [0.0, 1.0, 2.0, 3.0, 4.0]
+    res = [V.ViscousResult(alpha=a, reynolds=1e6, converged=a in (0.0, 4.0), iterations=4,
+                           iterations_total=10, reason="exception" if a == 1.0 else "max_iter",
+                           state=("x", a), path="march") for a in alphas]
+    seen = []
+    V.walk_both_sides(None, alphas, res, 1e6, geometry=object(),
+                      on_result=lambda k, r, s: seen.append((k, r.reason)))
+    # 1 raised in the sweep: not a target. 2 from 0 passes 1 (solved on the way); 3 from 2 raises.
+    assert calls == [(1.0, 0.0), (2.0, 1.0), (3.0, 2.0), (3.0, 4.0)]
+    assert (3, "exception") in seen
+    assert [r.converged for r in res] == [True, True, True, False, True]
+
+
 def test_reach_from_nearest_uses_the_other_sweep_when_it_is_nearer(monkeypatch):
     """With ``group`` (the sweep of each angle; user, after report 10) a cold point that its own sweep
     did not reach is walked to from a converged angle of the other sweep, but only where that angle is
